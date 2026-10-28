@@ -70,7 +70,7 @@ steps:
       if test -n "$last_pr"; then
         checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
       fi
-      answers_file="$(pwd -P)/.workspace/dagu/answers.json"
+      config_file="$(pwd -P)/.workspace/dagu/config.json"
       current_queue_concurrency=1
       current_gate=not-configured
       current_check=not-configured
@@ -81,17 +81,17 @@ steps:
       current_codeql_security=high_or_higher
       current_codeql_alerts=errors
       current_code_scanning=required
-      if test -f "$answers_file"; then
-        current_gate=$(jq -er '.gate' "$answers_file")
-        current_check=$(jq -er '.requiredCheck' "$answers_file")
-        current_resolver=$(jq -er '.rebaseResolver' "$answers_file")
-        current_validation=$(jq -er '.validation' "$answers_file")
-        current_blocker_reporting=$(jq -er '.blockerReporting' "$answers_file")
-        current_codeql_security=$(jq -er '.codeqlSecurityThreshold' "$answers_file")
-        current_codeql_alerts=$(jq -er '.codeqlAlertsThreshold' "$answers_file")
-        current_code_scanning=$(jq -er '.codeScanning' "$answers_file")
-        current_tests=$(jq -er '.testPaths' "$answers_file")
-        current_queue_concurrency=$(jq -er '.queueConcurrency' "$answers_file")
+      if test -f "$config_file"; then
+        current_gate=$(jq -er '.gate' "$config_file")
+        current_check=$(jq -er '.requiredCheck' "$config_file")
+        current_resolver=$(jq -er '.rebaseResolver' "$config_file")
+        current_validation=$(jq -er '.validation' "$config_file")
+        current_blocker_reporting=$(jq -er '.blockerReporting' "$config_file")
+        current_codeql_security=$(jq -er '.codeqlSecurityThreshold' "$config_file")
+        current_codeql_alerts=$(jq -er '.codeqlAlertsThreshold' "$config_file")
+        current_code_scanning=$(jq -er '.codeScanning' "$config_file")
+        current_tests=$(jq -er '.testPaths' "$config_file")
+        current_queue_concurrency=$(jq -er '.queueConcurrency' "$config_file")
       fi
       for entry in pushbacks:PUSHBACKS:3 findings:FINDINGS:2 seconds:SECONDS:3600 ciBlocked:CI_BLOCKED:2 pocInconclusive:POC_INCONCLUSIVE:2; do
         field=${entry%%:*}
@@ -99,7 +99,7 @@ steps:
         key="ESCALATION_${rest%%:*}"
         fallback=${rest#*:}
         value=""
-        if test -f "$answers_file"; then value=$(jq -er --arg field "$field" '.escalation[$field]' "$answers_file"); fi
+        if test -f "$config_file"; then value=$(jq -er --arg field "$field" '.escalation[$field]' "$config_file"); fi
         printf 'CURRENT_%s=%s\n' "$key" "${value:-$fallback}" >> "$DAGU_OUTPUT_FILE"
       done
       {
@@ -108,7 +108,7 @@ steps:
         printf 'BASE_BRANCH=%s\n' "$base"
         printf 'REQUIRED_NOW=%s\n' "${required:-none}"
         printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
-        printf 'STAGE=%s\n' "$answers_file"
+        printf 'STAGE=%s\n' "$config_file"
         printf 'BUNDLE_NAME=%s\n' "$bundle_name"
         printf 'BUNDLE_VERSION=%s\n' "$bundle_version"
         printf 'DAGU_VERSION=%s\n' "$dagu_version"
@@ -153,16 +153,16 @@ steps:
       - name: CURRENT_ESCALATION_CI_BLOCKED
       - name: CURRENT_ESCALATION_POC_INCONCLUSIVE
 
-  - id: answers
+  - id: config
     depends: detect
     action: human.task
     with:
       prompt: >-
         Configure the dagu-feature lifecycle for ${steps.detect.outputs.NWO}
         (default branch ${steps.detect.outputs.BASE_BRANCH}).
-        Bootstrap writes one answers file at .workspace/dagu/answers.json.
+        Bootstrap writes one config file at .workspace/dagu/config.json.
         Its schema version is independent of the package version. Package releases
-        do not require a new consumer commit when these answers stay the same.
+        do not require a new consumer commit when this config stays the same.
         GATE: local gate command run in the issue worktree with bash -euo pipefail -c
         (current: ${steps.detect.outputs.CURRENT_GATE}).
         REQUIRED_CHECK: GitHub check the default branch will require (strict)
@@ -188,7 +188,7 @@ steps:
         CODEQL_ALERTS_THRESHOLD: non-security findings used when code scanning is required
         (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
         Blank preserves installed thresholds. required needs CodeQL analysis and permission to read code-scanning alerts.
-        QUEUE_CONCURRENCY: positive integer; blank keeps the committed answers value
+        QUEUE_CONCURRENCY: positive integer; blank keeps the committed config value
         (${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}; initial: 1). For a4s, select 8
         to preserve the operator-approved installed capacity on first adoption.
         Bootstrap derives the repository's global queue and restarts its matching
@@ -245,7 +245,7 @@ steps:
         required: [GATE, REQUIRED_CHECK, TEST_PATHS, REBASE_RESOLVER]
 
   - id: worktrees
-    depends: answers
+    depends: config
     run: |
       set -euo pipefail
       if ! git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"; then
@@ -257,29 +257,29 @@ steps:
   - id: render
     depends: worktrees
     env:
-      - GATE: ${steps.answers.outputs.GATE}
-      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - GATE: ${steps.config.outputs.GATE}
+      - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
       - REPO: ${steps.detect.outputs.REPO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
-      - TEST_PATHS: ${steps.answers.outputs.TEST_PATHS}
-      - REBASE_RESOLVER: ${steps.answers.outputs.REBASE_RESOLVER}
-      - VALIDATION: ${steps.answers.outputs.VALIDATION}
-      - A4S_BLOCKER_REPORTING: ${steps.answers.outputs.A4S_BLOCKER_REPORTING}
+      - TEST_PATHS: ${steps.config.outputs.TEST_PATHS}
+      - REBASE_RESOLVER: ${steps.config.outputs.REBASE_RESOLVER}
+      - VALIDATION: ${steps.config.outputs.VALIDATION}
+      - A4S_BLOCKER_REPORTING: ${steps.config.outputs.A4S_BLOCKER_REPORTING}
       - CURRENT_A4S_BLOCKER_REPORTING: ${steps.detect.outputs.CURRENT_A4S_BLOCKER_REPORTING}
-      - CODEQL_SECURITY_THRESHOLD: ${steps.answers.outputs.CODEQL_SECURITY_THRESHOLD}
-      - CODEQL_ALERTS_THRESHOLD: ${steps.answers.outputs.CODEQL_ALERTS_THRESHOLD}
+      - CODEQL_SECURITY_THRESHOLD: ${steps.config.outputs.CODEQL_SECURITY_THRESHOLD}
+      - CODEQL_ALERTS_THRESHOLD: ${steps.config.outputs.CODEQL_ALERTS_THRESHOLD}
       - CURRENT_CODEQL_SECURITY_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_SECURITY_THRESHOLD}
       - CURRENT_CODEQL_ALERTS_THRESHOLD: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}
-      - CODE_SCANNING: ${steps.answers.outputs.CODE_SCANNING}
+      - CODE_SCANNING: ${steps.config.outputs.CODE_SCANNING}
       - CURRENT_CODE_SCANNING: ${steps.detect.outputs.CURRENT_CODE_SCANNING}
-      - QUEUE_CONCURRENCY: ${steps.answers.outputs.QUEUE_CONCURRENCY}
+      - QUEUE_CONCURRENCY: ${steps.config.outputs.QUEUE_CONCURRENCY}
       - CURRENT_QUEUE_CONCURRENCY: ${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}
-      - ESCALATION_PUSHBACKS: ${steps.answers.outputs.ESCALATION_PUSHBACKS}
-      - ESCALATION_FINDINGS: ${steps.answers.outputs.ESCALATION_FINDINGS}
-      - ESCALATION_SECONDS: ${steps.answers.outputs.ESCALATION_SECONDS}
-      - ESCALATION_CI_BLOCKED: ${steps.answers.outputs.ESCALATION_CI_BLOCKED}
-      - ESCALATION_POC_INCONCLUSIVE: ${steps.answers.outputs.ESCALATION_POC_INCONCLUSIVE}
+      - ESCALATION_PUSHBACKS: ${steps.config.outputs.ESCALATION_PUSHBACKS}
+      - ESCALATION_FINDINGS: ${steps.config.outputs.ESCALATION_FINDINGS}
+      - ESCALATION_SECONDS: ${steps.config.outputs.ESCALATION_SECONDS}
+      - ESCALATION_CI_BLOCKED: ${steps.config.outputs.ESCALATION_CI_BLOCKED}
+      - ESCALATION_POC_INCONCLUSIVE: ${steps.config.outputs.ESCALATION_POC_INCONCLUSIVE}
       - CURRENT_ESCALATION_PUSHBACKS: ${steps.detect.outputs.CURRENT_ESCALATION_PUSHBACKS}
       - CURRENT_ESCALATION_FINDINGS: ${steps.detect.outputs.CURRENT_ESCALATION_FINDINGS}
       - CURRENT_ESCALATION_SECONDS: ${steps.detect.outputs.CURRENT_ESCALATION_SECONDS}
@@ -295,7 +295,7 @@ steps:
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
-      # Empty integer-text answers preserve the committed repository policy.
+      # Empty integer-text inputs preserve the committed repository policy.
       export QUEUE_CONCURRENCY=${QUEUE_CONCURRENCY:-${CURRENT_QUEUE_CONCURRENCY:-1}}
       node -e 'const v=process.env.QUEUE_CONCURRENCY; if (!/^[1-9][0-9]*$/.test(v) || !Number.isSafeInteger(Number(v))) process.exit(1)'
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
@@ -316,9 +316,9 @@ steps:
       mkdir -p "$(dirname "$STAGE")"
       export A4S_BLOCKER_REPORTING CODEQL_SECURITY_THRESHOLD CODEQL_ALERTS_THRESHOLD CODE_SCANNING
       export VALIDATION="${VALIDATION-}" REBASE_RESOLVER="${REBASE_RESOLVER-}"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" write-answers "$STAGE"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" answers-check "$STAGE"
-      printf 'answers=%s\n' "$STAGE"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" write-config "$STAGE"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" config-check "$STAGE"
+      printf 'config=%s\n' "$STAGE"
 
   - id: reconcile
     depends: render
@@ -338,7 +338,7 @@ steps:
   - id: github
     depends: reconcile
     env:
-      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
     run: |
@@ -398,7 +398,7 @@ steps:
   - id: confirm
     depends: github
     env:
-      - REQUIRED_CHECK: ${steps.answers.outputs.REQUIRED_CHECK}
+      - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
@@ -409,13 +409,13 @@ steps:
       test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
-      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" answers-check "$STAGE"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" config-check "$STAGE"
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
       node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
       dagu validate "$destination"
       node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-check "$STAGE"
       printf '%s\n' "$QUEUE_STATUS"
-      printf 'answers=%s\n' "$STAGE"
+      printf 'config=%s\n' "$STAGE"
       printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"

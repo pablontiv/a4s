@@ -5,7 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { lifecycleProtocolToken } from "../src/bundle.ts";
-import { ANSWERS_PATH } from "../src/answers.ts";
+import { CONFIG_PATH } from "../src/config.ts";
+import { appendObservation, observeRunReceipt } from "../src/admission.ts";
+import { runBundle } from "../src/station-executors.ts";
+import { dispatchStage } from "../src/role-dispatch.ts";
+import { roleAdmission } from "./role-job-fixtures.ts";
 
 function fakeDagu(bin: string, calls: string): void {
   mkdirSync(bin);
@@ -52,24 +56,25 @@ test("planning CLI admission materializes the installed template and enqueue sub
     assert.equal(admission.path, fixture.receipt("planning-admitted"));
     const receipt = JSON.parse(readFileSync(admission.path, "utf8"));
     assert.deepEqual(admission.receipt, receipt);
-    assert.equal(receipt.schemaVersion, 1);
+    assert.equal(receipt.schemaVersion, 2);
     assert.equal(receipt.sourceVersion.version, "0.3.1");
     assert.match(receipt.deploymentFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(receipt.runReceipt.dag, "planning");
     assert.equal(receipt.initial.execution.primary, fixture.packageDir);
     assert.deepEqual(receipt.initial.execution.parameters, params);
-    assert.equal(receipt.initial.deployment.installedDAG.relationship, "materialized-from-answers");
+    assert.equal(receipt.initial.deployment.installedDAG.relationship, "materialized-from-config");
     assert.equal(receipt.initial.deployment.installedDAG.version, "0.3.1");
     assert.equal(receipt.initial.deployment.installedDAG.template.path, "skills/issue-execution/planning.yaml");
     assert.equal(receipt.initial.deployment.installedDAG.dagu, "2.24.0");
     assert.equal(receipt.initial.runtimeAndModels.dagu.version, "2.24.0");
-    assert.equal(receipt.initial.deployment.answers.path, ANSWERS_PATH);
-    assert.equal(receipt.initial.deployment.answers.schemaVersion, 1);
-    assert.match(receipt.initial.deployment.answers.digest, /^[a-f0-9]{64}$/);
+    assert.equal(receipt.initial.deployment.config.path, CONFIG_PATH);
+    assert.equal(receipt.initial.deployment.config.schemaVersion, 1);
+    assert.match(receipt.initial.deployment.config.digest, /^[a-f0-9]{64}$/);
+    assert.equal(receipt.initial.deployment.installedDAG.configDigest, receipt.initial.deployment.config.digest);
     assert.equal(receipt.initial.deployment.generatedDagDigest, receipt.initial.deployment.installedDAG.generatedDigest);
     assert.equal(receipt.initial.execution.dagSnapshot, receipt.initial.deployment.installedDAG.snapshot);
     assert.match(receipt.initial.execution.dagSnapshot, /queue: fixture/);
-    assert.equal(receipt.initial.deployment.relationships.installedToSource, "materialized-from-answers");
+    assert.equal(receipt.initial.deployment.relationships.installedToSource, "materialized-from-config");
     assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
     assert.equal(receipt.initial.deployment.relationships.protocols, lifecycleProtocolToken());
     assert.equal(receipt.initial.deployment.installedReconciler.state, "absent");
@@ -106,7 +111,7 @@ test("planning CLI admission materializes the installed template and enqueue sub
   }
 });
 
-test("a package release with unchanged answers admits and a corrupt template does not", () => {
+test("a package release with unchanged config admits and a corrupt template does not", () => {
   const fixture = admissionFixture();
   try {
     const bin = join(fixture.root, "bin");
@@ -121,7 +126,7 @@ test("a package release with unchanged answers admits and a corrupt template doe
     assert.equal(before.initial.deployment.relationships.compatibility, "installed-template");
     assert.match(before.initial.execution.dagSnapshot, /PRIMARY: "\//);
     assert.match(before.initial.deployment.installedDAG.snapshot, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
-    const answersDigest = before.initial.deployment.answers.digest;
+    const configDigest = before.initial.deployment.config.digest;
 
     const manifestPath = join(fixture.packageDir, "package.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -133,7 +138,7 @@ test("a package release with unchanged answers admits and a corrupt template doe
     const receipt = JSON.parse(readFileSync(fixture.receipt("after-release"), "utf8"));
     assert.equal(receipt.sourceVersion.version, "0.4.0");
     assert.equal(receipt.initial.deployment.installedDAG.version, "0.4.0");
-    assert.equal(receipt.initial.deployment.answers.digest, answersDigest);
+    assert.equal(receipt.initial.deployment.config.digest, configDigest);
     assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
     assert.equal(receipt.initial.deployment.relationships.protocols, lifecycleProtocolToken());
     assert.equal(receipt.initial.deployment.installedReconciler.state, "absent");
@@ -147,7 +152,7 @@ test("a package release with unchanged answers admits and a corrupt template doe
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects missing, invalid and overridden answers before enqueue", () => {
+test("admission rejects missing, invalid and overridden config before enqueue", () => {
   const fixture = admissionFixture();
   try {
     const bin = join(fixture.root, "bin");
@@ -156,23 +161,23 @@ test("admission rejects missing, invalid and overridden answers before enqueue",
     const env = { PATH: `${bin}:${process.env.PATH ?? ""}`, ADMISSION_ENQUEUE_CALLS: calls };
     const git = (...args: string[]) => spawnSync("git", ["-C", fixture.packageDir, ...args], { encoding: "utf8" });
 
-    writeFileSync(fixture.answersPath, `${readFileSync(fixture.answersPath, "utf8")}\n`);
-    const dirty = fixture.command("admit", "dirty-answers", env);
+    writeFileSync(fixture.configPath, `${readFileSync(fixture.configPath, "utf8")}\n`);
+    const dirty = fixture.command("admit", "dirty-config", env);
     assert.notEqual(dirty.status, 0);
-    assert.match(dirty.stderr, /uncommitted answers file/);
-    git("checkout", "--", ANSWERS_PATH);
+    assert.match(dirty.stderr, /uncommitted config file/);
+    git("checkout", "--", CONFIG_PATH);
 
-    writeFileSync(fixture.answersPath, "{}\n");
-    git("add", ANSWERS_PATH);
-    git("commit", "-qm", "invalid answers");
-    const invalid = fixture.command("admit", "invalid-answers", env);
+    writeFileSync(fixture.configPath, "{}\n");
+    git("add", CONFIG_PATH);
+    git("commit", "-qm", "invalid config");
+    const invalid = fixture.command("admit", "invalid-config", env);
     assert.notEqual(invalid.status, 0);
-    assert.match(invalid.stderr, /answers file is missing|rejected unknown field|schemaVersion/);
-    git("rm", "-q", ANSWERS_PATH);
-    git("commit", "-qm", "remove answers");
-    const missing = fixture.command("admit", "missing-answers", env);
+    assert.match(invalid.stderr, /config file is missing|rejected unknown field|schemaVersion/);
+    git("rm", "-q", CONFIG_PATH);
+    git("commit", "-qm", "remove config");
+    const missing = fixture.command("admit", "missing-config", env);
     assert.notEqual(missing.status, 0);
-    assert.match(missing.stderr, /missing committed answers file/);
+    assert.match(missing.stderr, /missing committed config file.*config\.json/);
     assert.equal(existsSync(calls) && readFileSync(calls, "utf8").length > 0, false);
   } finally { fixture.dispose(); }
 });
@@ -198,4 +203,44 @@ test("feature admission rejects policy overrides and records the resolved primar
     assert.deepEqual(receipt.initial.execution.parameters, ["ISSUE=277", "PR_NUMBER=327", "OMP_SESSION_ID=owner-session"]);
     assert.equal(readFileSync(calls, "utf8"), "");
   } finally { fixture.dispose(); }
+});
+
+test("receipt readers preserve supported historical versions and reject unsupported versions before effects", async () => {
+  const fixture = admissionFixture();
+  const run = "receipt-versions";
+  const path = fixture.receipt(run);
+  const saved = { PRIMARY: process.env.PRIMARY, RUN: process.env.RUN, ISSUE: process.env.ISSUE };
+  try {
+    mkdirSync(join(path, ".."), { recursive: true });
+    const receipt = roleAdmission(fixture.packageDir, fixture.home, run, "dagu-role-jobs stage triage");
+    const observation = { dag: "feature", run, attempt: 1, category: "eventsAndExternalState" as const, kind: "test", data: {} };
+    const details = { name: "feature", dagRunId: run, statusLabel: "running" };
+    for (const version of [1, 2] as const) {
+      writeFileSync(path, JSON.stringify({ ...receipt, schemaVersion: version }));
+      assert.deepEqual(runBundle(fixture.packageDir, run), { version: receipt.sourceVersion.version, commit: receipt.sourceVersion.commit });
+      appendObservation(path, observation);
+      observeRunReceipt(details, fixture.packageDir);
+      const observed = JSON.parse(readFileSync(path, "utf8"));
+      assert.equal(observed.schemaVersion, version);
+      assert.deepEqual(observed.initial, receipt.initial);
+      assert.equal(observed.runReceipt.observations.length, 2);
+    }
+    Object.assign(process.env, { PRIMARY: fixture.packageDir, RUN: run, ISSUE: "189" });
+    for (const version of [0, 3, "2", null, undefined]) {
+      const bytes = JSON.stringify({ ...receipt, schemaVersion: version });
+      writeFileSync(path, bytes);
+      assert.throws(() => runBundle(fixture.packageDir, run), /Unsupported admission receipt schemaVersion=.*supported versions: 1, 2/);
+      assert.throws(() => appendObservation(path, observation), /Unsupported admission receipt schemaVersion=/);
+      assert.throws(() => observeRunReceipt(details, fixture.packageDir), /Unsupported admission receipt schemaVersion=/);
+      await assert.rejects(dispatchStage("triage", () => assert.fail("must not emit"), async () => { throw new Error("must not execute"); }), /Unsupported admission receipt schemaVersion=/);
+      assert.equal(readFileSync(path, "utf8"), bytes);
+      assert.equal(existsSync(`${path}.lock`), false);
+      assert.equal(existsSync(join(path, "..", "role-jobs")), false);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fixture.dispose();
+  }
 });

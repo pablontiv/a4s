@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, sym
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ANSWERS_PATH, exampleAnswers, serializeAnswers, type LifecycleAnswers } from "../../src/answers.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../src/config.ts";
 
 export function admissionFixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "dagu-admission-")));
@@ -17,15 +17,15 @@ export function admissionFixture() {
   const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
   manifest.version = "0.3.1";
   writeFileSync(join(packageDir, "package.json"), JSON.stringify(manifest));
-  const answersPath = join(packageDir, ANSWERS_PATH);
-  mkdirSync(dirname(answersPath), { recursive: true });
+  const configPath = join(packageDir, CONFIG_PATH);
+  mkdirSync(dirname(configPath), { recursive: true });
   const git = (...args: string[]): string => execFileSync("git", ["-C", packageDir, ...args], { encoding: "utf8" }).trim();
-  const writeAnswers = (overrides: Partial<LifecycleAnswers> = {}): void => {
-    writeFileSync(answersPath, serializeAnswers(exampleAnswers({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "", ...overrides })));
-    git("add", ANSWERS_PATH);
-    if (git("status", "--porcelain", "--", ANSWERS_PATH)) git("commit", "-qm", "answers");
+  const writeConfig = (overrides: Partial<LifecycleConfig> = {}): void => {
+    writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "", ...overrides })));
+    git("add", CONFIG_PATH);
+    if (git("status", "--porcelain", "--", CONFIG_PATH)) git("commit", "-qm", "config");
   };
-  writeFileSync(answersPath, serializeAnswers(exampleAnswers({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "" })));
+  writeFileSync(configPath, serializeConfig(exampleConfig({ lane: "fixture", queueConcurrency: 1, gate: "true", rebaseResolver: "" })));
   git("init", "-b", "main");
   git("config", "user.name", "Admission Test");
   git("config", "user.email", "admission@example.test");
@@ -50,5 +50,5 @@ export function admissionFixture() {
     else process.env.A4S_PRIMARY = previousPrimary;
     rmSync(root, { recursive: true, force: true });
   };
-  return { root, packageDir, home, dag, cli, command, receipt, observe, writeAnswers, answersPath, dispose };
+  return { root, packageDir, home, dag, cli, command, receipt, observe, writeConfig, configPath, dispose };
 }

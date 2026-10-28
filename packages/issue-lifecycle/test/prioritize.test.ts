@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -141,6 +141,29 @@ test("prioritize continues adopted JSON-schema/env PRIMARY snapshots with origin
     assert.deepEqual(receipts.map(path => readFileSync(path, "utf8")), bytes);
     assert.equal(f.state().concurrency, 1);
   } finally { f.close(); }
+});
+
+test("prioritize accepts receipt version 2 and rejects unsupported versions without dequeuing", async () => {
+  for (const schemaVersion of [2, 3, "2", null]) {
+    const f = await fixture(["a", "b", "u"], { admitted: true });
+    try {
+      for (const entry of f.initial.entries) {
+        const path = join(f.root, ".git", "dagu-feature", "runs", entry.dagRunId, "receipt.json");
+        const receipt = JSON.parse(readFileSync(path, "utf8"));
+        writeFileSync(path, JSON.stringify({ ...receipt, schemaVersion }));
+      }
+      const result = await f.invoke();
+      if (schemaVersion === 2) {
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(f.state().queue, ["u", "a", "b"]);
+      } else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Unsupported admission receipt schemaVersion=/);
+        assert.deepEqual(f.state(), f.initial);
+        assert.equal(existsSync(join(f.root, "data", "prioritize")), false);
+      }
+    } finally { f.close(); }
+  }
 });
 
 test("prioritize reports moved=0 when the run is already first", async () => {

@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import { isRecord } from "./type-guard.ts";
 
 /** Independent of the package version. Unknown fields are rejected. */
-export const ANSWERS_SCHEMA_VERSION = 1;
-export const ANSWERS_PATH = ".workspace/dagu/answers.json";
+export const CONFIG_SCHEMA_VERSION = 1;
+export const CONFIG_PATH = ".workspace/dagu/config.json";
 
 const LANE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -27,7 +27,7 @@ export interface EscalationBudgets {
   pocInconclusive: number;
 }
 
-export interface LifecycleAnswers {
+export interface LifecycleConfig {
   schemaVersion: 1;
   lane: string;
   baseBranch: string;
@@ -51,8 +51,8 @@ export const POLICY_PARAMETERS = [
   "CODE_SCANNING", "TEST_PATHS", "VALIDATION", "QUEUE_CONCURRENCY", "LANE",
 ] as const;
 
-export interface CommittedAnswers {
-  answers: LifecycleAnswers;
+export interface CommittedConfig {
+  config: LifecycleConfig;
   text: string;
   commit: string;
   digest: string;
@@ -81,7 +81,7 @@ function take(source: Record<string, unknown>, key: string, label: string): unkn
 function rejectUnknown(source: Record<string, unknown>, label: string): void {
   const keys = Object.keys(source);
   if (keys.length) {
-    fail(`${label} rejected unknown field ${keys.join(", ")}; answers schema ${ANSWERS_SCHEMA_VERSION} rejects unknown fields and run-time overrides`);
+    fail(`${label} rejected unknown field ${keys.join(", ")}; config schema ${CONFIG_SCHEMA_VERSION} rejects unknown fields and run-time overrides`);
   }
 }
 
@@ -106,47 +106,47 @@ function choice<T extends string>(value: unknown, label: string, allowed: readon
   return value as T;
 }
 
-export function parseAnswers(value: unknown): LifecycleAnswers {
-  const source = record(value, "answers file");
-  const schemaVersion = take(source, "schemaVersion", "answers file");
-  if (schemaVersion !== ANSWERS_SCHEMA_VERSION) {
-    fail(`answers schemaVersion=${JSON.stringify(schemaVersion)} expected ${ANSWERS_SCHEMA_VERSION}; the answers schema is independent of the package version`);
+export function parseConfig(value: unknown): LifecycleConfig {
+  const source = record(value, "config file");
+  const schemaVersion = take(source, "schemaVersion", "config file");
+  if (schemaVersion !== CONFIG_SCHEMA_VERSION) {
+    fail(`config schemaVersion=${JSON.stringify(schemaVersion)} expected ${CONFIG_SCHEMA_VERSION}; the config schema is independent of the package version`);
   }
-  const escalationSource = record(take(source, "escalation", "answers file"), "answers escalation");
-  const answers: LifecycleAnswers = {
-    schemaVersion: ANSWERS_SCHEMA_VERSION,
-    lane: text(take(source, "lane", "answers file"), "answers lane", LANE),
-    baseBranch: text(take(source, "baseBranch", "answers file"), "answers baseBranch", BRANCH),
-    queueConcurrency: positiveInteger(take(source, "queueConcurrency", "answers file"), "answers queueConcurrency"),
-    gate: text(take(source, "gate", "answers file"), "answers gate"),
-    requiredCheck: text(take(source, "requiredCheck", "answers file"), "answers requiredCheck"),
-    testPaths: text(take(source, "testPaths", "answers file"), "answers testPaths"),
-    rebaseResolver: text(take(source, "rebaseResolver", "answers file"), "answers rebaseResolver", undefined, true),
-    validation: text(take(source, "validation", "answers file"), "answers validation", undefined, true),
-    blockerReporting: choice(take(source, "blockerReporting", "answers file"), "answers blockerReporting", BLOCKER),
-    codeScanning: choice(take(source, "codeScanning", "answers file"), "answers codeScanning", SCANNING),
-    codeqlSecurityThreshold: choice(take(source, "codeqlSecurityThreshold", "answers file"), "answers codeqlSecurityThreshold", SECURITY),
-    codeqlAlertsThreshold: choice(take(source, "codeqlAlertsThreshold", "answers file"), "answers codeqlAlertsThreshold", ALERTS),
+  const escalationSource = record(take(source, "escalation", "config file"), "config escalation");
+  const config: LifecycleConfig = {
+    schemaVersion: CONFIG_SCHEMA_VERSION,
+    lane: text(take(source, "lane", "config file"), "config lane", LANE),
+    baseBranch: text(take(source, "baseBranch", "config file"), "config baseBranch", BRANCH),
+    queueConcurrency: positiveInteger(take(source, "queueConcurrency", "config file"), "config queueConcurrency"),
+    gate: text(take(source, "gate", "config file"), "config gate"),
+    requiredCheck: text(take(source, "requiredCheck", "config file"), "config requiredCheck"),
+    testPaths: text(take(source, "testPaths", "config file"), "config testPaths"),
+    rebaseResolver: text(take(source, "rebaseResolver", "config file"), "config rebaseResolver", undefined, true),
+    validation: text(take(source, "validation", "config file"), "config validation", undefined, true),
+    blockerReporting: choice(take(source, "blockerReporting", "config file"), "config blockerReporting", BLOCKER),
+    codeScanning: choice(take(source, "codeScanning", "config file"), "config codeScanning", SCANNING),
+    codeqlSecurityThreshold: choice(take(source, "codeqlSecurityThreshold", "config file"), "config codeqlSecurityThreshold", SECURITY),
+    codeqlAlertsThreshold: choice(take(source, "codeqlAlertsThreshold", "config file"), "config codeqlAlertsThreshold", ALERTS),
     escalation: {
-      pushbacks: positiveInteger(take(escalationSource, "pushbacks", "answers escalation"), "answers escalation.pushbacks"),
-      findings: positiveInteger(take(escalationSource, "findings", "answers escalation"), "answers escalation.findings"),
-      seconds: positiveInteger(take(escalationSource, "seconds", "answers escalation"), "answers escalation.seconds"),
-      ciBlocked: positiveInteger(take(escalationSource, "ciBlocked", "answers escalation"), "answers escalation.ciBlocked"),
-      pocInconclusive: positiveInteger(take(escalationSource, "pocInconclusive", "answers escalation"), "answers escalation.pocInconclusive"),
+      pushbacks: positiveInteger(take(escalationSource, "pushbacks", "config escalation"), "config escalation.pushbacks"),
+      findings: positiveInteger(take(escalationSource, "findings", "config escalation"), "config escalation.findings"),
+      seconds: positiveInteger(take(escalationSource, "seconds", "config escalation"), "config escalation.seconds"),
+      ciBlocked: positiveInteger(take(escalationSource, "ciBlocked", "config escalation"), "config escalation.ciBlocked"),
+      pocInconclusive: positiveInteger(take(escalationSource, "pocInconclusive", "config escalation"), "config escalation.pocInconclusive"),
     },
   };
-  rejectUnknown(escalationSource, "answers escalation");
-  rejectUnknown(source, "answers file");
-  return answers;
+  rejectUnknown(escalationSource, "config escalation");
+  rejectUnknown(source, "config file");
+  return config;
 }
 
-export function serializeAnswers(answers: LifecycleAnswers): string {
-  return `${JSON.stringify(parseAnswers(answers), null, 2)}\n`;
+export function serializeConfig(config: LifecycleConfig): string {
+  return `${JSON.stringify(parseConfig(config), null, 2)}\n`;
 }
 
-export function exampleAnswers(overrides: Partial<LifecycleAnswers> = {}): LifecycleAnswers {
-  return parseAnswers({
-    schemaVersion: ANSWERS_SCHEMA_VERSION,
+export function exampleConfig(overrides: Partial<LifecycleConfig> = {}): LifecycleConfig {
+  return parseConfig({
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     lane: overrides.lane ?? "fixture",
     baseBranch: overrides.baseBranch ?? "main",
     queueConcurrency: overrides.queueConcurrency ?? 1,
@@ -176,15 +176,15 @@ function environmentInteger(env: NodeJS.ProcessEnv, name: string): number {
   return Number(raw);
 }
 
-/** Bootstrap's validated environment becomes the strict answers document. */
-export function answersFromEnvironment(env: NodeJS.ProcessEnv): LifecycleAnswers {
+/** Bootstrap's validated environment becomes the strict config document. */
+export function configFromEnvironment(env: NodeJS.ProcessEnv): LifecycleConfig {
   const required = (name: string): string => {
     const value = env[name];
     if (value === undefined || value === "") fail(`${name} is required`);
     return value;
   };
-  return parseAnswers({
-    schemaVersion: ANSWERS_SCHEMA_VERSION,
+  return parseConfig({
+    schemaVersion: CONFIG_SCHEMA_VERSION,
     lane: required("REPO"),
     baseBranch: required("BASE_BRANCH"),
     queueConcurrency: environmentInteger(env, "QUEUE_CONCURRENCY"),
@@ -207,30 +207,30 @@ export function answersFromEnvironment(env: NodeJS.ProcessEnv): LifecycleAnswers
   });
 }
 
-export function readAnswersFile(path: string): LifecycleAnswers {
+export function readConfigFile(path: string): LifecycleConfig {
   let value: unknown;
   try { value = JSON.parse(readFileSync(path, "utf8")); }
   catch (error) {
-    fail(`invalid answers file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    fail(`invalid config file ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  return parseAnswers(value);
+  return parseConfig(value);
 }
 
 /** Policy admitted for a run is the consumer commit, not a dirty worktree edit. */
-export function readCommittedAnswers(repo: string): CommittedAnswers {
+export function readCommittedConfig(repo: string): CommittedConfig {
   let commit = "";
   try { commit = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
-  catch { fail(`admission requires a consumer git checkout containing committed ${ANSWERS_PATH}`); }
+  catch { fail(`admission requires a consumer git checkout containing committed ${CONFIG_PATH}`); }
   let text = "";
   try {
-    text = execFileSync("git", ["-C", repo, "show", `${commit}:${ANSWERS_PATH}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    text = execFileSync("git", ["-C", repo, "show", `${commit}:${CONFIG_PATH}`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch {
-    fail(`missing committed answers file ${ANSWERS_PATH} at ${commit.slice(0, 12)}; commit consumer policy before admission`);
+    fail(`missing committed config file ${CONFIG_PATH} at ${commit.slice(0, 12)}; commit consumer policy before admission`);
   }
-  const dirty = execFileSync("git", ["-C", repo, "status", "--porcelain", "--untracked-files=all", "--", ANSWERS_PATH], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-  if (dirty) fail(`uncommitted answers file ${ANSWERS_PATH} (${dirty.split("\n")[0]}); commit it before admission so the admitted policy is the committed revision`);
+  const dirty = execFileSync("git", ["-C", repo, "status", "--porcelain", "--untracked-files=all", "--", CONFIG_PATH], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  if (dirty) fail(`uncommitted config file ${CONFIG_PATH} (${dirty.split("\n")[0]}); commit it before admission so the admitted policy is the committed revision`);
   let value: unknown;
   try { value = JSON.parse(text); }
-  catch (error) { fail(`invalid JSON in committed ${ANSWERS_PATH}: ${error instanceof Error ? error.message : String(error)}`); }
-  return { answers: parseAnswers(value), text, commit, digest: digest(text) };
+  catch (error) { fail(`invalid JSON in committed ${CONFIG_PATH}: ${error instanceof Error ? error.message : String(error)}`); }
+  return { config: parseConfig(value), text, commit, digest: digest(text) };
 }

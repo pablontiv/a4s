@@ -57,11 +57,11 @@ test("bootstrap renders optional validation as the sole adopted value", {
         },
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
-      const answers = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; queueConcurrency: number; lane: string };
-      assert.equal(answers.validation, validation);
-      assert.equal(answers.rebaseResolver, "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs");
-      assert.equal(answers.queueConcurrency, 8);
-      assert.equal(answers.lane, "fixture");
+      const config = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; queueConcurrency: number; lane: string };
+      assert.equal(config.validation, validation);
+      assert.equal(config.rebaseResolver, "node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs");
+      assert.equal(config.queueConcurrency, 8);
+      assert.equal(config.lane, "fixture");
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -71,7 +71,7 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
   const render = bootstrap.split("  - id: render\n")[1]!.split("\n  - id: reconcile")[0]!;
   const script = render.split("    run: |\n")[1]!.split("\n").map(line => line.slice(6)).join("\n");
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-blocker-policy-"));
-  const stage = join(root, "answers.json");
+  const stage = join(root, "config.json");
   let installed = "";
   try {
     for (const [answer, expected] of [["", "ask"], ["auto", "auto"], ["", "auto"], ["ask", "ask"], ["", "ask"]]) {
@@ -119,7 +119,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     for (const [answer, installed, expected] of [
       ["", "", "high_or_higher"], ["", "medium_or_higher", "medium_or_higher"], ["critical", "medium_or_higher", "critical"],
     ]) {
-      const stage = join(root, "answers.json");
+      const stage = join(root, "config.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
@@ -131,15 +131,15 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
         CODE_SCANNING: "", CURRENT_CODE_SCANNING: "",
       } });
       assert.equal(result.status, 0, result.stderr);
-      const answers = JSON.parse(readFileSync(stage, "utf8"));
-      assert.equal(answers.codeqlSecurityThreshold, expected);
-      assert.equal(answers.codeqlAlertsThreshold, "errors_and_warnings");
-      assert.equal(answers.codeScanning, "required");
+      const config = JSON.parse(readFileSync(stage, "utf8"));
+      assert.equal(config.codeqlSecurityThreshold, expected);
+      assert.equal(config.codeqlAlertsThreshold, "errors_and_warnings");
+      assert.equal(config.codeScanning, "required");
     }
     for (const [answer, installed, expected] of [
       ["", "", "required"], ["", "off", "off"], ["required", "off", "required"], ["off", "required", "off"],
     ] as const) {
-      const stage = join(root, "answers.json");
+      const stage = join(root, "config.json");
       const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
         ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
         STAGE: stage, DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
@@ -155,7 +155,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     }
     const rejectedChoice = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
       ...process.env, PRIMARY: root, SKILL_DIR: fileURLToPath(new URL("../skills/issue-execution", import.meta.url)),
-      STAGE: join(root, "answers.json"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
+      STAGE: join(root, "config.json"), DAG_RUN_ID: "bootstrap-codeql", REPO: "fixture", BASE_BRANCH: "main",
       GATE: "true", REQUIRED_CHECK: "validate", REBASE_RESOLVER: "", TEST_PATHS: "test",
       BUNDLE_NAME, BUNDLE_VERSION, DAGU_VERSION: "2.24.0",
       SOURCE_NWO: "example/repo", SOURCE_SHA: "a".repeat(40),
@@ -163,7 +163,7 @@ test("bootstrap renders default, preserved and explicit CodeQL thresholds and re
     } });
     assert.notEqual(rejectedChoice.status, 0);
     assert.match(rejectedChoice.stderr, /CODE_SCANNING must be required or off/);
-    const form = parse(skill("dagu-feature-bootstrap.yaml")).steps.find((step: { id: string }) => step.id === "answers").with.form;
+    const form = parse(skill("dagu-feature-bootstrap.yaml")).steps.find((step: { id: string }) => step.id === "config").with.form;
     assert.deepEqual(form.properties.CODE_SCANNING, { type: "string", enum: ["", "required", "off"], default: "" });
     for (const key of ["CODEQL_SECURITY_THRESHOLD", "CODEQL_ALERTS_THRESHOLD", "CODE_SCANNING"]) {
       const result = spawnSync("bash", ["-c", admission], { encoding: "utf8", env: {

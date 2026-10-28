@@ -18,7 +18,7 @@ The session runs the review; the operator accepts the result or changes the goal
 4. Present one table: check or issue, result, evidence, owner of the next action.
 5. Report goal checks that answer no and unfinished issue conditions separately, with the responsible session or operator for each next action.
 
-The Sprint Goal is met when every agreed goal check answers yes. Report that result separately from issue completion: goal checks alone do not prove issue acceptance or completed delivery.
+The Sprint Goal is met when every agreed goal check returns yes. Report that result separately from issue completion: goal checks alone do not prove issue acceptance or completed delivery.
 
 ## Output
 

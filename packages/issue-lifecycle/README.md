@@ -44,11 +44,11 @@ directly, with throwaway materialization for native validation. From this packag
 run `A4S_LIVE_DAGU=0 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 for isolated script scenarios, or `A4S_LIVE_DAGU=1 npx tsx --test test/reconcile-ci.test.ts test/reconcile-performance.test.ts`
 to include official-Dagu validation, bounded-tick checks and checkpoint/queue scenarios in isolated temporary homes.
-The consumer answers file is `.workspace/dagu/answers.json`. Admission materializes DAGs from the installed templates.
+The consumer config file is `.workspace/dagu/config.json`. Admission materializes DAGs from the installed templates.
 
 The existing feature lifecycle publishes a gated candidate through
 `push → pr → code_scanning → auto_merge → await_ci → await_merge`. Triage review remains independent;
-optional operator validation is fixed in the answers file (a4s currently uses an empty
+optional operator validation is fixed in the config file (a4s currently uses an empty
 procedure). Sprint Planning alone selects/ranks/enqueues new work. Discovery and
 refinement feed `planning.yaml`, the shared issue-creation backend, which owns
 independent plan review and operator approval. Sprint Review evaluates goal
@@ -56,7 +56,7 @@ checks from delivery evidence rather than adding a lifecycle checkpoint.
 
 ### CodeQL merge gate
 
-`CODE_SCANNING` is `required` or `off`. Blank bootstrap answers keep the
+`CODE_SCANNING` is `required` or `off`. Blank bootstrap inputs keep the
 installed choice; the initial choice is `required`. `off` neither observes nor
 waits for CodeQL, so auto-merge and `authorize_ci` depend only on
 `REQUIRED_CHECK`. Use it for repositories that cannot enable code scanning,
@@ -65,7 +65,7 @@ including private Free/Pro user repositories.
 When `required`, `dagu-codeql` observes the current PR head's `CodeQL` check and
 paginated open alerts from `refs/pull/<PR>/head`. Bootstrap fixes
 `CODEQL_SECURITY_THRESHOLD=high_or_higher` and `CODEQL_ALERTS_THRESHOLD=errors`
-by default; blank answers preserve installed policy. Security and non-security
+by default; blank inputs preserve installed policy. Security and non-security
 thresholds use GitHub ruleset enum values. Enable CodeQL analysis and give the
 service permission to read code-scanning alerts before that adoption.
 
@@ -122,10 +122,10 @@ binding are detailed in the architecture and execution skill.
 ## Repository-owned queue capacity
 
 Bootstrap's `QUEUE_CONCURRENCY` answer is a positive integer. Blank preserves
-`queueConcurrency` in `.workspace/dagu/answers.json`; the initial value is 1.
+`queueConcurrency` in `.workspace/dagu/config.json`; the initial value is 1.
 a4s commits **8**, the operator-approved installed capacity.
 
-The answers file is the source of truth. Bootstrap derives its named
+The config file is the source of truth. Bootstrap derives its named
 `queues.config` entry in `$DAGU_HOME/config.yaml`, preserving other queues,
 metadata, shared keys and comments. An unchanged entry keeps bytes and scheduler
 intact. A changed entry requires the running launchd `local.dagu.server` to use
@@ -133,11 +133,11 @@ intact. A changed entry requires the running launchd `local.dagu.server` to use
 Waiting human tasks keep their persisted state. A failed restart atomically
 restores the previous config for retry.
 
-`dagu-feature-bundle <repo>` and `queue-check <answers.json>` report queue drift as
-`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap when the answers
+`dagu-feature-bundle <repo>` and `queue-check <config.json>` report queue drift as
+`compat=incompatible action=re-run-bootstrap`. Re-run bootstrap when the config
 file should change. Station installation manages shared defaults and preserves
 repository queue limits; its drained activation requires
-`--apply --repo-dag <answers.json>` and the existing operator-owned admission
+`--apply --repo-dag <config.json>` and the existing operator-owned admission
 and restart hooks, and verifies that capacity with N+1 barrier runs.
 Queue capacity counts Dagu runs; the independently managed role-job capacity
 counts semantic jobs and remains controlled by `dagu-role-jobs capacity`.

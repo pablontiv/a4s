@@ -95,16 +95,16 @@ test("admission hook preserves effective shell arguments and requires bash for e
   assert.ok(blocked && "block" in blocked);
 });
 
-test("admission hook blocks enqueue when the committed answers file is missing", () => {
+test("admission hook blocks enqueue when the committed config file is missing", () => {
   const fixture = admissionFixture();
   try {
-    const removed = spawnSync("git", ["-C", fixture.packageDir, "rm", "-q", ".workspace/dagu/answers.json"], { encoding: "utf8" });
+    const removed = spawnSync("git", ["-C", fixture.packageDir, "rm", "-q", ".workspace/dagu/config.json"], { encoding: "utf8" });
     assert.equal(removed.status, 0, removed.stderr);
-    const committed = spawnSync("git", ["-C", fixture.packageDir, "commit", "-qm", "remove answers"], { encoding: "utf8" });
+    const committed = spawnSync("git", ["-C", fixture.packageDir, "commit", "-qm", "remove config"], { encoding: "utf8" });
     assert.equal(committed.status, 0, committed.stderr);
     const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked feature -- ISSUE=277` } }, undefined, fixture.packageDir);
     assert.ok(rejected && "block" in rejected);
-    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing committed answers file/);
+    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing committed config file/);
   } finally { fixture.dispose(); }
 });
 

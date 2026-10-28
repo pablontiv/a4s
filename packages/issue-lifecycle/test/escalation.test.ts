@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,6 +109,30 @@ test("durable budget uses native iterations and retry-safe finding occurrences, 
     await closed;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("escalation reads admitted receipt versions 1 and 2 and rejects unsupported versions before budget effects", () => {
+  const root = mkdtempSync(join(tmpdir(), "escalation-receipt-version-"));
+  const primary = repository(root);
+  const state = join(primary, ".git/dagu-feature/runs/versions");
+  mkdirSync(state, { recursive: true });
+  const receipt = join(state, "receipt.json");
+  const env = { ...process.env, PRIMARY: primary, RUN: "versions", OMP_SESSION_ID: "owner", DAG_PUSHBACK_ITERATION: "0", DAGU_OUTPUT_FILE: join(root, "outputs") };
+  try {
+    for (const schemaVersion of [1, 2, 3, "2", null]) {
+      const bytes = JSON.stringify({ schemaVersion, initial: { admittedAt: new Date().toISOString() } });
+      writeFileSync(receipt, bytes);
+      const before = existsSync(join(state, "escalation.json")) ? readFileSync(join(state, "escalation.json"), "utf8") : undefined;
+      const result = spawnSync("python3", [helper, "check"], { env, encoding: "utf8" });
+      if (schemaVersion === 1 || schemaVersion === 2) assert.equal(result.status, 0, result.stderr);
+      else {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Unsupported admission receipt schemaVersion=/);
+        assert.equal(readFileSync(join(state, "escalation.json"), "utf8"), before);
+      }
+      assert.equal(readFileSync(receipt, "utf8"), bytes);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("repair paths enter budget boundaries while preserving native static destinations", () => {

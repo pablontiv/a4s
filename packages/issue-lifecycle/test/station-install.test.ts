@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixture } from "./fixtures/station.ts";
-import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
+import { exampleConfig, serializeConfig } from "../src/config.ts";
 
 test("station installer accepts an unpinned runtime and reports its observed version", () => {
   const f = fixture();
@@ -43,8 +43,8 @@ test("station apply binds probes to a stamped render and its derived installed q
     const bin = join(f.root, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "dagu"), "#!/bin/sh\nprintf '2.24.0\\n'\n", { mode: 0o755 });
-    const render = join(f.root, "answers.json");
-    writeFileSync(render, serializeAnswers(exampleAnswers({ lane: "example", queueConcurrency: 6 })));
+    const render = join(f.root, "config.json");
+    writeFileSync(render, serializeConfig(exampleConfig({ lane: "example", queueConcurrency: 6 })));
     const original = "queues:\n  enabled: true\n  config:\n    - name: example\n      max_concurrency: 3\n";
     writeFileSync(join(f.home, "config.yaml"), original);
     const drift = f.run([...hooks, "--repo-dag", render], { PATH: `${bin}:${process.env.PATH}` });
@@ -73,7 +73,7 @@ function executorsFixture() {
   git("init");
   git("config", "user.email", "test@example.com");
   git("config", "user.name", "Station Test");
-  for (const path of ["src/station-executors.ts", "src/run-primary.ts", "src/primary.ts", "src/bundle.ts", "bin/dagu-station-executor.ts"]) {
+  for (const path of ["src/station-executors.ts", "src/receipt-version.ts", "src/type-guard.ts", "src/run-primary.ts", "src/primary.ts", "src/bundle.ts", "bin/dagu-station-executor.ts"]) {
     const destination = join(source, "packages/issue-lifecycle", path);
     mkdirSync(dirname(destination), { recursive: true });
     copyFileSync(fileURLToPath(new URL(`../${path}`, import.meta.url)), destination);
@@ -102,7 +102,7 @@ function executorsFixture() {
   function reference(commit = old, version = "0.8.1", status = "waiting", runId = "historical") {
     const state = join(source, ".git/dagu-feature/runs", runId);
     mkdirSync(state, { recursive: true });
-    writeFileSync(join(state, "receipt.json"), JSON.stringify({ sourceVersion: { version, commit, origin: source }, runReceipt: { run: runId } }));
+    writeFileSync(join(state, "receipt.json"), JSON.stringify({ schemaVersion: 1, sourceVersion: { version, commit, origin: source }, runReceipt: { run: runId } }));
     writeFileSync(history, JSON.stringify([{ name: "feature", dagRunId: runId, status, params: `PRIMARY=${source}` }]));
   }
   function legacy() {
@@ -139,6 +139,25 @@ test("station installs an independent recorded bundle and preserves development 
     const mtime = statSync(join(f.launcherDir, "dagu-role-jobs")).mtimeMs;
     assert.equal(f.install().status, 0);
     assert.equal(statSync(join(f.launcherDir, "dagu-role-jobs")).mtimeMs, mtime);
+  } finally { f.dispose(); }
+});
+
+test("station rejects unsupported receipt versions before evidence, executor directories or admission hooks", () => {
+  const f = executorsFixture();
+  try {
+    f.reference();
+    const path = join(f.source, ".git/dagu-feature/runs/historical/receipt.json");
+    const receipt = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...receipt, schemaVersion: 3 }));
+    const marker = join(f.root, "closed");
+    const result = f.run("migrate", ["--executor", f.executor("0.8.1", f.old),
+      "--admission-close", `touch '${marker}'`, "--admission-open", "true"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unsupported admission receipt schemaVersion=3/);
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(f.evidence()), false);
+    assert.equal(existsSync(join(f.home, "executors")), false);
+    assert.equal(existsSync(join(f.home, ".station-install.lock")), false);
   } finally { f.dispose(); }
 });
 

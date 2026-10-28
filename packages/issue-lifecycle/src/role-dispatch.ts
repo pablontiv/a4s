@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { appendObservation, loadedExtensionDigest, type Receipt } from "./admission.ts";
+import { assertReceiptVersion } from "./receipt-version.ts";
 import { BUNDLE_VERSION } from "./bundle.ts";
 import type { RunDetails } from "./status/progress.ts";
 import { runParam } from "./run-primary.ts";
@@ -132,8 +133,10 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const state = join(common, "dagu-feature", "runs", run);
   const receiptPath = join(state, "receipt.json");
   const receipt = JSON.parse(readFileSync(receiptPath, "utf8")) as Receipt;
+  // Read version 1 for already-admitted role jobs; only admission creates version 2 receipts.
+  assertReceiptVersion(receipt, receiptPath);
   const home = realpathSync(process.env.DAGU_HOME || "");
-  if (receipt.schemaVersion !== 1 || receipt.runReceipt.dag !== "feature" || receipt.runReceipt.run !== run ||
+  if (receipt.runReceipt.dag !== "feature" || receipt.runReceipt.run !== run ||
       receipt.initial.execution.primary !== primary || receipt.initial.runtimeAndModels.daguHome !== home ||
       !receipt.initial.execution.dagSnapshot.includes(`dagu-role-jobs stage ${stage}`)) throw new Error("Role dispatch is not authorized by this admitted run snapshot");
   const extension = receipt.initial.deployment.loadedExtension as { digest?: string };

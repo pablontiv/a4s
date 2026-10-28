@@ -5,11 +5,11 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ANSWERS_PATH,
+  CONFIG_PATH,
   POLICY_PARAMETERS,
-  readCommittedAnswers,
-  type LifecycleAnswers,
-} from "./answers.ts";
+  readCommittedConfig,
+  type LifecycleConfig,
+} from "./config.ts";
 import {
   BUNDLE_VERSION,
   formatProtocolRejection,
@@ -22,9 +22,10 @@ import type { RunDetails } from "./status/progress.ts";
 import { isRecord } from "./type-guard.ts";
 import { requirePocScope, scopeTargets } from "./poc-scope.ts";
 import { HOST_PRIMARY_REFERENCE, bindSnapshotPrimary, resolvePrimaryBinding } from "./primary.ts";
+import { assertReceiptVersion } from "./receipt-version.ts";
 
 const packageRoot = fileURLToPath(new URL("../", import.meta.url));
-const correction = "Commit .workspace/dagu/answers.json in the consumer repository. Admission materializes the DAG from the installed package templates and resolves PRIMARY before enqueue; retry with a new run ID.";
+const correction = "Commit .workspace/dagu/config.json in the consumer repository. Admission materializes the DAG from the installed package templates and resolves PRIMARY before enqueue; retry with a new run ID.";
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -48,7 +49,7 @@ function tree(path: string): Record<string, string> {
 export const loadedExtensionDigest = deploymentFingerprint(tree(join(packageRoot, "src")));
 export interface AdmissionOptions { cwd: string; dag: string; run: string; params: string[]; session?: { transcriptRoot?: string; model?: unknown; extensionDigest?: string } }
 export interface Receipt {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   sourceVersion: { version: string; commit: string; origin: string };
   deploymentFingerprint: string;
   initial: { admittedAt: string; deployment: Record<string, unknown>; runtimeAndModels: Record<string, unknown>; execution: Record<string, unknown> & { dagSnapshot: string }; eventsAndExternalState: Record<string, unknown> };
@@ -69,7 +70,8 @@ export function parseObservation(value: unknown): Omit<Observation, "at"> {
 }
 function readReceipt(path: string): Receipt {
   const value: unknown = JSON.parse(readFileSync(path, "utf8"));
-  if (!isRecord(value) || value.schemaVersion !== 1 || typeof value.deploymentFingerprint !== "string") throw new Error(`Invalid receipt schema: ${path}`);
+  assertReceiptVersion(value, path);
+  if (typeof value.deploymentFingerprint !== "string") throw new Error(`Invalid receipt schema: ${path}`);
   const source = value.sourceVersion;
   const initial = value.initial;
   const run = value.runReceipt;
@@ -77,7 +79,7 @@ function readReceipt(path: string): Receipt {
   if (!isRecord(initial) || typeof initial.admittedAt !== "string" || !isRecord(initial.deployment) || !isRecord(initial.runtimeAndModels) || !isRecord(initial.execution) || typeof initial.execution.dagSnapshot !== "string" || !isRecord(initial.eventsAndExternalState)) throw new Error(`Invalid receipt initial snapshot: ${path}`);
   if (!isRecord(run) || typeof run.dag !== "string" || typeof run.run !== "string" || typeof run.attempt !== "number" || !Array.isArray(run.observations)) throw new Error(`Invalid runReceipt: ${path}`);
   return {
-    schemaVersion: 1, sourceVersion: { version: source.version, commit: source.commit, origin: source.origin }, deploymentFingerprint: value.deploymentFingerprint,
+    schemaVersion: value.schemaVersion, sourceVersion: { version: source.version, commit: source.commit, origin: source.origin }, deploymentFingerprint: value.deploymentFingerprint,
     initial: { admittedAt: initial.admittedAt, deployment: initial.deployment, runtimeAndModels: initial.runtimeAndModels, execution: { ...initial.execution, dagSnapshot: initial.execution.dagSnapshot }, eventsAndExternalState: initial.eventsAndExternalState },
     runReceipt: { dag: run.dag, run: run.run, attempt: run.attempt, observations: run.observations.map((entry: unknown) => {
       if (!isRecord(entry) || typeof entry.at !== "string") throw new Error(`Invalid receipt observation timestamp: ${path}`);
@@ -115,20 +117,20 @@ function consumerRoot(cwd: string, dag: string): string {
     const root = gitRoot(start);
     if (root) return root;
   }
-  throw new Error(`admission requires a consumer git checkout containing committed ${ANSWERS_PATH}`);
+  throw new Error(`admission requires a consumer git checkout containing committed ${CONFIG_PATH}`);
 }
 
-function policyRecord(answers: LifecycleAnswers, primary: string, branch: string): Record<string, unknown> {
+function policyRecord(config: LifecycleConfig, primary: string, branch: string): Record<string, unknown> {
   return {
-    PRIMARY: primary, BRANCH: branch, LANE: answers.lane, GATE: answers.gate,
-    REBASE_RESOLVER: answers.rebaseResolver, REQUIRED_CHECK: answers.requiredCheck,
-    TEST_PATHS: answers.testPaths, VALIDATION: answers.validation,
-    A4S_BLOCKER_REPORTING: answers.blockerReporting, CODE_SCANNING: answers.codeScanning,
-    CODEQL_SECURITY_THRESHOLD: answers.codeqlSecurityThreshold, CODEQL_ALERTS_THRESHOLD: answers.codeqlAlertsThreshold,
-    QUEUE_CONCURRENCY: answers.queueConcurrency,
-    ESCALATION_PUSHBACKS: answers.escalation.pushbacks, ESCALATION_FINDINGS: answers.escalation.findings,
-    ESCALATION_SECONDS: answers.escalation.seconds, ESCALATION_CI_BLOCKED: answers.escalation.ciBlocked,
-    ESCALATION_POC_INCONCLUSIVE: answers.escalation.pocInconclusive,
+    PRIMARY: primary, BRANCH: branch, LANE: config.lane, GATE: config.gate,
+    REBASE_RESOLVER: config.rebaseResolver, REQUIRED_CHECK: config.requiredCheck,
+    TEST_PATHS: config.testPaths, VALIDATION: config.validation,
+    A4S_BLOCKER_REPORTING: config.blockerReporting, CODE_SCANNING: config.codeScanning,
+    CODEQL_SECURITY_THRESHOLD: config.codeqlSecurityThreshold, CODEQL_ALERTS_THRESHOLD: config.codeqlAlertsThreshold,
+    QUEUE_CONCURRENCY: config.queueConcurrency,
+    ESCALATION_PUSHBACKS: config.escalation.pushbacks, ESCALATION_FINDINGS: config.escalation.findings,
+    ESCALATION_SECONDS: config.escalation.seconds, ESCALATION_CI_BLOCKED: config.escalation.ciBlocked,
+    ESCALATION_POC_INCONCLUSIVE: config.escalation.pocInconclusive,
   };
 }
 
@@ -136,29 +138,29 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
   try {
     const name = dagName(options.dag);
     const hintedRoot = realpathSync(consumerRoot(options.cwd, options.dag));
-    const hinted = readCommittedAnswers(hintedRoot);
+    const hinted = readCommittedConfig(hintedRoot);
     let primaryParam = options.params.find(param => param.startsWith("PRIMARY="))?.slice(8);
-    let answers = hinted.answers;
-    let answersCommit = hinted.commit;
-    let answersDigest = hinted.digest;
+    let config = hinted.config;
+    let configCommit = hinted.commit;
+    let configDigest = hinted.digest;
     let executionSnapshot: string | undefined;
     if (name === "feature.yaml" || name === "poc.yaml") {
-      const bound = resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: answers.lane });
+      const bound = resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: config.lane });
       const resolved = realpathSync(bound);
       const primaryRepo = realpathSync(git(resolved, "rev-parse", "--show-toplevel"));
       if (primaryRepo !== hintedRoot) {
-        const canonical = readCommittedAnswers(primaryRepo);
-        const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.answers.lane }));
+        const canonical = readCommittedConfig(primaryRepo);
+        const again = realpathSync(resolvePrimaryBinding(HOST_PRIMARY_REFERENCE, { workspace: canonical.config.lane }));
         if (realpathSync(git(again, "rev-parse", "--show-toplevel")) !== primaryRepo) {
-          throw new Error(`answers lane=${canonical.answers.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
+          throw new Error(`config lane=${canonical.config.lane} resolved PRIMARY ${again}, which is not the consumer checkout ${primaryRepo}`);
         }
-        answers = canonical.answers;
-        answersCommit = canonical.commit;
-        answersDigest = canonical.digest;
+        config = canonical.config;
+        configCommit = canonical.commit;
+        configDigest = canonical.digest;
       }
       const issue = options.params.find(param => param.startsWith("ISSUE="))?.slice(6);
       const branch = name === "feature.yaml" ? `dagu/issue-${issue}` : `poc/${options.run}`;
-      const policy = policyRecord(answers, resolved, branch);
+      const policy = policyRecord(config, resolved, branch);
       primaryParam = resolved;
       const rejected = options.params.map(param => param.slice(0, param.indexOf("=")))
         .filter(field => field.startsWith("ESCALATION_") || (POLICY_PARAMETERS as readonly string[]).includes(field));
@@ -167,17 +169,17 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const primary = realpathSync(resolve(options.cwd, primaryParam || "."));
     const repo = realpathSync(git(primary, "rev-parse", "--show-toplevel"));
     if (name !== "feature.yaml" && name !== "poc.yaml" && hintedRoot !== repo) {
-      const canonical = readCommittedAnswers(repo);
-      answers = canonical.answers;
-      answersCommit = canonical.commit;
-      answersDigest = canonical.digest;
+      const canonical = readCommittedConfig(repo);
+      config = canonical.config;
+      configCommit = canonical.commit;
+      configDigest = canonical.digest;
     }
     if (name === "poc.yaml") {
       const param = (key: string) => options.params.find(value => value.startsWith(`${key}=`))?.slice(key.length + 1) || "";
       requirePocScope(primary, { issue: param("ISSUE"), question: param("QUESTION"),
         requiredTargets: scopeTargets(JSON.parse(param("REQUIRED_TARGETS") || "[]")),
         authorizedTargets: scopeTargets(JSON.parse(param("AUTHORIZED_TARGETS") || "[]")), basis: param("SCOPE_BASIS") },
-      param("SCOPE_REQUEST") || undefined, answers.escalation.pocInconclusive);
+      param("SCOPE_REQUEST") || undefined, config.escalation.pocInconclusive);
     }
     const path = receiptPath(primary, options.run);
     const installed = packageIdentity(packageRoot);
@@ -186,7 +188,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const daguHome = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
     const templateFile = join(packageRoot, "skills", "issue-execution", name);
     const templateText = readFileSync(templateFile, "utf8");
-    const generated = materializeDag(packageRoot, name, answers, installed);
+    const generated = materializeDag(packageRoot, name, config, installed);
     const declared = inferLifecycleProtocols(name, generated);
     const missing = missingLifecycleProtocols(declared);
     if (missing.length) throw new Error(formatProtocolRejection(name, missing));
@@ -208,15 +210,15 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
     const generatedDigest = sha256(snapshot);
     const daguVersion = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
     const installedDAG = {
-      relationship: "materialized-from-answers", version: BUNDLE_VERSION, canonicalPath: realpathSync(templateFile),
+      relationship: "materialized-from-config", version: BUNDLE_VERSION, canonicalPath: realpathSync(templateFile),
       origin: `${origin}@${commit}`, digest: sha256(templateText),
       template: { path: `skills/issue-execution/${name}`, commit, digest: sha256(templateText) },
-      answersDigest, generatedDigest, dagu: daguVersion, snapshot: generated,
+      configDigest, generatedDigest, dagu: daguVersion, snapshot: generated,
     };
     const deployment = {
       package: identity(join(packageRoot, "package.json"), BUNDLE_VERSION, `${origin}@${commit}`),
       sourceTemplate, installedDAG, installedReconciler,
-      answers: { path: ANSWERS_PATH, schemaVersion: answers.schemaVersion, commit: answersCommit, digest: answersDigest },
+      config: { path: CONFIG_PATH, schemaVersion: config.schemaVersion, commit: configCommit, digest: configDigest },
       generatedDagDigest: generatedDigest,
       loadedExtension: { version: BUNDLE_VERSION, canonicalPath: realpathSync(join(packageRoot, "src", "triage", "index.ts")), origin: `${origin}@${commit}`, digest: deploymentFingerprint(extensionFiles), files: extensionFiles, status: identity(join(packageRoot, "src", "status", "index.ts"), BUNDLE_VERSION, `${origin}@${commit}`) },
       bootstrap: identity(join(packageRoot, "skills", "issue-execution", "dagu-feature-bootstrap.yaml"), BUNDLE_VERSION, `${origin}@${commit}`),
@@ -227,23 +229,23 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
         identity(join(packageRoot, "skills", "issue-execution", "escalation.py"), BUNDLE_VERSION, `${origin}@${commit}`),
         identity(join(packageRoot, "bin", "dagu-poc-scope.ts"), BUNDLE_VERSION, `${origin}@${commit}`),
       ],
-      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "materialized-from-answers", compatibility: "installed-template", protocols: lifecycleProtocolToken() },
+      relationships: { packageToExtension: "same-loaded-package", templateToPackage: "same-checkout", installedToSource: "materialized-from-config", compatibility: "installed-template", protocols: lifecycleProtocolToken() },
     };
     const diff = git(primary, "diff", "HEAD", "--binary");
     const dirty = git(primary, "status", "--porcelain", "--untracked-files=all");
-    const config: Record<string, unknown> = {};
+    const runtimeConfig: Record<string, unknown> = {};
     for (const candidate of [join(daguHome, "config.yaml"), join(primary, ".omp", "settings.json"), join(homedir(), ".omp", "agent", "settings.json")]) {
-      try { config[candidate] = sha256(readFileSync(candidate)); }
+      try { runtimeConfig[candidate] = sha256(readFileSync(candidate)); }
       catch (error) {
         if (!isRecord(error) || error.code !== "ENOENT") throw error;
-        config[candidate] = { state: "unavailable", cause: "file not present" };
+        runtimeConfig[candidate] = { state: "unavailable", cause: "file not present" };
       }
     }
     const receipt: Receipt = {
-      schemaVersion: 1, sourceVersion: { version: BUNDLE_VERSION, commit, origin }, deploymentFingerprint: deploymentFingerprint(deployment),
+      schemaVersion: 2, sourceVersion: { version: BUNDLE_VERSION, commit, origin }, deploymentFingerprint: deploymentFingerprint(deployment),
       initial: {
         admittedAt: new Date().toISOString(), deployment,
-        runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision serverPid serverPpid serverStartedAt", "not exposed at admission; append a linked runtime observation when resolved"), node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion, path: realpathSync(execFileSync("/bin/sh", ["-c", "command -v dagu"], { encoding: "utf8" }).trim()) }, daguHome, endpoint: process.env.DAGU_URL || "http://127.0.0.1:8080", admissionPid: process.pid, admissionPpid: process.ppid, config, transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("OMP model not exposed to CLI") },
+        runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision serverPid serverPpid serverStartedAt", "not exposed at admission; append a linked runtime observation when resolved"), node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion, path: realpathSync(execFileSync("/bin/sh", ["-c", "command -v dagu"], { encoding: "utf8" }).trim()) }, daguHome, endpoint: process.env.DAGU_URL || "http://127.0.0.1:8080", admissionPid: process.pid, admissionPpid: process.ppid, config: runtimeConfig, transcriptRoot: options.session?.transcriptRoot ?? pending("operator CLI has no OMP session context"), model: options.session?.model ?? pending("OMP model not exposed to CLI") },
         execution: { ...fields("base owner refs step approvalIteration sourceSession destinationSession triageGeneration triageMarker", "not yet resolved at admission"), repo, primary, head: git(primary, "rev-parse", "HEAD"), branch: git(primary, "branch", "--show-current"), worktree: repo, dirty, diffDigest: sha256(diff), parameters: options.params, ompSession: options.params.find(param => param.startsWith("OMP_SESSION_ID="))?.slice(15) ?? pending("OMP_SESSION_ID not supplied"), dagSnapshot: executionSnapshot ?? installedDAG.snapshot },
         eventsAndExternalState: fields("eventIds cursor source transition destination delivery trigger queue reconcile merge checks configuration locks lockOwner restarts activeRuns exit signal latency errors incidents", "not observed before enqueue; linked observations append without replacing initial state"),
       },
@@ -269,6 +271,7 @@ export function admit(options: AdmissionOptions, persist = true): { path: string
 }
 
 export function appendObservation(path: string, observation: Omit<Observation, "at">): void {
+  assertReceiptVersion(JSON.parse(readFileSync(path, "utf8")), path);
   const lock = `${path}.lock`;
   mkdirSync(lock);
   try {

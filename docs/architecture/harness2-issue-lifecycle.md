@@ -32,7 +32,7 @@ disabled.
 | --- | --- |
 | Contrastive harness edit for the current task, without a verifier | `feature.yaml` `gate` runs the adopted `GATE` command. A code failure pushes back to `implement`. `await_ci` classifies `CODE_FAIL` and pushes back to `implement` with `ci-return.json`; the corrected head needs fresh gate evidence (`skills/issue-execution/SKILL.md`). |
 | Persistent library of adopted harnesses and lessons | `sprint-retrospective` records incidents; the operator chooses which ones enter `refine`. `planning.yaml` runs `import_units`, `review`, `approve`, then `materialize`. |
-| Eight runtime component files, including skills and guardrails | Skills and DAG templates are versioned under `packages/issue-lifecycle/skills/`. Admission materializes a run from the installed template and `.workspace/dagu/answers.json`, and writes an immutable receipt. |
+| Eight runtime component files, including skills and guardrails | Skills and DAG templates are versioned under `packages/issue-lifecycle/skills/`. Admission materializes a run from the installed template and `.workspace/dagu/config.json`, and writes an immutable receipt. |
 | Parallel or sequential candidate harnesses (`--k`, `--mode`) | One candidate SHA per iteration. `dagu-role-jobs stage triage` and `stage implement` bind a receipt to that SHA. Queue capacity runs unrelated lifecycle steps beside one another. |
 | A `quality_admit` checkpoint comparable to Compose | Changelog 0.3.115 documents `quality_admit`. Changelog 0.3.118 removes the mandatory QA/reviewer checkpoint. Current `feature.yaml`, `poc.yaml`, `planning.yaml`, and `reconcile.yaml` contain no `quality_admit` step. The replacement is the local gate plus optional operator `validation`. |
 

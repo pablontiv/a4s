@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.29
+
+- Rename the committed lifecycle policy to `.workspace/dagu/config.json` without an old-path alias. New admission receipts use schema 2 and `configDigest`; readers retain schema 1 support for already-admitted runs and reject unsupported versions before effects (#706).
+
 ## 0.5.28
 
 - Remove the exact Dagu runtime pin from bootstrap, admission, bundle inspection, prioritization and station installation. Record the observed runtime version in admission receipts; document Dagu 2.23.0 or newer and keep the minimum check only in live-test fixtures (#705).

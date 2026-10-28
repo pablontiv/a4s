@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { receiptPath } from "../src/admission.ts";
+import { assertReceiptVersion } from "../src/receipt-version.ts";
 import { HOST_PRIMARY_REFERENCE, resolveHostPrimary, workspaceLabel } from "../src/primary.ts";
 import { isRecord } from "../src/type-guard.ts";
 
@@ -84,7 +85,9 @@ function originalParams(entry: Run, source: string): string[] {
       // Continue the admitted snapshot, including its original argv and sourced
       // defaults. Current deployment identity is deliberately not recalculated.
       const receipt: unknown = JSON.parse(readFileSync(path, "utf8"));
-      if (!isRecord(receipt) || receipt.schemaVersion !== 1 || !isRecord(receipt.runReceipt) || receipt.runReceipt.dag !== entry.name || receipt.runReceipt.run !== entry.dagRunId || !isRecord(receipt.initial) || !isRecord(receipt.initial.execution)) throw new Error(`Invalid original admission receipt: ${path}; nothing dequeued`);
+      // Read version 1 to requeue already-admitted runs without converting their snapshots.
+      assertReceiptVersion(receipt, path);
+      if (!isRecord(receipt.runReceipt) || receipt.runReceipt.dag !== entry.name || receipt.runReceipt.run !== entry.dagRunId || !isRecord(receipt.initial) || !isRecord(receipt.initial.execution)) throw new Error(`Invalid original admission receipt: ${path}; nothing dequeued`);
       const execution = receipt.initial.execution;
       if (execution.primary !== realpathSync(primary) || execution.dagSnapshot !== source) throw new Error(`Original admission snapshot/PRIMARY mismatch: ${path}; nothing dequeued`);
       if (!Array.isArray(execution.parameters) || !execution.parameters.every(value => typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(value))) throw new Error(`Invalid original admission parameters: ${path}; nothing dequeued`);
@@ -146,20 +149,23 @@ async function main(): Promise<void> {
   const index = before.findIndex(entry => key(entry) === key(target));
   if (index < 0) throw new Error(`NOT_QUEUED ${dag} ${id} status=not-in-repository-queue`);
   if (index === 0) { console.log(`PRIORITIZED ${dag} ${id} queue=${queue} moved=0`); return; }
-  const parent = join(home, "data", "prioritize");
-  mkdirSync(parent, { recursive: true, mode: 0o700 });
-  const recovery = mkdtempSync(join(parent, "operation-"));
-  const captured: Captured[] = [];
-  for (const [position, entry] of before.entries()) {
+  // Validate every receipt before creating recovery state or mutating the queue.
+  const prepared: { run: Run; spec: string; params: string[] }[] = [];
+  for (const entry of before) {
     const current = await details(entry);
     if (current.statusLabel !== "queued" || key(current) !== key(entry)) throw new Error("QUEUE_CHANGED while capturing; nothing dequeued");
     const retained = key(entry) === key(target) ? source : await spec(entry);
-    const snapshot = join(recovery, `${position}.yaml`);
-    writeFileSync(snapshot, retained, { mode: 0o600, flag: "wx", flush: true });
-    const params = originalParams(current, retained);
-    const args = ["enqueue", "--dagu-home", home, "--queue", queue, "--name", entry.name, "--run-id", entry.dagRunId, snapshot, ...params];
-    captured.push({ run: current, spec: retained, snapshot, args });
+    prepared.push({ run: current, spec: retained, params: originalParams(current, retained) });
   }
+  const parent = join(home, "data", "prioritize");
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const recovery = mkdtempSync(join(parent, "operation-"));
+  const captured: Captured[] = prepared.map(({ run, spec, params }, position) => {
+    const snapshot = join(recovery, `${position}.yaml`);
+    writeFileSync(snapshot, spec, { mode: 0o600, flag: "wx", flush: true });
+    const args = ["enqueue", "--dagu-home", home, "--queue", queue, "--name", run.name, "--run-id", run.dagRunId, snapshot, ...params];
+    return { run, spec, snapshot, args };
+  });
   writeFileSync(join(recovery, "recovery.json"), `${JSON.stringify({ queue, endpoint: base, home, target, order: before, entries: captured }, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
   console.error(`RECOVERY ${join(recovery, "recovery.json")}`);
   // Capture every queued snapshot before the first dequeue. Both sides of the

@@ -5,12 +5,12 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { admit, appendObservation, enqueue, enqueueArguments, parseObservation, receiptPath } from "../src/admission.ts";
-import { ANSWERS_PATH, answersFromEnvironment, readAnswersFile, readCommittedAnswers, serializeAnswers } from "../src/answers.ts";
+import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../src/config.ts";
 import { validatePlanningUnitsCommand } from "../src/planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../src/transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../src/bundle.ts";
 import { dagName, materializeInstalled } from "../src/materialize.ts";
-import { currentQueueConcurrency, queueCompatibility, queueFromAnswersFile, reconcileQueue } from "../src/queue.ts";
+import { currentQueueConcurrency, queueCompatibility, queueFromConfigFile, reconcileQueue } from "../src/queue.ts";
 
 function readIfPresent(path: string): string | undefined {
   try {
@@ -52,17 +52,17 @@ function repositoryName(path: string): string {
   }
 }
 
-function inspectAnswers(repo: string): boolean {
-  const path = join(repo, ANSWERS_PATH);
+function inspectConfig(repo: string): boolean {
+  const path = join(repo, CONFIG_PATH);
   try {
-    const loaded = readCommittedAnswers(repo);
-    const queue = queueFromAnswersFile(path);
+    const loaded = readCommittedConfig(repo);
+    const queue = queueFromConfigFile(path);
     const report = queueCompatibility(process.env.DAGU_HOME || join(homedir(), ".dagu"), queue);
-    console.log(`answers path=${ANSWERS_PATH} schema=${loaded.answers.schemaVersion} digest=${loaded.digest} lane=${loaded.answers.lane} base=${loaded.answers.baseBranch} ${report}`);
-    console.log(`answers policy gate=${JSON.stringify(loaded.answers.gate)} requiredCheck=${JSON.stringify(loaded.answers.requiredCheck)} testPaths=${JSON.stringify(loaded.answers.testPaths)}`);
+    console.log(`config path=${CONFIG_PATH} schema=${loaded.config.schemaVersion} digest=${loaded.digest} lane=${loaded.config.lane} base=${loaded.config.baseBranch} ${report}`);
+    console.log(`config policy gate=${JSON.stringify(loaded.config.gate)} requiredCheck=${JSON.stringify(loaded.config.requiredCheck)} testPaths=${JSON.stringify(loaded.config.testPaths)}`);
     return report.endsWith("compat=ok");
   } catch (error) {
-    console.log(`answers path=${path} compat=invalid cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
+    console.log(`config path=${path} compat=invalid cause=${JSON.stringify(error instanceof Error ? error.message : String(error))}`);
     return false;
   }
 }
@@ -104,24 +104,24 @@ function main(): void {
     console.log(lifecycleProtocolToken());
     return;
   }
-  if (command === "write-answers" || command === "answers-check" || command === "install-reconciler") {
+  if (command === "write-config" || command === "config-check" || command === "install-reconciler") {
     try {
-      if (command === "write-answers") {
+      if (command === "write-config") {
         const dest = args[0];
-        if (!dest) throw new Error("write-answers requires the consumer answers path");
-        const answers = answersFromEnvironment(process.env);
+        if (!dest) throw new Error("write-config requires the consumer config path");
+        const config = configFromEnvironment(process.env);
         mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, serializeAnswers(answers));
-        console.log(`answers=${dest} schema=${answers.schemaVersion}`);
-      } else if (command === "answers-check") {
+        writeFileSync(dest, serializeConfig(config));
+        console.log(`config=${dest} schema=${config.schemaVersion}`);
+      } else if (command === "config-check") {
         const file = args[0];
-        if (!file) throw new Error("answers-check requires the consumer answers path");
-        const answers = readAnswersFile(file);
-        console.log(`answers=${file} schema=${answers.schemaVersion} lane=${answers.lane} queue=${answers.queueConcurrency}`);
+        if (!file) throw new Error("config-check requires the consumer config path");
+        const config = readConfigFile(file);
+        console.log(`config=${file} schema=${config.schemaVersion} lane=${config.lane} queue=${config.queueConcurrency}`);
       } else {
         const [file, dest] = args;
-        if (!file || !dest) throw new Error("install-reconciler requires <answers> <reconcile.yaml>");
-        const text = materializeInstalled(dagName("reconcile.yaml"), readAnswersFile(file));
+        if (!file || !dest) throw new Error("install-reconciler requires <config> <reconcile.yaml>");
+        const text = materializeInstalled(dagName("reconcile.yaml"), readConfigFile(file));
         mkdirSync(dirname(dest), { recursive: true });
         replaceIfChanged(dest, text);
         console.log(`reconcile=${dest}`);
@@ -136,8 +136,8 @@ function main(): void {
     try {
       if (command === "queue-default") console.log(currentQueueConcurrency(args));
       else {
-        if (args.length !== 1) throw new Error(`${command} requires one answers file`);
-        const queue = queueFromAnswersFile(args[0]!);
+        if (args.length !== 1) throw new Error(`${command} requires one config file`);
+        const queue = queueFromConfigFile(args[0]!);
         const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
         if (command === "queue-reconcile") console.log(reconcileQueue(home, queue));
         else {
@@ -186,7 +186,7 @@ for (const argument of argumentsOrCwd) {
     continue;
   }
   console.log(`repo=${repositoryName(path)} path=${path} bundle=${BUNDLE_VERSION}`);
-  ok = inspectAnswers(path) && ok;
+  ok = inspectConfig(path) && ok;
 }
 
 const daguHome = process.env.DAGU_HOME || join(homedir(), ".dagu");
