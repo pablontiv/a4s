@@ -8,6 +8,10 @@ See [private installation](../operations/private-install.md),
 [deployment and recovery](../operations/deployment.md) and the
 [dated walkthrough](../operations/v1-walkthrough.md).
 
+The [versioned artifact contract](artifact-contract.md) specifies the #698 target
+release, cache, engine-handoff and successor boundaries. It does not assert that
+the station cutover has been activated.
+
 ## Components and ownership
 
 | Delivered owner | Public surface and responsibility | Existing checks |
