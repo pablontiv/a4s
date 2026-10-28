@@ -11,49 +11,50 @@ and `dagu-feature-bundle`, `dagu-feature-prioritize`, `dagu-feature-protect`,
 ## Delivery and provenance
 
 Distributed templates live together with `SKILL.md` under
-`packages/issue-lifecycle/skills/issue-execution/`. Adopted consumer renders live
-under `.workspace/dagu/dags/`; the scheduled reconciler is installed separately
-at `$DAGU_HOME/dags/reconcile.yaml`. A package PR publishes source; bootstrap and
-an adoption commit deliver consumer renders. Feature and PoC `PRIMARY` in those
-renders is the host reference `"${A4S_PRIMARY}"`, resolved from the scheduler
-environment or station files under `$DAGU_HOME`, not from a path baked in at
-adoption. Existing runs retain their admitted snapshots and receipt identities.
+`packages/issue-lifecycle/skills/issue-execution/`. The consumer versions one
+answers file at `.workspace/dagu/answers.json`. Its schema version is independent
+of the package version. Admission reads that committed file and materializes the
+requested DAG from the station's installed templates. The scheduled reconciler is
+installed separately at `$DAGU_HOME/dags/reconcile.yaml`. A package release that
+does not change answers requires no consumer commit. Feature and PoC `PRIMARY`
+in the materialized DAG is the host reference `"${A4S_PRIMARY}"`. Admission
+resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`, then
+`$DAGU_HOME/a4s-primary`, and the per-run snapshot records that absolute checkout.
+Existing runs retain their admitted snapshots and receipt identities.
 
 Bootstrap requires a clean source package, fetches its origin, resolves
 `origin/HEAD`, verifies source HEAD ancestry and exact Dagu output, and checks
-that PRIMARY is an independent clone rather than a linked worktree. It renders
-into PRIMARY's Git metadata staging directory. Its `reconcile` step installs the
-rendered user-level reconciler; `github` can change repository merge settings and
-branch protection. These are authorized deployment actions, not read-only smoke
-commands. `confirm` emits `Dagu-Feature-Bundle`, `Dagu-Feature-Source` and
-`Dagu-Feature-Bootstrap` adoption trailers.
+that PRIMARY is an independent clone rather than a linked worktree. It writes
+`.workspace/dagu/answers.json` in PRIMARY. Its `reconcile` step installs the
+user-level reconciler from the installed template; `github` can change repository
+merge settings and branch protection. These are authorized deployment actions,
+not read-only smoke commands.
 
 ### Compatibility is more than a version display
 
-[`src/bundle.ts`](../../packages/issue-lifecycle/src/bundle.ts) parses only the
-manifest's exact package name in a first-line stamp. Status notices still
-classify version distance (equal major and minor, patch allowed). That display
-is not admission. Admission compares the stamp's `triage`, `implement` and
-`publication` protocol ids with the contracts the loaded extension serves.
-The inspection CLI reports those stamps and exact runtime output; it does not
-prove render provenance or successful enqueue.
+Status notices still classify the generated snapshot's `dagu-feature-bundle`
+label by version distance (equal major and minor, patch allowed). That display
+is not admission. Admission materializes the installed template and compares the
+inferred `triage`, `implement` and `publication` protocol ids with the contracts
+the loaded extension serves. The inspection CLI reports the committed answers
+file, queue compatibility and exact runtime output; it does not prove enqueue.
 
-[`src/admission.ts`](../../packages/issue-lifecycle/src/admission.ts) additionally
-checks a single matching label, source owner/repository, the declared version at
-the stamped source commit, and that the render matches that source template or
-the installed checkout's template. It checks both the requested DAG and installed
-reconciler. A served protocol admits a render a minor or patch behind the loaded
-package. A protocol the extension does not serve fails before run creation and
-names that protocol plus the bundle version that serves it. Installed package
-version equals the loaded version exactly; a supplied loaded-extension digest
-must match current source bytes; Dagu output equals the manifest pin exactly.
-Protocol-compatible stamps alone are not admission proof.
+[`src/admission.ts`](../../packages/issue-lifecycle/src/admission.ts) reads the
+answers file from the consumer's committed revision, rejects unknown fields and
+run-time policy overrides, resolves PRIMARY, and writes the immutable per-run
+snapshot and receipt. The receipt records the answers digest, package
+version/commit, template identity, Dagu runtime and generated DAG digest. A
+corrupt installed template fails before run creation and names the protocol plus
+the bundle version that serves it. Installed package version equals the loaded
+version exactly; a supplied loaded-extension digest must match current source
+bytes; Dagu output equals the manifest pin exactly. A missing station reconciler
+does not block admission of a feature, PoC, discovery or planning run.
 The feature/PoC first steps independently fetch/fast-forward clean PRIMARY and
 require its HEAD and manifest version to equal the selected remote base exactly.
 
-A manifest name change requires fresh bootstrap/adoption, matching reconciler and
-CLI binding, and a new OMP process. The resulting stamps record the real new
-identity; publication does not transform existing deployed identity. See
+A manifest name change requires a fresh install of the package, matching
+reconciler and CLI binding, and a new OMP process. Publication does not
+transform existing deployed identity. See
 [deployment](../operations/deployment.md#identity-and-adoption).
 
 An immutable `receipt.json` (0600) in `<git-dir>/dagu-feature/runs/<run>/` captures

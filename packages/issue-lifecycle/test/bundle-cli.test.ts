@@ -9,25 +9,36 @@ import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 
-import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
+import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
+import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
-const stamp = `# dagu-feature-bundle: @a4s/issue-lifecycle@${BUNDLE_VERSION} source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-probe dagu=${REQUIRED_DAGU_VERSION}\nqueue: fixture\nlabels:\n  - dagu-feature-bundle=${BUNDLE_VERSION}\n  - dagu-feature-queue-concurrency=6\n`;
 
-test("CLI reports stamped repositories and the reconciler as compatible", () => {
+function commitAnswers(repo: string, text?: string): void {
+  mkdirSync(join(repo, ".workspace", "dagu"), { recursive: true });
+  if (text !== undefined) writeFileSync(join(repo, ".workspace", "dagu", "answers.json"), text);
+  spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
+  spawnSync("git", ["-C", repo, "config", "user.email", "cli@example.test"]);
+  spawnSync("git", ["-C", repo, "config", "user.name", "CLI Test"]);
+  if (text === undefined) spawnSync("git", ["-C", repo, "commit", "-qm", "empty", "--allow-empty"]);
+  else {
+    spawnSync("git", ["-C", repo, "add", "."]);
+    const committed = spawnSync("git", ["-C", repo, "commit", "-qm", "answers"], { encoding: "utf8" });
+    assert.equal(committed.status, 0, committed.stderr);
+  }
+}
+
+test("CLI reports committed answers and the reconciler as compatible", () => {
   const root = mkdtempSync(join(tmpdir(), "dagu-bundle-cli-"));
   try {
     const repo = join(root, "repo");
     const daguHome = join(root, "dagu-home");
     const bin = join(root, "bin");
-    mkdirSync(join(repo, ".workspace", "dagu", "dags"), { recursive: true });
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
-    spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n  - GATE: "npm test"\n  - REQUIRED_CHECK: "validate"\n`);
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), `${stamp}env:\n  - PRIMARY: "/canonical/repo"\n`);
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), stamp);
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), stamp);
-    writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
+    commitAnswers(repo, serializeAnswers(exampleAnswers({
+      lane: "fixture", queueConcurrency: 6, gate: "npm test", requiredCheck: "validate",
+    })));
+    writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     writeFileSync(join(daguHome, "config.yaml"), "queues:\n  enabled: true\n  config:\n    - name: fixture\n      max_concurrency: 6\n");
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`);
@@ -36,33 +47,26 @@ test("CLI reports stamped repositories and the reconciler as compatible", () => 
       encoding: "utf8",
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
-    assert.equal(result.status, 0, result.stderr);
-    for (const name of ["feature", "poc", "discovery", "planning", "reconcile"]) {
-      assert.ok(result.stdout.includes(`${name}.yaml `), result.stdout);
-    }
-    assert.equal((result.stdout.match(/compat=ok/g) ?? []).length, 9);
-    assert.match(result.stdout, /feature.yaml policy PRIMARY="\/canonical\/repo" GATE="npm test" REQUIRED_CHECK="validate" BRANCH=dagu\/issue-\$\{ISSUE\}/);
-    assert.match(result.stdout, /poc.yaml policy PRIMARY="\/canonical\/repo"/);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /answers path=\.workspace\/dagu\/answers\.json schema=1 .*lane=fixture .*queue=fixture max_concurrency=6 compat=ok/);
+    assert.match(result.stdout, /answers policy gate="npm test" requiredCheck="validate"/);
+    assert.match(result.stdout, /reconcile\.yaml path=.* installed=yes/);
+    assert.match(result.stdout, /dagu version=.* compat=ok/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("CLI exits nonzero for unstamped repository DAGs", () => {
+test("CLI exits nonzero when committed answers are missing", () => {
   const root = mkdtempSync(join(tmpdir(), "dagu-bundle-cli-"));
   try {
     const repo = join(root, "repo");
     const daguHome = join(root, "dagu-home");
     const bin = join(root, "bin");
-    mkdirSync(join(repo, ".workspace", "dagu", "dags"), { recursive: true });
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
-    spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "feature.yaml"), "labels:\n");
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "poc.yaml"), "labels:\n");
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "discovery.yaml"), "labels:\n");
-    writeFileSync(join(repo, ".workspace", "dagu", "dags", "planning.yaml"), "labels:\n");
-    writeFileSync(join(daguHome, "dags", "reconcile.yaml"), stamp);
+    commitAnswers(repo);
+    writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, `#!/bin/sh\nprintf '${REQUIRED_DAGU_VERSION}\\n'\n`);
     chmodSync(dagu, 0o755);
@@ -71,10 +75,8 @@ test("CLI exits nonzero for unstamped repository DAGs", () => {
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 1);
-    assert.match(result.stdout, /feature\.yaml .*stamp=unstamped compat=unstamped/);
-    assert.match(result.stdout, /poc\.yaml .*stamp=unstamped compat=unstamped/);
-    assert.match(result.stdout, /discovery\.yaml .*stamp=unstamped compat=unstamped/);
-    assert.match(result.stdout, /planning\.yaml .*stamp=unstamped compat=unstamped/);
+    assert.match(result.stdout, /compat=invalid/);
+    assert.match(result.stdout, /missing committed answers file/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -105,7 +107,8 @@ test("admission rejects an unserved lifecycle protocol before Dagu creates a run
   const fixture = admissionFixture();
   try {
     const run = testRunId("incompatible");
-    writeFileSync(fixture.dag, readFileSync(fixture.dag, "utf8").replace("triage=role-job/1", "triage=marker-agent/1"));
+    const template = join(fixture.packageDir, "skills", "issue-execution", "feature.yaml");
+    writeFileSync(template, `${readFileSync(template, "utf8")}\n# TRIAGE_REVIEW AGENT=retired\n`);
     const result = fixture.command("enqueue", run);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /DAGU_ADMISSION_REJECTED.*feature.yaml missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
@@ -115,18 +118,23 @@ test("admission rejects an unserved lifecycle protocol before Dagu creates a run
   } finally { fixture.dispose(); }
 });
 
-test("admission admits renders sealed at an earlier patch or minor when protocols match", liveDagu, () => {
+test("admission admits a package release when the answers file is unchanged", liveDagu, () => {
   for (const version of ["0.3.2", "0.4.0"]) {
     const fixture = admissionFixture();
     try {
+      const before = fixture.command("admit", "answers-before");
+      assert.equal(before.status, 0, before.stderr);
+      const digest = JSON.parse(readFileSync(fixture.receipt("answers-before"), "utf8")).initial.deployment.answers.digest;
       const manifestPath = join(fixture.packageDir, "package.json");
       writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), version }));
       spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", `package ${version}`], { encoding: "utf8" });
       const run = `protocol-${version.replaceAll(".", "-")}`;
       const result = fixture.command("admit", run);
       assert.equal(result.status, 0, result.stderr);
-      assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.installedDAG.stamp.version, "0.3.1");
-      assert.equal(JSON.parse(readFileSync(fixture.receipt(run), "utf8")).initial.deployment.relationships.compatibility, "served-lifecycle-protocol");
+      const receipt = JSON.parse(readFileSync(fixture.receipt(run), "utf8"));
+      assert.equal(receipt.initial.deployment.installedDAG.version, version);
+      assert.equal(receipt.initial.deployment.answers.digest, digest);
+      assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
     } finally { fixture.dispose(); }
   }
 });
@@ -174,24 +182,19 @@ test("compatible admission enqueues exact bytes and keeps historical receipt acr
   } finally { fixture.dispose(); }
 });
 
-test("admission rejects unreadable, ambiguous, forged render and stale loaded identities", liveDagu, () => {
+test("admission ignores a missing reconciler and a forged consumer file, and rejects a stale loaded identity", liveDagu, () => {
   const fixture = admissionFixture();
   try {
     rmSync(join(fixture.home, "dags", "reconcile.yaml"));
-    const unreadable = fixture.command("enqueue", testRunId("unreadable"));
-    assert.notEqual(unreadable.status, 0);
-    assert.match(unreadable.stderr, /DAGU_ADMISSION_REJECTED.*reconcile.yaml/);
-    fixture.render("reconcile.yaml", join(fixture.home, "dags", "reconcile.yaml"));
-    const original = readFileSync(fixture.dag, "utf8");
-    writeFileSync(fixture.dag, `${original}\n  - dagu-feature-bundle=0.3.1\n`);
-    const ambiguous = fixture.command("enqueue", testRunId("ambiguous"));
-    assert.notEqual(ambiguous.status, 0);
-    assert.match(ambiguous.stderr, /ambiguous/);
-    writeFileSync(fixture.dag, `${original}\n# injected code\n`);
+    const absentRun = testRunId("reconciler-absent");
+    const absent = fixture.command("enqueue", absentRun);
+    assert.equal(absent.status, 0, absent.stderr);
+    assert.equal(JSON.parse(readFileSync(fixture.receipt(absentRun), "utf8")).initial.deployment.installedReconciler.state, "absent");
+    const consumer = fixture.dag;
+    mkdirSync(join(consumer, ".."), { recursive: true });
+    writeFileSync(consumer, "# injected code\n");
     const forged = fixture.command("enqueue", testRunId("forged"));
-    assert.notEqual(forged.status, 0);
-    assert.match(forged.stderr, /expected a render/);
-    writeFileSync(fixture.dag, original);
+    assert.equal(forged.status, 0, forged.stderr);
     const stale = fixture.command("enqueue", testRunId("stale"), { DAGU_ADMISSION_SESSION: JSON.stringify({ extensionDigest: "old-loaded-digest", transcriptRoot: "/session" }) });
     assert.notEqual(stale.status, 0);
     assert.match(stale.stderr, /loaded extension digest=old-loaded-digest.*restart OMP/);

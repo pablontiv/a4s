@@ -79,34 +79,8 @@ steps:
       if test -n "$last_pr"; then
         checks=$(gh pr checks "$last_pr" --json name --jq '[.[].name] | unique | join(",")' 2>/dev/null || true)
       fi
-      read_default() {
-        local file=$1 wanted=$2 raw
-        raw=$(awk -v wanted="$wanted" '
-          index($0, "  - " wanted ": ") == 1 { sub("^  - " wanted ": ", ""); print; exit }
-          $0 == "    " wanted ":" { found=1; next }
-          found && /^      default: / { sub(/^      default: /, ""); print; exit }
-          $0 == "  - name: " wanted { found=1; next }
-          found && /^    default: / { sub(/^    default: /, ""); print; exit }
-          found && /^  - name: / { exit }
-        ' "$file")
-        test -n "$raw" || return 0
-        jq -nr --arg raw "$raw" 'try ($raw | fromjson) catch $raw'
-      }
-      read_stamp() {
-        local file=$1 line
-        test -f "$file" || { printf 'unstamped\n'; return; }
-        IFS= read -r line <"$file" || true
-        case "$line" in
-          '# dagu-feature-bundle: '*) printf '%s\n' "${line#\# dagu-feature-bundle: }" ;;
-          *) printf 'unstamped\n' ;;
-        esac
-      }
-      installed_feature="$PRIMARY/.workspace/dagu/dags/feature.yaml"
-      installed_poc="$PRIMARY/.workspace/dagu/dags/poc.yaml"
-      installed_discovery="$PRIMARY/.workspace/dagu/dags/discovery.yaml"
-      installed_planning="$PRIMARY/.workspace/dagu/dags/planning.yaml"
-      current_queue_concurrency=$(node "$package_dir/bin/dagu-feature-bundle.ts" queue-default \
-        "$installed_feature" "$installed_poc" "$installed_discovery")
+      answers_file="$(pwd -P)/.workspace/dagu/answers.json"
+      current_queue_concurrency=1
       current_gate=not-configured
       current_check=not-configured
       current_tests=not-configured
@@ -116,31 +90,26 @@ steps:
       current_codeql_security=high_or_higher
       current_codeql_alerts=errors
       current_code_scanning=required
-      if test -f "$installed_feature"; then
-        current_gate=$(read_default "$installed_feature" GATE)
-        current_check=$(read_default "$installed_feature" REQUIRED_CHECK)
-        current_resolver=$(read_default "$installed_feature" REBASE_RESOLVER)
-        current_validation=$(read_default "$installed_feature" VALIDATION)
-        current_blocker_reporting=$(read_default "$installed_feature" A4S_BLOCKER_REPORTING)
-        current_blocker_reporting=${current_blocker_reporting:-ask}
-        current_codeql_security=$(read_default "$installed_feature" CODEQL_SECURITY_THRESHOLD)
-        current_codeql_alerts=$(read_default "$installed_feature" CODEQL_ALERTS_THRESHOLD)
-        current_code_scanning=$(read_default "$installed_feature" CODE_SCANNING)
-        current_code_scanning=${current_code_scanning:-required}
+      if test -f "$answers_file"; then
+        current_gate=$(jq -er '.gate' "$answers_file")
+        current_check=$(jq -er '.requiredCheck' "$answers_file")
+        current_resolver=$(jq -er '.rebaseResolver' "$answers_file")
+        current_validation=$(jq -er '.validation' "$answers_file")
+        current_blocker_reporting=$(jq -er '.blockerReporting' "$answers_file")
+        current_codeql_security=$(jq -er '.codeqlSecurityThreshold' "$answers_file")
+        current_codeql_alerts=$(jq -er '.codeqlAlertsThreshold' "$answers_file")
+        current_code_scanning=$(jq -er '.codeScanning' "$answers_file")
+        current_tests=$(jq -er '.testPaths' "$answers_file")
+        current_queue_concurrency=$(jq -er '.queueConcurrency' "$answers_file")
       fi
-      if test -f "$installed_poc"; then
-        current_tests=$(read_default "$installed_poc" TEST_PATHS)
-        if test -z "$current_tests"; then
-          test_line=$(awk '/\[\[ "\$path" == \*\.md \|\| "\$path" =~ / { print; exit }' "$installed_poc")
-          current_tests=${test_line#* =~ }
-          current_tests=${current_tests% ]]; then}
-        fi
-      fi
-      for entry in PUSHBACKS:3 FINDINGS:2 SECONDS:3600 CI_BLOCKED:2 POC_INCONCLUSIVE:2; do
-        key="ESCALATION_${entry%:*}"
+      for entry in pushbacks:PUSHBACKS:3 findings:FINDINGS:2 seconds:SECONDS:3600 ciBlocked:CI_BLOCKED:2 pocInconclusive:POC_INCONCLUSIVE:2; do
+        field=${entry%%:*}
+        rest=${entry#*:}
+        key="ESCALATION_${rest%%:*}"
+        fallback=${rest#*:}
         value=""
-        if test -f "$installed_feature"; then value=$(read_default "$installed_feature" "$key"); fi
-        printf 'CURRENT_%s=%s\n' "$key" "${value:-${entry#*:}}" >> "$DAGU_OUTPUT_FILE"
+        if test -f "$answers_file"; then value=$(jq -er --arg field "$field" '.escalation[$field]' "$answers_file"); fi
+        printf 'CURRENT_%s=%s\n' "$key" "${value:-$fallback}" >> "$DAGU_OUTPUT_FILE"
       done
       {
         printf 'REPO=%s\n' "$repo"
@@ -148,7 +117,7 @@ steps:
         printf 'BASE_BRANCH=%s\n' "$base"
         printf 'REQUIRED_NOW=%s\n' "${required:-none}"
         printf 'RECENT_CHECKS=%s\n' "${checks:-none}"
-        printf 'STAGE=%s\n' "$(git rev-parse --path-format=absolute --git-path dagu-feature/feature.yaml)"
+        printf 'STAGE=%s\n' "$answers_file"
         printf 'BUNDLE_NAME=%s\n' "$bundle_name"
         printf 'BUNDLE_VERSION=%s\n' "$bundle_version"
         printf 'REQUIRED_DAGU=%s\n' "$required_dagu"
@@ -165,10 +134,6 @@ steps:
         printf 'CURRENT_CODEQL_ALERTS_THRESHOLD=%s\n' "${current_codeql_alerts:-errors}"
         printf 'CURRENT_CODE_SCANNING=%s\n' "$current_code_scanning"
         printf 'CURRENT_QUEUE_CONCURRENCY=%s\n' "$current_queue_concurrency"
-        printf 'CURRENT_FEATURE_STAMP=%s\n' "$(read_stamp "$installed_feature")"
-        printf 'CURRENT_POC_STAMP=%s\n' "$(read_stamp "$installed_poc")"
-        printf 'CURRENT_DISCOVERY_STAMP=%s\n' "$(read_stamp "$installed_discovery")"
-        printf 'CURRENT_PLANNING_STAMP=%s\n' "$(read_stamp "$installed_planning")"
       } >> "$DAGU_OUTPUT_FILE"
     outputs:
       - name: REPO
@@ -193,10 +158,6 @@ steps:
       - name: CURRENT_CODEQL_ALERTS_THRESHOLD
       - name: CURRENT_CODE_SCANNING
       - name: CURRENT_QUEUE_CONCURRENCY
-      - name: CURRENT_FEATURE_STAMP
-      - name: CURRENT_POC_STAMP
-      - name: CURRENT_DISCOVERY_STAMP
-      - name: CURRENT_PLANNING_STAMP
       - name: CURRENT_ESCALATION_PUSHBACKS
       - name: CURRENT_ESCALATION_FINDINGS
       - name: CURRENT_ESCALATION_SECONDS
@@ -210,10 +171,9 @@ steps:
       prompt: >-
         Configure the dagu-feature lifecycle for ${steps.detect.outputs.NWO}
         (default branch ${steps.detect.outputs.BASE_BRANCH}).
-        Current feature stamp: ${steps.detect.outputs.CURRENT_FEATURE_STAMP}.
-        Current poc stamp: ${steps.detect.outputs.CURRENT_POC_STAMP}.
-        Current discovery stamp: ${steps.detect.outputs.CURRENT_DISCOVERY_STAMP}.
-        Current planning stamp: ${steps.detect.outputs.CURRENT_PLANNING_STAMP}.
+        Bootstrap writes one answers file at .workspace/dagu/answers.json.
+        Its schema version is independent of the package version. Package releases
+        do not require a new consumer commit when these answers stay the same.
         GATE: local gate command run in the issue worktree with bash -euo pipefail -c
         (current: ${steps.detect.outputs.CURRENT_GATE}).
         REQUIRED_CHECK: GitHub check the default branch will require (strict)
@@ -239,7 +199,7 @@ steps:
         CODEQL_ALERTS_THRESHOLD: non-security findings used when code scanning is required
         (current: ${steps.detect.outputs.CURRENT_CODEQL_ALERTS_THRESHOLD}; initial: errors).
         Blank preserves installed thresholds. required needs CodeQL analysis and permission to read code-scanning alerts.
-        QUEUE_CONCURRENCY: positive integer; blank keeps the current stamped value
+        QUEUE_CONCURRENCY: positive integer; blank keeps the committed answers value
         (${steps.detect.outputs.CURRENT_QUEUE_CONCURRENCY}; initial: 1). For a4s, select 8
         to preserve the operator-approved installed capacity on first adoption.
         Bootstrap derives the repository's global queue and restarts its matching
@@ -346,7 +306,7 @@ steps:
       umask 0022
       test -n "${DAG_RUN_ID:-}"
       PRIMARY=$(cd "$PRIMARY" && pwd -P)
-      # Empty integer-text answers preserve the stamped repository policy.
+      # Empty integer-text answers preserve the committed repository policy.
       export QUEUE_CONCURRENCY=${QUEUE_CONCURRENCY:-${CURRENT_QUEUE_CONCURRENCY:-1}}
       node -e 'const v=process.env.QUEUE_CONCURRENCY; if (!/^[1-9][0-9]*$/.test(v) || !Number.isSafeInteger(Number(v))) process.exit(1)'
       A4S_BLOCKER_REPORTING=${A4S_BLOCKER_REPORTING:-${CURRENT_A4S_BLOCKER_REPORTING:-ask}}
@@ -365,73 +325,11 @@ steps:
         export "$key=$value"
       done
       mkdir -p "$(dirname "$STAGE")"
-      source="$SOURCE_NWO@$SOURCE_SHA"
-      identity="dagu-feature-bundle=$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID"
-      protocols=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" protocols)
-      test -n "$protocols"
-      stamp="$BUNDLE_NAME@$BUNDLE_VERSION source=$source bootstrap=$DAG_RUN_ID dagu=$DAGU_VERSION protocols=$protocols"
-      render_common='
-        gsub("__DAGU_FEATURE_STAMP__"; $stamp)
-        | gsub("__DAGU_FEATURE_VERSION__"; $version)
-        | gsub("__DAGU_FEATURE_IDENTITY__"; $identity)
-        | gsub("TEMPLATE_QUEUE_CONCURRENCY"; env.QUEUE_CONCURRENCY)
-        | gsub("__ESCALATION_PUSHBACKS__"; env.ESCALATION_PUSHBACKS | tojson)
-        | gsub("__ESCALATION_FINDINGS__"; env.ESCALATION_FINDINGS | tojson)
-        | gsub("__ESCALATION_SECONDS__"; env.ESCALATION_SECONDS | tojson)
-        | gsub("__ESCALATION_CI_BLOCKED__"; env.ESCALATION_CI_BLOCKED | tojson)
-        | gsub("__ESCALATION_POC_INCONCLUSIVE__"; env.ESCALATION_POC_INCONCLUSIVE | tojson)'
-      jq -nr --rawfile template "$SKILL_DIR/feature.yaml" \
-        --arg repo "$REPO" --arg base "$BASE_BRANCH" \
-        --arg gate "$GATE" --arg check "$REQUIRED_CHECK" \
-        --arg resolver "$REBASE_RESOLVER" \
-        --arg validation "${VALIDATION:-}" \
-        --arg blocker_reporting "$A4S_BLOCKER_REPORTING" \
-        --arg codeql_security "$CODEQL_SECURITY_THRESHOLD" --arg codeql_alerts "$CODEQL_ALERTS_THRESHOLD" \
-        --arg code_scanning "$CODE_SCANNING" \
-        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
-        "\$template
-          | $render_common
-          | gsub(\"TEMPLATE_REPO\"; \$repo)
-          | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
-          | gsub(\"__PRIMARY__\"; \"\${A4S_PRIMARY}\" | tojson)
-          | gsub(\"__GATE__\"; \$gate | tojson)
-          | gsub(\"__REBASE_RESOLVER__\"; \$resolver | tojson)
-          | gsub(\"__REQUIRED_CHECK__\"; \$check | tojson)
-          | gsub(\"__CODEQL_SECURITY_THRESHOLD__\"; \$codeql_security | tojson)
-          | gsub(\"__CODEQL_ALERTS_THRESHOLD__\"; \$codeql_alerts | tojson)
-          | gsub(\"__CODE_SCANNING__\"; \$code_scanning | tojson)
-          | gsub(\"__VALIDATION__\"; \$validation | tojson)
-          | gsub(\"__A4S_BLOCKER_REPORTING__\"; \$blocker_reporting | tojson)" > "$STAGE"
-      jq -nr --rawfile template "$SKILL_DIR/poc.yaml" \
-        --arg repo "$REPO" --arg base "$BASE_BRANCH" \
-        --arg tests "$TEST_PATHS" \
-        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
-        "\$template
-          | $render_common
-          | gsub(\"TEMPLATE_REPO\"; \$repo)
-          | gsub(\"TEMPLATE_BASE_BRANCH\"; \$base | tojson)
-          | gsub(\"__PRIMARY__\"; \"\${A4S_PRIMARY}\" | tojson)
-          | gsub(\"__TEST_PATHS__\"; \$tests | tojson)" > "$(dirname "$STAGE")/poc.yaml"
-      jq -nr --rawfile template "$SKILL_DIR/discovery.yaml" \
-        --arg repo "$REPO" \
-        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
-        "\$template
-          | $render_common
-          | gsub(\"TEMPLATE_DAGU_FEATURE_VERSION\"; \$version)
-          | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/discovery.yaml"
-      jq -nr --rawfile template "$SKILL_DIR/planning.yaml" \
-        --arg repo "$REPO" \
-        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
-        "\$template | $render_common | gsub(\"TEMPLATE_REPO\"; \$repo)" > "$(dirname "$STAGE")/planning.yaml"
-      jq -nr --rawfile template "$SKILL_DIR/reconcile.yaml" \
-        --arg stamp "$stamp" --arg version "$BUNDLE_VERSION" --arg identity "$identity" \
-        "\$template | $render_common" > "$(dirname "$STAGE")/reconcile.yaml"
-      for rendered in "$STAGE" "$(dirname "$STAGE")/poc.yaml" \
-        "$(dirname "$STAGE")/discovery.yaml" "$(dirname "$STAGE")/planning.yaml" "$(dirname "$STAGE")/reconcile.yaml"; do
-        if grep -En 'TEMPLATE_[A-Z_]+|__[A-Z_]*__' "$rendered"; then exit 1; fi
-        dagu validate "$rendered"
-      done
-      printf 'stage=%s\n' "$STAGE"
+      export A4S_BLOCKER_REPORTING CODEQL_SECURITY_THRESHOLD CODEQL_ALERTS_THRESHOLD CODE_SCANNING
+      export VALIDATION="${VALIDATION-}" REBASE_RESOLVER="${REBASE_RESOLVER-}"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" write-answers "$STAGE"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" answers-check "$STAGE"
+      printf 'answers=%s\n' "$STAGE"
 
   - id: reconcile
     depends: render
@@ -440,12 +338,7 @@ steps:
     run: |
       set -euo pipefail
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      rendered="$(dirname "$STAGE")/reconcile.yaml"
-      dagu validate "$rendered"
-      mkdir -p "$(dirname "$destination")"
-      if ! cmp -s "$rendered" "$destination"; then
-        install -m 0644 "$rendered" "$destination"
-      fi
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
       dagu validate "$destination"
       queue_status=$(node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-reconcile "$STAGE")
       printf 'QUEUE_STATUS=%s\n' "$queue_status" >> "$DAGU_OUTPUT_FILE"
@@ -520,10 +413,6 @@ steps:
       - NWO: ${steps.detect.outputs.NWO}
       - BASE_BRANCH: ${steps.detect.outputs.BASE_BRANCH}
       - STAGE: ${steps.detect.outputs.STAGE}
-      - BUNDLE_VERSION: ${steps.detect.outputs.BUNDLE_VERSION}
-      - DAGU_VERSION: ${steps.detect.outputs.DAGU_VERSION}
-      - SOURCE_NWO: ${steps.detect.outputs.SOURCE_NWO}
-      - SOURCE_SHA: ${steps.detect.outputs.SOURCE_SHA}
       - QUEUE_STATUS: ${steps.reconcile.outputs.QUEUE_STATUS}
     run: |
       set -euo pipefail
@@ -531,20 +420,13 @@ steps:
       test "$(gh api "repos/$NWO/branches/$BASE_BRANCH/protection/required_status_checks" \
         --jq '.strict and (.contexts | index(env.REQUIRED_CHECK) != null)')" = true
       git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"
-      dagu validate "$STAGE"
-      dagu validate "$(dirname "$STAGE")/poc.yaml"
-      dagu validate "$(dirname "$STAGE")/discovery.yaml"
-      dagu validate "$(dirname "$STAGE")/planning.yaml"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" answers-check "$STAGE"
       destination="${DAGU_HOME:-$HOME/.dagu}/dags/reconcile.yaml"
-      cmp "$(dirname "$STAGE")/reconcile.yaml" "$destination"
+      node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" install-reconciler "$STAGE" "$destination"
       dagu validate "$destination"
       node "$SKILL_DIR/../../bin/dagu-feature-bundle.ts" queue-check "$STAGE"
       printf '%s\n' "$QUEUE_STATUS"
-      printf 'dagu-feature-bundle=%s source=%s@%s bootstrap=%s dagu=%s\n' \
-        "$BUNDLE_VERSION" "$SOURCE_NWO" "$SOURCE_SHA" "$DAG_RUN_ID" "$DAGU_VERSION"
-      printf 'Dagu-Feature-Bundle: %s\n' "$BUNDLE_VERSION"
-      printf 'Dagu-Feature-Source: %s@%s\n' "$SOURCE_NWO" "$SOURCE_SHA"
-      printf 'Dagu-Feature-Bootstrap: %s\n' "$DAG_RUN_ID"
+      printf 'answers=%s\n' "$STAGE"
       printf 'reconcile=%s\n' "$destination"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"

@@ -13,7 +13,6 @@ import type { RunDetails } from "../src/status/progress.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 import { BUNDLE_VERSION, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 import { admissionFixture } from "./fixtures/admission.ts";
-import { bootstrapRender } from "./fixtures/bootstrap-render.ts";
 import { withResourceGuard } from "./resource-fixtures.ts";
 import { testRunId } from "./fixtures/run-id.ts";
 const feature = readFileSync(new URL("../skills/issue-execution/feature.yaml", import.meta.url), "utf8");
@@ -668,13 +667,7 @@ test("off code scanning admits and reaches the close success contract when the A
   const admitted = admissionFixture();
   const f = fixture("code-scanning-off-403");
   try {
-    const sourceSha = execFileSync("git", ["-C", admitted.packageDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-    const directory = mkdtempSync(join(f.root, "off-render-"));
-    bootstrapRender({
-      packageDir: admitted.packageDir, directory, primary: admitted.packageDir, version: "0.3.1",
-      sourceNwo: "example/fixture", sourceSha, codeScanning: "off",
-    });
-    writeFileSync(admitted.dag, readFileSync(join(directory, "feature.yaml")));
+    admitted.writeAnswers({ codeScanning: "off" });
     const bin = join(admitted.root, "dagu-bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' ${JSON.stringify(REQUIRED_DAGU_VERSION)}; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);
@@ -684,11 +677,15 @@ test("off code scanning admits and reaches the close success contract when the A
     const snapshot = JSON.parse(readFileSync(admitted.receipt("code-scanning-off"), "utf8")).initial.execution.dagSnapshot as string;
     assert.match(snapshot, /CODE_SCANNING: "off"/);
     assert.match(snapshot, /id: code_scanning/);
+    mkdirSync(join(admitted.dag, ".."), { recursive: true });
     writeFileSync(admitted.dag, snapshot.replace(/  - id: code_scanning[\s\S]*?\n  - id: auto_merge/, "  - id: auto_merge"));
     const tampered = admitted.command("admit", "code-scanning-removed", { PATH: `${bin}:${process.env.PATH ?? ""}` });
-    assert.notEqual(tampered.status, 0);
-    assert.match(tampered.stderr, /DAGU_ADMISSION_REJECTED/);
-    writeFileSync(admitted.dag, snapshot);
+    assert.equal(tampered.status, 0, tampered.stderr);
+    const kept = JSON.parse(readFileSync(admitted.receipt("code-scanning-removed"), "utf8")).initial.execution.dagSnapshot as string;
+    assert.match(kept, /id: code_scanning/);
+    const overridden = admitted.command("admit", "code-scanning-override", { PATH: `${bin}:${process.env.PATH ?? ""}` }, ["CODE_SCANNING=required"]);
+    assert.notEqual(overridden.status, 0);
+    assert.match(overridden.stderr, /admission rejected run parameter: CODE_SCANNING/);
 
     f.env.CODE_SCANNING = "off";
     f.env.REQUIRED_CHECK = "validate";

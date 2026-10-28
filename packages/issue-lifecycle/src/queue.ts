@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync,
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { isMap, isSeq, parseDocument } from "yaml";
+import { readAnswersFile, type LifecycleAnswers } from "./answers.ts";
 
 export interface RepoQueue { name: string; max_concurrency: number }
-const prefix = "dagu-feature-queue-concurrency=";
 
 function document(contents: string) {
   const doc = parseDocument(contents);
@@ -22,28 +22,21 @@ function optionalRead(path: string): string | undefined {
   }
 }
 
-export function stampedQueue(contents: string): RepoQueue {
-  const doc = document(contents);
-  const name = doc.get("queue");
-  const labels = doc.get("labels");
-  const values = isSeq(labels) ? labels.toJSON().filter((label: unknown) => typeof label === "string" && label.startsWith(prefix)) as string[] : [];
-  const raw = values[0]?.slice(prefix.length) ?? "";
-  const max_concurrency = Number(raw);
-  if (typeof name !== "string" || !name || values.length !== 1 || !/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(max_concurrency)) {
-    throw new Error("Repository DAG requires queue and one positive integer dagu-feature-queue-concurrency label; re-run the bootstrap and adopt its renders");
-  }
-  return { name, max_concurrency };
+export function answersQueue(answers: LifecycleAnswers): RepoQueue {
+  return { name: answers.lane, max_concurrency: answers.queueConcurrency };
+}
+
+export function queueFromAnswersFile(path: string): RepoQueue {
+  return answersQueue(readAnswersFile(path));
 }
 
 export function currentQueueConcurrency(paths: string[]): number {
   const queues: RepoQueue[] = [];
   for (const path of paths) {
-    const contents = optionalRead(path);
-    if (contents === undefined) continue;
-    const labels = document(contents).get("labels");
-    if (isSeq(labels) && labels.toJSON().some((label: unknown) => typeof label === "string" && label.startsWith(prefix))) queues.push(stampedQueue(contents));
+    if (optionalRead(path) === undefined) continue;
+    queues.push(queueFromAnswersFile(path));
   }
-  if (new Set(queues.map(queue => `${queue.name}:${queue.max_concurrency}`)).size > 1) throw new Error("Current renders disagree on queue concurrency; restore matching repo stamps before bootstrap");
+  if (new Set(queues.map(queue => `${queue.name}:${queue.max_concurrency}`)).size > 1) throw new Error("Answers files disagree on queue concurrency; commit one lane policy before bootstrap");
   return queues[0]?.max_concurrency ?? 1;
 }
 

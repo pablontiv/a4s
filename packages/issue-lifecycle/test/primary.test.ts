@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,10 +20,8 @@ import { bootstrapRender } from "./fixtures/bootstrap-render.ts";
 const packageDir = fileURLToPath(new URL("../", import.meta.url));
 const readRepo = (path: string): string => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const feature = readRepo("../skills/issue-execution/feature.yaml");
+const poc = readRepo("../skills/issue-execution/poc.yaml");
 const reconcile = readRepo("../skills/issue-execution/reconcile.yaml");
-const adoptedFeature = readRepo("../../../.workspace/dagu/dags/feature.yaml");
-const adoptedPoc = readRepo("../../../.workspace/dagu/dags/poc.yaml");
-const adoptedReconcile = readRepo("../../../.workspace/dagu/dags/reconcile.yaml");
 
 function extractFunction(source: string, name: string): string {
   const start = source.indexOf(`${name}() {`);
@@ -121,11 +119,9 @@ test("spec recovery keeps a recorded path and resolves the host reference", () =
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("feature, reconcile and adopted renders share the shell PRIMARY contract", () => {
+test("feature and reconcile templates share the shell PRIMARY contract", () => {
   const binding = extractFunction(feature, "resolve_primary_binding");
   assert.equal(extractFunction(reconcile, "resolve_primary_binding"), binding);
-  assert.equal(extractFunction(adoptedFeature, "resolve_primary_binding"), binding);
-  assert.equal(extractFunction(adoptedReconcile, "resolve_primary_binding"), binding);
   const root = mkdtempSync(join(tmpdir(), "a4s-primary-shell-"));
   mkdirSync(join(root, "primaries"));
   writeFileSync(join(root, "primaries", "a4s"), "/home/box/src/a4s\n");
@@ -154,10 +150,10 @@ test("feature, reconcile and adopted renders share the shell PRIMARY contract", 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("adopted feature and poc renders do not advertise a foreign absolute PRIMARY", () => {
-  for (const text of [adoptedFeature, adoptedPoc]) {
+test("feature and poc templates do not advertise a foreign absolute PRIMARY", () => {
+  for (const text of [feature, poc]) {
     assert.equal(text.includes("/Users/Shared/harness/a4s"), false);
-    assert.match(text, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+    assert.match(text, /PRIMARY: __PRIMARY__/);
   }
 });
 
@@ -188,16 +184,17 @@ else { console.error("unexpected " + JSON.stringify(args)); process.exitCode = 1
 `);
   chmodSync(dagu, 0o755);
   try {
-    const durable = readFileSync(fixture.dag, "utf8");
-    assert.match(durable, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
-    assert.equal(durable.includes(fixture.packageDir), false);
+    assert.equal(existsSync(fixture.dag), false);
     const admitted = fixture.command("admit", "primary-bound", { PATH: `${bin}:${process.env.PATH ?? ""}` });
     assert.equal(admitted.status, 0, admitted.stderr);
     const receipt = JSON.parse(readFileSync(fixture.receipt("primary-bound"), "utf8"));
     assert.equal(receipt.initial.execution.primary, fixture.packageDir);
+    const unbound = receipt.initial.deployment.installedDAG.snapshot as string;
+    assert.match(unbound, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
+    assert.equal(unbound.includes(fixture.packageDir), false);
     const snapshot = receipt.initial.execution.dagSnapshot as string;
     assert.equal(/^  - PRIMARY: (.+)$/m.exec(snapshot)?.[1], JSON.stringify(fixture.packageDir));
-    assert.equal(readFileSync(fixture.dag, "utf8"), durable);
+    assert.equal(existsSync(fixture.dag), false);
     const enqueued = fixture.command("enqueue", "primary-enqueued", { PATH: `${bin}:${process.env.PATH ?? ""}` });
     assert.equal(enqueued.status, 0, enqueued.stderr);
     assert.equal(readFileSync(join(fixture.receipt("primary-enqueued"), "..", "snapshot", "feature.yaml"), "utf8"), JSON.parse(readFileSync(fixture.receipt("primary-enqueued"), "utf8")).initial.execution.dagSnapshot);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { deploymentFingerprint, observeRunReceipt } from "../src/admission.ts";
@@ -95,16 +96,16 @@ test("admission hook preserves effective shell arguments and requires bash for e
   assert.ok(blocked && "block" in blocked);
 });
 
-test("retired triage protocol is rejected after the isolated home resolves PRIMARY", () => {
+test("admission hook blocks enqueue when the committed answers file is missing", () => {
   const fixture = admissionFixture();
   try {
-    const durable = readFileSync(fixture.dag, "utf8");
-    assert.match(durable, /PRIMARY: "\$\{A4S_PRIMARY\}"/);
-    assert.equal(durable.includes(fixture.packageDir), false);
-    writeFileSync(fixture.dag, durable.replace("triage=role-job/1", "triage=marker-agent/1"));
-    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- ISSUE=277` } }, undefined, fixture.packageDir);
+    const removed = spawnSync("git", ["-C", fixture.packageDir, "rm", "-q", ".workspace/dagu/answers.json"], { encoding: "utf8" });
+    assert.equal(removed.status, 0, removed.stderr);
+    const committed = spawnSync("git", ["-C", fixture.packageDir, "commit", "-qm", "remove answers"], { encoding: "utf8" });
+    assert.equal(committed.status, 0, committed.stderr);
+    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked feature -- ISSUE=277` } }, undefined, fixture.packageDir);
     assert.ok(rejected && "block" in rejected);
-    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
+    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing committed answers file/);
   } finally { fixture.dispose(); }
 });
 
@@ -133,9 +134,10 @@ test("runtime observations and incident snapshots link the admitted run and pres
     assert.equal(recovered.runReceipt.observations.at(-2).kind, "incident:observer-restart");
     assert.equal(recovered.runReceipt.observations.at(-1).kind, "incident:cursor-reset");
     assert.deepEqual(recovered.initial, before.initial);
-    writeFileSync(fixture.dag, readFileSync(fixture.dag, "utf8").replace("triage=role-job/1", "triage=marker-agent/1"));
-    const rejected = admissionDecision({ toolName: "bash", toolCallId: "incompatible", input: { command: `dagu enqueue --run-id blocked ${fixture.dag} -- ISSUE=277` } }, undefined, fixture.packageDir);
-    assert.ok(rejected && "block" in rejected);
-    assert.match(rejected.reason, /DAGU_ADMISSION_REJECTED.*missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
+    const template = join(fixture.packageDir, "skills", "issue-execution", "feature.yaml");
+    writeFileSync(template, `${readFileSync(template, "utf8")}\n# TRIAGE_REVIEW AGENT=retired\n`);
+    const rejected = fixture.command("enqueue", "blocked-protocol");
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /DAGU_ADMISSION_REJECTED.*missing protocol triage=marker-agent\/1; served by bundle 0\.3\.102/);
   } finally { fixture.dispose(); }
 });

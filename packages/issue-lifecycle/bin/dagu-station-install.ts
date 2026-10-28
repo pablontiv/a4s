@@ -7,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { isMap, parseDocument } from "yaml";
 import { REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
-import { queueCompatibility, stampedQueue } from "../src/queue.ts";
+import { queueCompatibility, queueFromAnswersFile } from "../src/queue.ts";
 import { stationExecutors } from "../src/station-executors.ts";
 
 async function main(): Promise<void> {
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     help: { type: "boolean", default: false },
   } });
   if (values.help) {
-    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --repo-dag FILE --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies the repository's stamped capacity, then reopens admission. Service hooks belong to the operator.");
+    console.log("dagu-station-install [--dagu-home DIR] [--launch-agent FILE] [--log-dir DIR] [--check | --apply --repo-dag FILE --admission-close CMD --admission-open CMD --restart-command CMD] [--timeout-seconds 600]\nDefaults: DAGU_HOME or ~/.dagu; plist staged at <dagu-home>/LaunchAgent.plist; logs at <dagu-home>/logs/service.\n--check compares desired files without installing. Default installation defers activation. --apply closes admission, drains running and queued runs, requests TERM restart, verifies the repository answers file's queue capacity, then reopens admission. Service hooks belong to the operator.");
     console.log("Executor operations: --executor-action install|inventory|migrate|prune --evidence FILE [--source REPO --commit SHA --launcher-dir DIR | --executor PATH --source REPO --admission-close CMD --admission-open CMD]. Operations write a new JSON evidence receipt and do not change station configuration or restart services.");
     return;
   }
@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   if (values.apply && (!values["admission-close"] || !values["admission-open"] || !values["restart-command"])) {
     throw new Error("--apply requires admission-close, admission-open and restart-command");
   }
-  if (values.apply && !values["repo-dag"]) throw new Error("--apply requires --repo-dag pointing to a repository's stamped render; reconcile it with bootstrap first");
+  if (values.apply && !values["repo-dag"]) throw new Error("--apply requires --repo-dag pointing at the consumer answers file; bootstrap writes .workspace/dagu/answers.json");
   const version = execFileSync("dagu", ["version"], { encoding: "utf8" }).trim();
   if (version !== REQUIRED_DAGU_VERSION) {
     throw new Error(`dagu version=${JSON.stringify(version)} required=${REQUIRED_DAGU_VERSION}; install the expected binary on PATH`);
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
   if (config.errors.length) throw new Error(`config.yaml: ${config.errors.map(String).join("; ")}`);
   if (!isMap(config.contents)) throw new Error("config.yaml must contain a YAML mapping");
   const managed = parseDocument(template("config.yaml")).toJS() as Record<string, unknown>;
-  const queues = values.apply ? [stampedQueue(readFileSync(resolve(values["repo-dag"]!), "utf8"))] : [];
+  const queues = values.apply ? [queueFromAnswersFile(resolve(values["repo-dag"]!))] : [];
   for (const queue of queues) {
     const report = queueCompatibility(home, queue);
     if (!report.endsWith("compat=ok")) throw new Error(report);

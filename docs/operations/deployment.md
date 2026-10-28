@@ -131,7 +131,7 @@ the actual launcher, retained run bundle resolution and development-worktree
 usability. This operator acceptance remains separate from source publication.
 
 Inspect each run with its identity-matched controller; report incompatibility
-as deployment state rather than changing a stamp.
+as deployment state. The consumer answers file stays the committed policy.
 Scheduled reconciliation is a shared resource: replacing it affects other lanes
 and active runs. A shared scheduler's actual home/config may differ from an
 unset shell's defaults. Capture its service environment before drawing conclusions.
@@ -143,13 +143,15 @@ live evidence. #383's concurrency/restart PoC is not evidence that its acceptanc
 value is installed. TUI/Git/Dagu-store access keeps these controls advisory,
 not process or OS isolation.
 
-For already adopted lane work, use the installed controller's **real source
-path**, selected Dagu home and assigned issue/session:
+For lane work, use the installed controller's **real source path**, selected
+Dagu home and assigned issue/session. The DAG argument names the lifecycle
+(`feature`, `poc`, `discovery` or `planning`). Admission reads the committed
+answers file and materializes that DAG from the installed package templates.
 
 ```sh
 cd "$PRIMARY"
 node "$CONTROLLER_CLI" enqueue \
-  --run-id "<lane>-issue-<n>" .workspace/dagu/dags/feature.yaml -- \
+  --run-id "<lane>-issue-<n>" feature -- \
   ISSUE="<n>" OMP_SESSION_ID="<persistent-owner-session>"
 ```
 
@@ -158,12 +160,13 @@ source checkout. The Node requirement in root `package.json` `engines.node`
 supports direct TypeScript here; use the real source path because Node rejects
 stripping TypeScript under `node_modules`.
 The admitted feature/PoC policy fixes PRIMARY, BRANCH, GATE, REBASE_RESOLVER,
-REQUIRED_CHECK and blocker-reporting policy; the CLI rejects overrides.
-Feature and PoC renders bind `PRIMARY` to the host reference `"${A4S_PRIMARY}"`.
-Enqueue resolves it from `$DAGU_HOME/primaries/<workspace>`, then `A4S_PRIMARY`,
+REQUIRED_CHECK, test paths, validation, blocker reporting, code scanning,
+thresholds, escalation budgets, queue concurrency and lane. The CLI rejects
+those overrides. `BASE_BRANCH` remains a per-run parameter. Feature and PoC
+materialization binds `PRIMARY` to the host reference `"${A4S_PRIMARY}"`.
+Admission resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`,
 then `$DAGU_HOME/a4s-primary`, and the admitted snapshot records that absolute
-main checkout. The scheduler environment sets `A4S_PRIMARY` when a durable
-render is started directly. A linked worktree is not a primary.
+main checkout. A linked worktree is not a primary.
 
 ## Versioned source, configuration and runtime state
 
@@ -175,8 +178,8 @@ a commit, such as a version bump or an adoption.
 Runtime state is written by a running process and carries per-execution data:
 run identifiers, timestamps, process IDs, attempt counters, or observed external
 state such as PR heads and check results. It lives under `.git/dagu-feature/runs/`
-or `$DAGU_HOME`. Adoption copies only the staged repository renders. It does not
-version receipts, observations or scheduler data.
+or `$DAGU_HOME`. Bootstrap writes the consumer answers file; it does not version
+receipts, observations, generated snapshots or scheduler data.
 
 Classify a file in three steps:
 
@@ -186,8 +189,8 @@ Classify a file in three steps:
 2. If a generator produces it, regenerate it twice at the same revision with
    identical declared inputs. Identical bytes make it configuration. A render that
    changes only because a declared input changed (bundle version, repository, queue)
-   is still configuration. The bootstrap run id in a stamp is a declared input, so
-   the adopted feature, PoC, discovery and planning renders stay configuration.
+   is still configuration. `.workspace/dagu/answers.json` is that configuration.
+   A generated per-run snapshot is runtime state.
 3. A file whose content records an execution (run identifiers, timestamps, process
    IDs, attempt counters, or observed external state) is runtime state, regardless
    of format or how often it changed.
@@ -197,7 +200,7 @@ operation, stay source. A process-owned receipt (`receipt.json` with `admittedAt
 `admissionPid`, `observerPid`, `dagRunId`, `finishedAt`), `ci-observation.json`,
 `status.jsonl`, or `$DAGU_HOME/data/**` is runtime state. Move a tracked file in
 that class to `.git/dagu-feature/runs/` or `$DAGU_HOME` and remove it from the
-repository in the same change. `package.json` and `.workspace/config/refine.json`
+repository in the same change. `package.json`, `.workspace/dagu/answers.json` and `.workspace/config/refine.json`
 are configuration even though they are JSON.
 
 ## Identity and adoption
@@ -205,7 +208,7 @@ are configuration even though they are JSON.
 Before any consequential change, obtain explicit authority for the target
 PRIMARY/lane, source SHA/package version, Dagu binary/version, scheduler home and
 URL, links, service hooks, reconciler replacement and repository settings. Record
-current stamps, adoption trailers, installed source/CLI/extension digests, active
+the committed answers file, installed source/CLI/extension digests, active
 runs, queue configuration and pending human tasks. Preserve a coherent recovery
 set rather than only a package directory.
 
@@ -214,7 +217,7 @@ set rather than only a package directory.
    the release guard follows the manifest across moves. Before a package release,
    run live Dagu integration on the station with `A4S_LIVE_DAGU=1 npm test` and
    the manifest-pinned binary on `PATH`; CI runs unit tests and typechecks without
-   Dagu. Publication alone changes neither installed links nor adopted renders.
+   Dagu. Publication alone changes neither installed links nor the consumer answers file.
 2. **Private installation:** choose durable pinned source, install dependencies,
    verify official Dagu against `packages/issue-lifecycle/package.json`
    `daguFeature.dagu`, upstream release checksums and exact version output, and
@@ -231,25 +234,15 @@ set rather than only a package directory.
    candidate needs an approved isolated source/controller origin; changing an
    isolated bare remote's default is proof setup, not production adoption.
 5. **Consumer delivery:** inspect bootstrap `answers`, `render` and `confirm`.
-   The staging location is `git rev-parse --path-format=absolute --git-path
-   dagu-feature/feature.yaml`. Bootstrap also installs/validates the reconciler and
-   may change GitHub settings. Deliver its four repository renders via the normal
-   adoption issue/commit and retain the three emitted adoption trailers.
-   Supply the tested commit body explicitly when squash-merging so each emitted
-   trailer retains its complete value on one line:
-
-   ```sh
-   git show -s --format=%b "$HEAD_SHA" > "$ADOPTION_BODY"
-   gh pr merge "$PR" --squash --match-head-commit "$HEAD_SHA" \
-     --body-file "$ADOPTION_BODY"
-   ```
-
-   Confirm the merged commit's three values with
-   `git show -s --format=%B "$MERGE_SHA" | git interpret-trailers --parse`.
-6. **Fresh loading and proof:** bind CLI/reconciler/OMP to the same adopted source
-   identity and restart OMP. Inspect all stamps and perform admission plus agreed
+   Bootstrap writes `.workspace/dagu/answers.json`, installs and validates the
+   station reconciler, and may change GitHub settings. Commit the answers file
+   when its bytes change. A package or Dagu release that leaves those answers
+   unchanged needs no consumer pull request. In-flight runs keep the snapshots
+   and executors they were admitted with.
+6. **Fresh loading and proof:** bind CLI/reconciler/OMP to the same installed source
+   identity and restart OMP. Inspect the answers file and perform admission plus agreed
    live acceptance before reopening work. Changed `BUNDLE_NAME` follows this whole
-   procedure: fresh real renders and matching components establish compatibility.
+   procedure with matching installed components.
 
 The authorized bootstrap command shape is:
 
@@ -279,9 +272,9 @@ dagu history reconcile --format json --limit 5
 node "$SOURCE/packages/issue-lifecycle/bin/dagu-feature-bundle.ts" "$PRIMARY"
 ```
 
-The inspection reports name/version stamps and runtime compatibility. Admission
-adds served lifecycle-protocol checks, verified source-render provenance,
-loaded-byte binding and an immutable snapshot;
+The inspection reports the committed answers file and runtime compatibility. Admission
+materializes the installed template, checks lifecycle protocols, binds PRIMARY,
+and writes an immutable snapshot and receipt;
 [architecture](../architecture/issue-lifecycle.md#compatibility-is-more-than-a-version-display)
 details the actual equalities. Version-distance display alone is not admission.
 
@@ -338,8 +331,8 @@ Thirty-day global history retention comes from the installed base
 (`packages/issue-lifecycle/dagu/base.yaml`, `hist_retention_days: 30`).
 Feature, PoC and planning runs inherit that horizon. The reconcile root
 declares `hist_retention_runs: 1440`, about one day at one tick per minute.
-Bootstrap adoption installs that rendered reconciler at
-`$DAGU_HOME/dags/reconcile.yaml`. The first tick after adoption applies the
+Bootstrap installs the station reconciler at
+`$DAGU_HOME/dags/reconcile.yaml` from the installed package template. The first tick after that install applies the
 count and keeps active runs, non-final runs, and a newer attempt that has no
 status. Retain durable acceptance evidence outside either cleanup window.
 After that adoption, record the first tick's duration, whether the scheduler
@@ -422,11 +415,11 @@ Obtain rollback authority for the same lanes and shared controller scope. Close
 admission and inventory active/snapshot-bound runs; drain or preserve them under
 their original controller contract before changing shared reconciliation. Restore
 the approved **coherent set**: source SHA and dependency lock, private package,
-source-generated adopted renders/trailers, scheduled reconciler, CLI/PATH binding,
+committed answers file, scheduled reconciler, CLI/PATH binding,
 Dagu binary/home/config and OMP package links. Use the restored source's supported
-bootstrap/adoption path where regeneration is required, retaining real provenance.
+bootstrap path where regeneration is required, retaining real provenance.
 Restart the service only under the drained policy and restart OMP to load restored
-modules. Verify stamps, actual admission, readiness and agreed live behavior before
+modules. Verify the answers file, actual admission, readiness and agreed live behavior before
 reopening. Restoring a directory or a displayed version alone is not recovery.
 
 ## Post-release proof and temporary-lane retirement

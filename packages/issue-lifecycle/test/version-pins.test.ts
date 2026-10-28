@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -44,8 +44,7 @@ for (const [field, value] of [
 function historical(path: string): boolean {
   return /(^|\/)(?:package-lock\.json|CHANGELOG\.md)$/.test(path)
     || path === "docs/operations/retirement-625.json"
-    || path === "docs/operations/v1-walkthrough.md"
-    || /^\.workspace\/dagu\/dags\/[^/]+\.yaml$/.test(path);
+    || path === "docs/operations/v1-walkthrough.md";
 }
 
 function outsidePinFields(path: string, text: string): string {
@@ -94,7 +93,7 @@ test("version guard permits only canonical manifest fields and historical artifa
   const [name, version] = Object.entries(development)[0]!;
   assert.throws(() => outsidePinFields("packages/example/package.json", JSON.stringify({ devDependencies: { [name]: version } })), /belongs only in root devDependencies/);
   assert.ok(historical("docs/operations/v1-walkthrough.md"));
-  assert.ok(historical(".workspace/dagu/dags/feature.yaml"));
+  assert.equal(historical(".workspace/dagu/answers.json"), false);
   assert.equal(historical("packages/issue-lifecycle/skills/issue-execution/reconcile.yaml"), false);
   assert.deepEqual(copies(outsidePinFields("package.json", JSON.stringify({ ...rootManifest, copiedRuntime: dagu }))), [String(dagu)]);
 });
@@ -105,7 +104,7 @@ test("tracked source derives Dagu, Node and shared development versions from the
   }).split("\0").filter(Boolean);
   const violations: string[] = [];
   for (const path of new Set(paths)) {
-    if (historical(path)) continue;
+    if (historical(path) || !existsSync(join(root, path))) continue;
     const text = readFileSync(join(root, path), "utf8");
     if (text.includes("\0")) continue;
     for (const version of copies(outsidePinFields(path, text))) {

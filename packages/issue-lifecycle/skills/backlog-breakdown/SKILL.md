@@ -52,7 +52,7 @@ Optional neighboring `source.md` and `plan.md` provide reviewer context. Import 
 Get the parent `OMP_SESSION_ID` from `dagu_session_id`. From the adopted repository's main clone, using the scheduler's `DAGU_HOME`:
 
 ```sh
-dagu-feature-bundle enqueue --run-id "<repo>-breakdown-<slug>" "<main-clone>/.workspace/dagu/dags/planning.yaml" -- \
+dagu-feature-bundle enqueue --run-id "<repo>-breakdown-<slug>" planning -- \
   UNITS_FROM="<absolute-units.jsonl>" PRIMARY="<main-clone>" SOURCE=refine OMP_SESSION_ID="<session-id>"
 ```
 
