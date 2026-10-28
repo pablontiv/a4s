@@ -78,6 +78,7 @@ native skill root, or configure `skills.customDirectories`; see
 | [`skills/agent-throughput/`](../../skills/agent-throughput/SKILL.md) | Agent throughput, active time and tokens per PR |
 | [`skills/workspace-hygiene/`](../../skills/workspace-hygiene/SKILL.md) | Opt-in repository inventory, classification, approved preservation/publication and cleanup of worktrees, branches, stashes and Orca contexts; foreign repositories remain under their owning sessions |
 | [`skills/sandbox-threat-model/`](../../skills/sandbox-threat-model/SKILL.md) | Classify execution controls as prompt, advisory, or enforced before calling one a sandbox; #689 decision is skill, with no mantis product install and no CI gate |
+| [`skills/hitl-escalation/`](../../skills/hitl-escalation/SKILL.md) | Classify a human contact as continue, notify, or decide from the adopted escalation budgets; #695 decision is skill, with no HumanLayer install |
 
 Spike #693 compared 1Password for Agents with operator-owned credentials and
 discarded product adoption and a secret-injection skill; see

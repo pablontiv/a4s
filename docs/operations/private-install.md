@@ -109,7 +109,7 @@ its native project skill root without moving them into the lifecycle package:
 A4S_ROOT=<absolute-pinned-source-checkout>
 CONSUMER=<absolute-private-consumer-checkout>
 mkdir -p "$CONSUMER/.omp/skills"
-for skill in model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model; do
+for skill in model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model hitl-escalation; do
   ln -s "$A4S_ROOT/skills/$skill" "$CONSUMER/.omp/skills/$skill"
 done
 ```
