@@ -1208,13 +1208,36 @@ A waiter stays Running with its existing ticket and candidate, logging
 Holder JSON is diagnostic; the kernel lock determines entry. Never unlink the
 stable lock file to release it.
 
-Root `npm test` and `@a4s/issue-lifecycle`'s `npm test` and `npm run test:live`
-acquire the same slot, including runs outside Dagu. The holder exports
-`A4S_HEAVY_SLOT_HELD=1`; nested scripts re-enter without taking another lock,
-so a gate's own root/workspace tests do not deadlock. This inherited marker is
-cooperative: do not set it manually to bypass admission. A targeted single-file
-command such as `npx tsx --test test/<file>.test.ts` and light-workspace tests
-remain unslotted.
+Root `npm test` and `@a4s/issue-lifecycle`'s default `npm test` do not acquire
+the heavy slot themselves; a lifecycle `gate` still holds it around the complete
+`GATE`. The lifecycle's opt-in `npm run test:live` and `npm run test:compiled`
+use `bin/heavy-slot.py` to acquire the same station-wide slot, including outside
+Dagu. Keep the service's canonical `DAGU_HOME` in the invoking shell, for example:
+
+```sh
+DAGU_HOME="<service-home>" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle
+```
+
+All three lifecycle test lanes load `test/fixtures/dagu-home.mjs` before test
+modules. It replaces inherited `HOME` and `DAGU_HOME` with a fresh private
+temporary directory per test process and removes that directory on exit.
+Fixtures and subprocesses use isolated homes, including children that omit
+`DAGU_HOME` and fall back to `~/.dagu`, never the ambient station's artifact
+cache. The native wrapper acquires
+the inherited station-wide lock before this preload; that orchestration lock is
+the single explicit exception outside the test process. Do not wrap the npm
+command in a temporary home, which would split the orchestration lock.
+
+The holder exports `A4S_HEAVY_SLOT_HELD=1`; nested scripts re-enter without
+taking another lock, so a gate's native tests do not deadlock. This inherited
+marker is cooperative: do not set it manually to bypass admission. Focused
+default commands remain unslotted and must retain both preloads, for example
+from the lifecycle workspace:
+
+```sh
+npx --no-install tsx --import ./test/fixtures/dagu-home.mjs \
+  --import ../../scripts/test-no-spawn.mjs --test test/planning-validator.test.ts
+```
 
 Success, failure, cancellation and SIGKILL close descriptors automatically;
 the slot releases after the holder and all inheriting descendants close their

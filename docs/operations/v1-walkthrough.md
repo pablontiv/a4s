@@ -179,16 +179,20 @@ results authorizes reusing the harmless isolated policy in a production adoption
 
 ## 6. Repository verification
 
-The #431 targeted future command, adapted to the current package and retained
-suite paths, was:
+The current safe equivalent of the #431 targeted future command, adapted to the
+current package and retained suite paths, includes both test preloads:
 
 ```sh
-npm exec --workspace @a4s/issue-lifecycle -- tsx --test \
+npm exec --workspace @a4s/issue-lifecycle -- tsx \
+  --import ./test/fixtures/dagu-home.mjs \
+  --import ../../scripts/test-no-spawn.mjs --test \
   test/planning-template.test.ts test/discovery-contract.test.ts \
   test/bundle-template.test.ts test/admission.test.ts
 ```
 
-Exit 0: 20 tests, 17 passed, 3 explicitly guarded real-Dagu skips, 0 failed.
+The historical command, before these preloads were added, exited 0: 20 tests,
+17 passed, 3 explicitly guarded real-Dagu skips, 0 failed. The current command
+above has not been rerun for this documentation update.
 Those skipped cases are not live-test PASS claims; the separate bootstrap and
 admission exercise above supplies its own bounded real-target proof.
 

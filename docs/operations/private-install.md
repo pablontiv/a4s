@@ -45,10 +45,14 @@ rejects child commands other than direct `git`/`tar`; they do not run native CLI
 YAML shell steps, builds or timing acceptance. `test/live/` is never selected by
 `npm test`, even with `A4S_LIVE_DAGU=1`.
 Before a package release, run
-`DAGU_HOME="$(mktemp -d)" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle`
+`A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle`
 with a supported Dagu runtime on `PATH`. That command sets the live opt-in,
-omits the spawn guard and retains the heavy slot. Messaging and message-bus
-also expose explicit `test:live` scripts for their real CLI scenarios.
+omits the spawn guard and retains the heavy slot. Keep the service's canonical
+`DAGU_HOME` in the invoking shell so the wrapper shares the station-wide lock
+before the test preload isolates `HOME` and `DAGU_HOME` per process. That
+orchestration lock is the single explicit exception; fixtures and subprocess
+artifact caches stay isolated, including `~/.dagu` fallbacks. Messaging and
+message-bus also expose explicit `test:live` scripts for their real CLI scenarios.
 CI discovers current workspace manifests and transitive consumers, handles both
 sides of renames, and aggregates workspace checks and PR-body validation into
 `validate` for `main`.

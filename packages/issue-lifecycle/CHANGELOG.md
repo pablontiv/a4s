@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
 
 - Make the default workspace test gate in-process and enforce its no-subprocess contract with a shared spawn guard (only direct `git`/`tar` allowed). Preserve real CLI, compiled-release, YAML, Dagu, OS-lock and timing assertions in explicit `test:live`/`test:compiled` lanes; remove the heavy-slot wrapper and forced serial execution from default suites (#683).
+- Isolate default, live and compiled test processes, fixtures and subprocess artifact caches from inherited `HOME` and `DAGU_HOME` with a shared temporary-home preload and exit cleanup, including children that fall back to `~/.dagu`. Native wrappers retain the inherited station-wide orchestration lock as the single explicit exception outside the test process (#728).
 
 ## 0.7.1
 
