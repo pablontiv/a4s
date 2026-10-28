@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
 import { effectiveTranscriptIdentity, type TranscriptRow } from "./transcript-identity.ts";
@@ -11,22 +10,45 @@ interface Definition { name: string; source: string; model?: string[]; systemPro
 interface Settings { [key: string]: unknown }
 interface Selection { patterns: string[]; role?: string }
 interface NativeResult { exitCode: number; output: string; error?: string; aborted?: boolean; [key: string]: unknown }
-/** Resolve the installed runtime, not an independent model/client implementation. */
+/** Dagu preserves DAGU_* variables; never infer a package from an unrelated omp binary. */
 export function ompRuntimeRoot(): string {
-  let root = process.env.OMP_ROLE_RUNTIME ? realpathSync(process.env.OMP_ROLE_RUNTIME) :
-    dirname(realpathSync(execFileSync("which", ["omp"], { encoding: "utf8" }).trim()));
-  for (;;) {
-    const manifest = join(root, "package.json");
-    if (existsSync(manifest) && JSON.parse(readFileSync(manifest, "utf8")).name === "@oh-my-pi/pi-coding-agent") return root;
-    const parent = dirname(root);
-    if (parent === root) throw new Error("Installed OMP task runtime not found; set OMP_ROLE_RUNTIME to its package root");
-    root = parent;
+  const selected = process.env.DAGU_OMP_ROLE_RUNTIME;
+  const tried = selected ? `DAGU_OMP_ROLE_RUNTIME=${JSON.stringify(selected)}` : "DAGU_OMP_ROLE_RUNTIME is unset";
+  try {
+    if (!selected || !isAbsolute(selected)) throw new Error("an absolute package root is required");
+    const root = realpathSync(selected);
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    if (manifest.name !== "@oh-my-pi/pi-coding-agent") throw new Error("package is not @oh-my-pi/pi-coding-agent");
+    for (const relative of ["config/settings.ts", "task/discovery.ts", "task/settings.ts", "config/model-resolver.ts", "task/executor.ts"]) {
+      if (!existsSync(join(root, "src", relative))) throw new Error(`missing src/${relative}`);
+    }
+    return root;
+  } catch (error) {
+    throw new Error(`Installed OMP task runtime not found; tried ${tried}: ${error instanceof Error ? error.message : String(error)}. Set DAGU_OMP_ROLE_RUNTIME to the installed @oh-my-pi/pi-coding-agent package root in the Dagu service environment; PATH/compiled omp binaries are not used.`);
   }
 }
   // OMP is an operator-installed Bun plugin runtime, selected at launch; it is
   // deliberately not a second npm dependency or a fixed build-time module path.
 async function nativeModule<T>(root: string, relative: string): Promise<T> {
   return await import(pathToFileURL(join(root, "src", relative)).href) as T;
+}
+async function runtimeAgents(root: string, cwd: string): Promise<Definition[]> {
+  const { discoverAgents } = await nativeModule<{ discoverAgents(cwd: string): Promise<{ agents: Definition[] }> }>(root, "task/discovery.ts");
+  return (await discoverAgents(cwd)).agents;
+}
+function requiredAgent(agents: Definition[], name: string, cwd: string): Definition {
+  const definition = agents.find(agent => agent.name === name);
+  if (!definition) throw new Error(`Registered OMP agent ${name} is required but was not discoverable from ${cwd}; link @a4s/issue-lifecycle with omp plugin link <package-directory> for the Dagu service user and ensure the installed runtime provides task.`);
+  return definition;
+}
+/** Bootstrap uses the same runtime and native discovery as role execution, without launching a session. */
+export async function detectRoleRuntime(cwd: string): Promise<{ root: string; agents: Array<{ name: string; source: string }> }> {
+  const root = ompRuntimeRoot();
+  const agents = await runtimeAgents(root, cwd);
+  return { root, agents: ["triage-reviewer", "task"].map(name => {
+    const definition = requiredAgent(agents, name, cwd);
+    return { name, source: definition.source };
+  }) };
 }
 export function roleSchema(binding: JobBinding): Record<string, unknown> {
   if (binding.role === "triage") return REVIEW_SCHEMA;
@@ -45,18 +67,16 @@ export function nativeEvidence(transcript: string, routing: unknown): NativeEvid
 }
 export async function executeNativeJob(job: Job, assignment: string): Promise<{ output: Record<string, unknown>; native: NativeEvidence }> {
   const root = ompRuntimeRoot();
-  const [{ Settings: NativeSettings }, { discoverAgents }, { cfgTaskAgentModelOverrides }, { resolveAgentModelSelection }, { runSubprocess }] = await Promise.all([
+  const [{ Settings: NativeSettings }, agents, { cfgTaskAgentModelOverrides }, { resolveAgentModelSelection }, { runSubprocess }] = await Promise.all([
     nativeModule<{ Settings: { loadReadOnly(options: { cwd: string }): Promise<Settings> } }>(root, "config/settings.ts"),
-    nativeModule<{ discoverAgents(cwd: string): Promise<{ agents: Definition[] }> }>(root, "task/discovery.ts"),
+    runtimeAgents(root, job.binding.worktree),
     nativeModule<{ cfgTaskAgentModelOverrides: { get(settings: Settings): Record<string, string[]> } }>(root, "task/settings.ts"),
     nativeModule<{ resolveAgentModelSelection(options: unknown): Selection }>(root, "config/model-resolver.ts"),
     nativeModule<{ runSubprocess(options: unknown): Promise<NativeResult> }>(root, "task/executor.ts"),
   ]);
   const settings = await NativeSettings.loadReadOnly({ cwd: job.binding.worktree });
-  const { agents } = await discoverAgents(job.binding.worktree);
   const name = job.binding.role === "triage" ? "triage-reviewer" : "task";
-  const definition = agents.find(agent => agent.name === name);
-  if (!definition) throw new Error(`Registered OMP agent ${name} is required`);
+  const definition = requiredAgent(agents, name, job.binding.worktree);
   const overrides = cfgTaskAgentModelOverrides.get(settings)[name];
   const selection = resolveAgentModelSelection({ settingsOverride: overrides, agentModel: definition.model, settings });
   if (!selection.patterns.length) throw new Error(`Registered role ${name} has no effective model routing`);

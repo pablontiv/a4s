@@ -72,6 +72,20 @@ its active pin and the explicitly selected `dagu-role-jobs` shim; it does not
 restart services or adopt repository renders. Repeating it preserves the shim's
 bytes and mtime when unchanged.
 
+The role runtime is a separate installed `@oh-my-pi/pi-coding-agent` package,
+selected only by the absolute `DAGU_OMP_ROLE_RUNTIME` in the service environment.
+Set that variable for shell bootstrap too; `OMP_ROLE_RUNTIME` is filtered from
+Dagu 2.24.0 steps and is no longer read. A compiled `omp` on PATH is not a package
+root and is never used for fallback discovery. Persistently link
+`@a4s/issue-lifecycle` with `omp plugin link <package-directory>` for the service
+user so `triage-reviewer` and the runtime's `task` are discoverable from PRIMARY
+and candidate worktrees. With PRIMARY and the same environment, run
+`dagu-role-jobs detect` to inspect the root and both native agent sources without
+launching a role. Bootstrap runs this check before adoption and names the missing
+setting/agent on failure. Any service environment change or activation is an
+explicit operator action; this runtime check never writes station configuration
+or restarts a service.
+
 First inventory all non-terminal run references, including old waiting snapshots:
 
 ```sh

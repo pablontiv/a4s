@@ -70,9 +70,24 @@ flowchart LR
   checks it before adoption. Resource guards use atomic `os.mkdir` acquisition;
   the feature gate uses a POSIX kernel advisory lock.
 - The tools the repository's gate command needs.
-- Bun and the installed OMP task runtime on the service's `PATH`, plus this
-  package's `dagu-role-jobs` executable. `OMP_ROLE_RUNTIME` may select the
-  canonical installed `@oh-my-pi/pi-coding-agent` package root.
+- Bun and this package's `dagu-role-jobs` executable on the service's `PATH`.
+  Set `DAGU_OMP_ROLE_RUNTIME` in the Dagu service environment to the absolute
+  installed `@oh-my-pi/pi-coding-agent` package root (the directory containing
+  `package.json` and `src/task/executor.ts`, not the `omp` executable). Use the
+  same variable when running bootstrap from a shell. Dagu 2.24.0 filters
+  `OMP_ROLE_RUNTIME` out of steps but preserves `DAGU_*`; the old variable and
+  PATH-based runtime discovery are not supported. A compiled `omp` binary on
+  `PATH` therefore does not select or obscure a package runtime.
+- Both `triage-reviewer` and `task` must be discoverable by that runtime from
+  PRIMARY and the candidate worktree under the Dagu service user. Persistently
+  link the whole lifecycle package with `omp plugin link <package-directory>`
+  under separate operator authority; loading it only in the coordinating
+  session is insufficient for headless role jobs. Bootstrap runs
+  `dagu-role-jobs detect` to check the runtime and both agents before adoption.
+  It reports the selected root and native agent sources without launching a role.
+  Missing runtime/agent errors identify the attempted root or missing agent and
+  the corrective setting/link. Service environment changes and activation are
+  operator-owned; bootstrap does not write or restart the station/service.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Bootstrap renders repository policy; run parameters carry operational issue inputs.
 
@@ -545,7 +560,7 @@ The steps:
 
 | Step | Effect |
 |---|---|
-| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, observes `dagu version`, and checks every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the committed config file. |
+| `detect` | Checks `git`, `gh` (authenticated), `jq`, Python's `fcntl`, observes `dagu version`, and checks every package executable a rendered DAG invokes (`dagu-codeql`, `dagu-feature-bundle`, `dagu-feature-protect`, `dagu-gate`, `dagu-poc-scope`, `dagu-pr-body`, `dagu-role-jobs`, `dagu-stale-recovery`). A missing command fails with `bootstrap detect: required command not found: <name>`. `dagu-role-jobs detect` resolves `DAGU_OMP_ROLE_RUNTIME` and uses native discovery from PRIMARY to require `triage-reviewer` and `task`, failing with an actionable `bootstrap detect:` diagnostic before adoption. It then reads package/version, source commit and source `origin`; fetches and requires that clean package commit on the remote default branch; reads repository settings and the committed config file. |
 | `config` | `human.task` showing the committed policy, `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, and `CODE_SCANNING` (`required` or `off`). Choose the test-path ERE, resolver and validation procedure from repository conventions; validation defaults to empty. Blank `CODE_SCANNING` preserves the committed choice. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `render` | Writes and validates `.workspace/dagu/config.json` in PRIMARY. Unchanged bytes leave the checkout clean. Feature and PoC `PRIMARY` is resolved at admission from `"${A4S_PRIMARY}"`, not baked into the config file. |
