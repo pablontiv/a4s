@@ -86,7 +86,7 @@ async function stage(root: string, result: "blocked" | "completed"): Promise<{ c
       DAGU_URL: `http://127.0.0.1:${port}`,
       DAGU_OUTPUT_FILE: output,
       DAG_PUSHBACK_ITERATION: "0",
-      OMP_ROLE_RUNTIME: join(root, "runtime"),
+      DAGU_OMP_ROLE_RUNTIME: join(root, "runtime"),
       A4S_ROLE_RESULT: result === "blocked" ? "blocked" : "completed",
       A4S_ROLE_BRIDGE_SOCKET: join("/tmp", `a4s-bridge-${process.pid}-${result}.sock`),
       A4S_ROLE_BRIDGE_READY: join(root, `bridge-${result}`),

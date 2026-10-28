@@ -14,7 +14,13 @@ and keep the checkout available for every source link.
   npm installs its `devDependencies.bun` pin for tests.
 - Official Dagu 2.23.0 or newer for lifecycle runtime; Git, authenticated `gh`, `jq`,
   Python 3 with `fcntl`, and Bash for bootstrap/execution. Semantic role jobs
-  also require Bun and the installed OMP runtime.
+  also require Bun and the installed OMP package root selected explicitly by
+  `DAGU_OMP_ROLE_RUNTIME` in the service environment (and shell bootstrap).
+  `OMP_ROLE_RUNTIME` is not supported: Dagu 2.24.0 filters it from steps.
+  Link the lifecycle package for the service user so native `triage-reviewer`
+  and `task` discovery works independently of the coordinating session;
+  bootstrap's `dagu-role-jobs detect` checks both before adoption. See
+  [runtime deployment](deployment.md#independent-station-executors-and-reference-based-retention).
 - Orca installed/running and a bound coordinator pane for Orca integration's
   actual worker lifecycle proof. Configure managed-worktree setup to run the
   repository hook and wait for its installation before checking code.

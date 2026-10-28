@@ -6,16 +6,20 @@ import { fileURLToPath } from "node:url";
 import { computationCommand } from "../src/long-computation.ts";
 import { dispatchStage, verifyTriageResult } from "../src/role-dispatch.ts";
 import { RoleJobStore } from "../src/role-jobs.ts";
+import { detectRoleRuntime } from "../src/role-runtime.ts";
 
 async function main(): Promise<void> {
   const [command, stage, ...extra] = process.argv.slice(2);
   if (command === "computation") {
-    if (!stage) throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
+    if (!stage) throw new Error("Usage: dagu-role-jobs detect | stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
     await computationCommand([stage, ...extra], { script: fileURLToPath(import.meta.url) });
     return;
   }
   if (extra.length) throw new Error("Unexpected role-job command arguments");
-  if (command === "stage" && stage) {
+  if (command === "detect" && !stage) {
+    try { console.log(JSON.stringify(await detectRoleRuntime(realpathSync(process.env.PRIMARY || process.cwd())))); }
+    catch (error) { throw new Error(`bootstrap detect: ${error instanceof Error ? error.message : String(error)}`); }
+  } else if (command === "stage" && stage) {
     await dispatchStage(stage, (name, value) => {
       const line = `${name}=${value.replace(/[\r\n]+/g, " ")}\n`;
       if (!process.env.DAGU_OUTPUT_FILE) throw new Error("Dagu output file is required");
@@ -45,7 +49,7 @@ async function main(): Promise<void> {
     const store = new RoleJobStore(home, Number(process.env.A4S_ROLE_JOB_CAPACITY || "4"));
     try { console.log(JSON.stringify({ home, ...store.changeCapacity(capacity) })); }
     finally { store.close(); }
-  } else throw new Error("Usage: dagu-role-jobs stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
+  } else throw new Error("Usage: dagu-role-jobs detect | stage triage|implement | verify-triage | capacity <positive-integer> | computation sample|open|run|supervise|decide");
 }
 
 try {

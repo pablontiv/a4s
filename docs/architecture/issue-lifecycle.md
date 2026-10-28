@@ -132,8 +132,17 @@ agent-session root test waiting behind a gate.
 
 `dagu-role-jobs stage triage|implement` executes authorized obligations using
 native OMP definitions, prompts, role model arrays and fallback routing. It
-requires Bun and the installed OMP runtime (`OMP_ROLE_RUNTIME` can select its
-root). Schema version 1 job/result/routing/assignment/native transcript artifacts
+requires Bun and an explicit installed OMP package root in the Dagu service's
+`DAGU_OMP_ROLE_RUNTIME`. Dagu 2.24.0 preserves `DAGU_*` environment variables but
+filters the former `OMP_ROLE_RUNTIME`. Runtime resolution validates that exact
+package and its native source modules; it never walks PATH or falls back from an
+invalid selection, so a compiled `omp` cannot accidentally select another runtime.
+Bootstrap's `dagu-role-jobs detect` shares native discovery with role execution
+and requires both `triage-reviewer` and `task` from PRIMARY. The lifecycle package
+must be linked for the service user, not only loaded in the coordinator session.
+Detection reports the root and agent sources without launching a session; errors
+name the attempted root or missing agent and the required environment/link action.
+Schema version 1 job/result/routing/assignment/native transcript artifacts
 bind canonical repo, worktree, lane, DAG, run, stage, semantic role, SHA, iteration
 and attempt. `candidate.json.implementation` binds the implementer's result to
 the candidate. Native triage verification binds the exact authorized job marker,

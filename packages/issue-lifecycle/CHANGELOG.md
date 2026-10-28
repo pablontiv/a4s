@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.5.31
+
+- Role jobs read the OMP runtime root only from an explicit absolute `DAGU_OMP_ROLE_RUNTIME` (Dagu forwards `DAGU_*` to steps); `OMP_ROLE_RUNTIME` and PATH discovery are removed. Bootstrap runs `dagu-role-jobs detect`, which resolves the runtime and the `triage-reviewer`/`task` agents the way role jobs do (#674).
+
 ## 0.5.30
 
 - Protect an idle PRIMARY when it holds a committed `.workspace/dagu/config.json` and its canonical path equals the resolved host PRIMARY binding; render-based detection is removed (#707).

@@ -20,6 +20,7 @@ steps:
         command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
       done
       python3 -c 'import fcntl'
+      dagu-role-jobs detect
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
       test -f "$SKILL_DIR/poc.yaml"

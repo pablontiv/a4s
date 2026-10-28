@@ -24,6 +24,16 @@ omp -e <absolute-package-directory>
 omp plugin link <absolute-package-directory>
 ```
 
+Headless Dagu role jobs also require Bun on the service PATH and
+`DAGU_OMP_ROLE_RUNTIME` in its environment, set to the absolute installed
+`@oh-my-pi/pi-coding-agent` package root, not a compiled `omp` executable.
+Dagu 2.24.0 preserves this `DAGU_*` variable but filters `OMP_ROLE_RUNTIME`;
+there is no PATH-based runtime fallback. Link this whole package for the Dagu
+service user so native discovery can find `triage-reviewer` alongside `task`.
+Bootstrap's `dagu-role-jobs detect` checks that same root and both agents from
+PRIMARY before adoption, without launching a role. Service environment changes
+and activation remain separate operator actions.
+
 A renamed package needs fresh bootstrap-generated renders, the matching
 reconciler/CLI binding and a new OMP process. Restart OMP after lifecycle
 redeployment; builtin resource rediscovery alone does not load newly introduced
