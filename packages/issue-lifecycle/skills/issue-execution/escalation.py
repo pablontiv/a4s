@@ -65,6 +65,14 @@ def main():
         raise ValueError('Invalid run identity')
     common = subprocess.check_output(['git', '-C', os.environ['PRIMARY'], 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip()
     root = Path(common) / 'dagu-feature' / 'runs' / run
+    receipt = root / 'receipt.json'
+    admitted = None
+    if receipt.exists():
+        value = json.loads(receipt.read_text())
+        # Read version 1 for existing run budgets; admission alone writes version 2.
+        if not isinstance(value, dict) or type(value.get('schemaVersion')) is not int or value['schemaVersion'] not in (1, 2):
+            raise ValueError(f"Unsupported admission receipt schemaVersion={value.get('schemaVersion') if isinstance(value, dict) else None}: {receipt}; supported versions: 1, 2")
+        admitted = value['initial']['admittedAt']
     root.mkdir(parents=True, exist_ok=True)
     with (root / 'escalation.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -78,8 +86,7 @@ def main():
         if path.exists():
             state = json.loads(path.read_text())
         else:
-            receipt = root / 'receipt.json'
-            admitted = json.loads(receipt.read_text())['initial']['admittedAt'] if receipt.exists() else now
+            admitted = admitted or now
             state = dict(schemaVersion=1, run=run, admittedAt=admitted, windowStartedAt=admitted,
                          windowIteration=0, iteration=iteration, findings=[], trigger=None, decisions=[])
         if iteration < state['iteration']:

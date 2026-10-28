@@ -293,7 +293,7 @@ for (const terminal of ["failed", "interrupted"] as const) {
       }
       const run = "dispatcher-retry";
       const state = join(f.repo, ".git", "dagu-feature", "runs", run); mkdirSync(state, { recursive: true });
-      writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage")));
+      writeFileSync(join(state, "receipt.json"), JSON.stringify({ ...roleAdmission(f.repo, f.home, run, "dagu-role-jobs stage triage"), schemaVersion: 2 }));
       Object.assign(process.env, { PRIMARY: f.repo, DAGU_HOME: f.home, RUN: run, ISSUE: "189", PATH: `${bin}:${saved.PATH}`, A4S_ROLE_JOB_CAPACITY: "2", DAG_PUSHBACK_ITERATION: "0" });
       let startedAt = readyAt;
       const details = () => ({ dagRunDetails: { params: "ISSUE=189 OMP_SESSION_ID=parent-id", nodes: [

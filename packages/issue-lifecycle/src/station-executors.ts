@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveRunPrimary } from "./run-primary.ts";
+import { assertReceiptVersion } from "./receipt-version.ts";
 
 type Bundle = { version: string; commit: string };
 type Pin = Bundle & { path: string; package: string; bundleDigest: string; entrypointDigest?: string };
@@ -64,6 +65,8 @@ export function runBundle(primary: string, run: string): Bundle {
   const receipts = ["dagu-feature", "poc"].map(kind => git(primary, "rev-parse", "--path-format=absolute", "--git-path", `${kind}/runs/${run}/receipt.json`)).filter(existsSync);
   if (receipts.length !== 1) throw new Error(`Expected one immutable receipt for ${primary}:${run}`);
   const receipt = read(receipts[0]!);
+  // Historical in-flight runs still select their immutable executor from version 1 receipts.
+  assertReceiptVersion(receipt, receipts[0]!);
   if (!receipt.runReceipt || typeof receipt.runReceipt !== "object" || !("run" in receipt.runReceipt) || receipt.runReceipt.run !== run) throw new Error(`Receipt run mismatch: ${run}`);
   return bundle(receipt.sourceVersion);
 }
@@ -122,6 +125,8 @@ export async function stationExecutors(options: ExecutorOptions): Promise<void> 
   if (["migrate", "prune"].includes(action) && (!options.executor || !options.source || !options.admissionClose || !options.admissionOpen)) throw new Error("migrate/prune require --executor, --source, --admission-close and --admission-open (operator-owned quiescence hooks)");
   if (action === "install" && (!options.source || !options.commit || !options.launcherDir)) throw new Error("install requires --source, --commit and --launcher-dir");
   const home = realpathSync(options.home);
+  // Reject unsupported run receipts before locks, evidence or admission hooks; recapture under quiescence below.
+  await inventory(home);
   mkdirSync(root(home), { recursive: true });
   if (realpathSync(root(home)) !== root(home)) throw new Error("Executor root must not be a symlink");
   const lock = join(home, ".station-install.lock");

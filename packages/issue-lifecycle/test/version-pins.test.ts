@@ -89,7 +89,7 @@ test("version guard permits only canonical manifest fields and historical artifa
   const [name, version] = Object.entries(development)[0]!;
   assert.throws(() => outsidePinFields("packages/example/package.json", JSON.stringify({ devDependencies: { [name]: version } })), /belongs only in root devDependencies/);
   assert.ok(historical("docs/operations/v1-walkthrough.md"));
-  assert.equal(historical(".workspace/dagu/answers.json"), false);
+  assert.equal(historical(".workspace/dagu/config.json"), false);
   assert.equal(historical("packages/issue-lifecycle/skills/issue-execution/reconcile.yaml"), false);
   assert.deepEqual(copies(outsidePinFields("package.json", JSON.stringify({ ...rootManifest, copiedRuntime: node }))), versions(String(node)));
 });

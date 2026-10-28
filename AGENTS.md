@@ -81,7 +81,7 @@ Classify a file in three steps:
 Hand-written test fixtures, and a pull-request document that quotes a finished
 operation, stay source: their producer is the pull request. A process-owned
 receipt, observation or status log is runtime state even when a broad commit
-tracked it. The consumer answers file `.workspace/dagu/answers.json`, and hand-written manifests such as
+tracked it. The consumer config file `.workspace/dagu/config.json`, and hand-written manifests such as
 `package.json` and `.workspace/config/refine.json`, are configuration. Generated per-run DAG snapshots are runtime state.
 [Deployment](docs/operations/deployment.md) states the same rule beside adoption.
 

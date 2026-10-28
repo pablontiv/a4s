@@ -9,24 +9,24 @@ import test from "node:test";
 import { admissionFixture } from "./fixtures/admission.ts";
 import { liveDagu } from "./fixtures/live-dagu.ts";
 
-import { exampleAnswers, serializeAnswers } from "../src/answers.ts";
+import { exampleConfig, serializeConfig } from "../src/config.ts";
 const cli = fileURLToPath(new URL("../bin/dagu-feature-bundle.ts", import.meta.url));
 
-function commitAnswers(repo: string, text?: string): void {
+function commitConfig(repo: string, text?: string): void {
   mkdirSync(join(repo, ".workspace", "dagu"), { recursive: true });
-  if (text !== undefined) writeFileSync(join(repo, ".workspace", "dagu", "answers.json"), text);
+  if (text !== undefined) writeFileSync(join(repo, ".workspace", "dagu", "config.json"), text);
   spawnSync("git", ["init", "-b", "main", repo], { encoding: "utf8" });
   spawnSync("git", ["-C", repo, "config", "user.email", "cli@example.test"]);
   spawnSync("git", ["-C", repo, "config", "user.name", "CLI Test"]);
   if (text === undefined) spawnSync("git", ["-C", repo, "commit", "-qm", "empty", "--allow-empty"]);
   else {
     spawnSync("git", ["-C", repo, "add", "."]);
-    const committed = spawnSync("git", ["-C", repo, "commit", "-qm", "answers"], { encoding: "utf8" });
+    const committed = spawnSync("git", ["-C", repo, "commit", "-qm", "config"], { encoding: "utf8" });
     assert.equal(committed.status, 0, committed.stderr);
   }
 }
 
-test("CLI reports committed answers and the reconciler as compatible", () => {
+test("CLI reports committed config and the reconciler as compatible", () => {
   const root = mkdtempSync(join(tmpdir(), "dagu-bundle-cli-"));
   try {
     const repo = join(root, "repo");
@@ -34,7 +34,7 @@ test("CLI reports committed answers and the reconciler as compatible", () => {
     const bin = join(root, "bin");
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
-    commitAnswers(repo, serializeAnswers(exampleAnswers({
+    commitConfig(repo, serializeConfig(exampleConfig({
       lane: "fixture", queueConcurrency: 6, gate: "npm test", requiredCheck: "validate",
     })));
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
@@ -47,8 +47,8 @@ test("CLI reports committed answers and the reconciler as compatible", () => {
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(result.stdout, /answers path=\.workspace\/dagu\/answers\.json schema=1 .*lane=fixture .*queue=fixture max_concurrency=6 compat=ok/);
-    assert.match(result.stdout, /answers policy gate="npm test" requiredCheck="validate"/);
+    assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=1 .*lane=fixture .*queue=fixture max_concurrency=6 compat=ok/);
+    assert.match(result.stdout, /config policy gate="npm test" requiredCheck="validate"/);
     assert.match(result.stdout, /reconcile\.yaml path=.* installed=yes/);
     assert.match(result.stdout, /dagu version="2\.24\.0"/);
     assert.doesNotMatch(result.stdout, /dagu version=.*(?:required=|compat=)/);
@@ -57,7 +57,7 @@ test("CLI reports committed answers and the reconciler as compatible", () => {
   }
 });
 
-test("CLI exits nonzero when committed answers are missing", () => {
+test("CLI exits nonzero when committed config is missing", () => {
   const root = mkdtempSync(join(tmpdir(), "dagu-bundle-cli-"));
   try {
     const repo = join(root, "repo");
@@ -65,7 +65,7 @@ test("CLI exits nonzero when committed answers are missing", () => {
     const bin = join(root, "bin");
     mkdirSync(join(daguHome, "dags"), { recursive: true });
     mkdirSync(bin);
-    commitAnswers(repo);
+    commitConfig(repo);
     writeFileSync(join(daguHome, "dags", "reconcile.yaml"), "steps:\n  - run: true\n");
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, "#!/bin/sh\nprintf '2.24.0\\n'\n");
@@ -76,7 +76,7 @@ test("CLI exits nonzero when committed answers are missing", () => {
     });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /compat=invalid/);
-    assert.match(result.stdout, /missing committed answers file/);
+    assert.match(result.stdout, /missing committed config file/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -118,13 +118,13 @@ test("admission rejects an unserved lifecycle protocol before Dagu creates a run
   } finally { fixture.dispose(); }
 });
 
-test("admission admits a package release when the answers file is unchanged", liveDagu, () => {
+test("admission admits a package release when the config file is unchanged", liveDagu, () => {
   for (const version of ["0.3.2", "0.4.0"]) {
     const fixture = admissionFixture();
     try {
-      const before = fixture.command("admit", "answers-before");
+      const before = fixture.command("admit", "config-before");
       assert.equal(before.status, 0, before.stderr);
-      const digest = JSON.parse(readFileSync(fixture.receipt("answers-before"), "utf8")).initial.deployment.answers.digest;
+      const digest = JSON.parse(readFileSync(fixture.receipt("config-before"), "utf8")).initial.deployment.config.digest;
       const manifestPath = join(fixture.packageDir, "package.json");
       writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(readFileSync(manifestPath, "utf8")), version }));
       spawnSync("git", ["-C", fixture.packageDir, "commit", "-qam", `package ${version}`], { encoding: "utf8" });
@@ -133,7 +133,7 @@ test("admission admits a package release when the answers file is unchanged", li
       assert.equal(result.status, 0, result.stderr);
       const receipt = JSON.parse(readFileSync(fixture.receipt(run), "utf8"));
       assert.equal(receipt.initial.deployment.installedDAG.version, version);
-      assert.equal(receipt.initial.deployment.answers.digest, digest);
+      assert.equal(receipt.initial.deployment.config.digest, digest);
       assert.equal(receipt.initial.deployment.relationships.compatibility, "installed-template");
     } finally { fixture.dispose(); }
   }

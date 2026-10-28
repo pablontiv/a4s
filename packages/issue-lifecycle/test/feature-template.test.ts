@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { after, test } from "node:test";
 import { Transitions } from "../src/status/progress.ts";
 import type { RunDetails } from "../src/status/progress.ts";
-import { readAnswersFile } from "../src/answers.ts";
+import { readConfigFile } from "../src/config.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import { materializeDag } from "../src/materialize.ts";
 import { stubHistory, withResourceGuard } from "./resource-fixtures.ts";
@@ -2843,7 +2843,7 @@ await dispatchStage("implement",(name,value)=>require("node:fs").appendFileSync(
 test("adopted policy rejects run overrides before repository writes and admits operational inputs", liveDagu, async () => {
   const repo = repository();
   const home = join(repo.root, "dagu-home");
-  const stage = join(repo.root, "staged", "answers.json");
+  const stage = join(repo.root, "staged", "config.json");
   const packageDir = fileURLToPath(new URL("../", import.meta.url));
   const skillDir = fileURLToPath(new URL("../skills/issue-execution/", import.meta.url));
   const listener = createServer();
@@ -2894,9 +2894,9 @@ test("adopted policy rejects run overrides before repository writes and admits o
     assert.ok(ready, `isolated Dagu API ready\n${serviceLog}`);
     const rendered = spawnSync("bash", ["-c", extractScript(join(skillDir, "dagu-feature-bootstrap.yaml"), "  - id: render")], { encoding: "utf8", env });
     assert.equal(rendered.status, 0, rendered.stdout + rendered.stderr);
-    const answers = readAnswersFile(stage);
+    const config = readConfigFile(stage);
     for (const name of ["feature.yaml", "poc.yaml"] as const) {
-      writeFileSync(join(repo.root, "staged", name), materializeDag(packageDir, name, answers, { version: BUNDLE_VERSION, source: `fixture/repo@${"1".repeat(40)}` }));
+      writeFileSync(join(repo.root, "staged", name), materializeDag(packageDir, name, config, { version: BUNDLE_VERSION, source: `fixture/repo@${"1".repeat(40)}` }));
     }
     for (const name of ["feature", "poc"]) {
       const definition = join(repo.root, "staged", `${name}.yaml`);

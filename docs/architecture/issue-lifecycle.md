@@ -15,11 +15,11 @@ Spike #692 compared Harness² with these loops and discarded adoption; see
 
 Distributed templates live together with `SKILL.md` under
 `packages/issue-lifecycle/skills/issue-execution/`. The consumer versions one
-answers file at `.workspace/dagu/answers.json`. Its schema version is independent
+config file at `.workspace/dagu/config.json`. Its schema version is independent
 of the package version. Admission reads that committed file and materializes the
 requested DAG from the station's installed templates. The scheduled reconciler is
 installed separately at `$DAGU_HOME/dags/reconcile.yaml`. A package release that
-does not change answers requires no consumer commit. Feature and PoC `PRIMARY`
+does not change config requires no consumer commit. Feature and PoC `PRIMARY`
 in the materialized DAG is the host reference `"${A4S_PRIMARY}"`. Admission
 resolves it from `$DAGU_HOME/primaries/<lane>`, then `A4S_PRIMARY`, then
 `$DAGU_HOME/a4s-primary`, and the per-run snapshot records that absolute checkout.
@@ -28,7 +28,7 @@ Existing runs retain their admitted snapshots and receipt identities.
 Bootstrap requires a clean source package, fetches its origin, resolves
 `origin/HEAD`, verifies source HEAD ancestry and observes `dagu version`, and checks
 that PRIMARY is an independent clone rather than a linked worktree. It writes
-`.workspace/dagu/answers.json` in PRIMARY. Its `reconcile` step installs the
+`.workspace/dagu/config.json` in PRIMARY. Its `reconcile` step installs the
 user-level reconciler from the installed template; `github` can change repository
 merge settings and branch protection. These are authorized deployment actions,
 not read-only smoke commands.
@@ -39,13 +39,19 @@ Status notices still classify the generated snapshot's `dagu-feature-bundle`
 label by version distance (equal major and minor, patch allowed). That display
 is not admission. Admission materializes the installed template and compares the
 inferred `triage`, `implement` and `publication` protocol ids with the contracts
-the loaded extension serves. The inspection CLI reports the committed answers
+the loaded extension serves. The inspection CLI reports the committed config
 file, queue compatibility and exact runtime output; it does not prove enqueue.
 
+New receipts use schema 2, `deployment.config`, `installedDAG.configDigest` and
+`materialized-from-config`; committed config remains schema 1. Receipt readers
+support schemas 1 and 2 so existing runs retain their immutable snapshots and
+executor identity. Unsupported receipt versions fail before effects, without
+upgrading historical receipts or reading the retired consumer path.
+
 [`src/admission.ts`](../../packages/issue-lifecycle/src/admission.ts) reads the
-answers file from the consumer's committed revision, rejects unknown fields and
+config file from the consumer's committed revision, rejects unknown fields and
 run-time policy overrides, resolves PRIMARY, and writes the immutable per-run
-snapshot and receipt. The receipt records the answers digest, package
+snapshot and receipt. The receipt records the config digest, package
 version/commit, template identity, Dagu runtime and generated DAG digest. A
 corrupt installed template fails before run creation and names the protocol plus
 the bundle version that serves it. Installed package version equals the loaded

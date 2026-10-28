@@ -25,7 +25,7 @@ Convert the goal into 3–5 checks. Each check is one command with an expected r
 
 | Check | Command | Expected |
 |---|---|---|
-| Admission | `dagu-feature-bundle admit --run-id <probe> feature -- ISSUE=<n>` in each repo with a committed answers file, then delete the probe receipt | exit 0 |
+| Admission | `dagu-feature-bundle admit --run-id <probe> feature -- ISSUE=<n>` in each repo with a committed config file, then delete the probe receipt | exit 0 |
 | Reconciler | `dagu history reconcile --format json --limit 5` | all `succeeded` |
 | Station | owner `OMP_SESSION_ID` of every `waiting`/`queued` run | a live session owns each run |
 | CI | `gh run list --branch main --limit 1` | `success` |

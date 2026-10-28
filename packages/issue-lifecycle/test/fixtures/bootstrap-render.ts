@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { exampleAnswers } from "../../src/answers.ts";
+import { exampleConfig } from "../../src/config.ts";
 import { materializeDag, type LifecycleDag } from "../../src/materialize.ts";
 
 const dags: LifecycleDag[] = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"];
 
-/** Test helper: materialize installed templates with fixture answers. Bootstrap itself writes the answers file. */
+/** Test helper: materialize installed templates with fixture config. Bootstrap itself writes the config file. */
 export function bootstrapRender(options: {
   packageDir: string;
   directory: string;
@@ -17,7 +17,7 @@ export function bootstrapRender(options: {
 }): void {
   mkdirSync(options.directory, { recursive: true });
   const requested = Number(process.env.QUEUE_CONCURRENCY ?? 1);
-  const answers = exampleAnswers({
+  const config = exampleConfig({
     lane: "fixture",
     baseBranch: "main",
     queueConcurrency: Number.isSafeInteger(requested) && requested > 0 ? requested : 1,
@@ -30,5 +30,5 @@ export function bootstrapRender(options: {
     ...(options.codeScanning === "off" ? { codeScanning: "off" as const } : {}),
   });
   const identity = { version: options.version, source: `${options.sourceNwo}@${options.sourceSha}` };
-  for (const name of dags) writeFileSync(join(options.directory, name), materializeDag(options.packageDir, name, answers, identity));
+  for (const name of dags) writeFileSync(join(options.directory, name), materializeDag(options.packageDir, name, config, identity));
 }

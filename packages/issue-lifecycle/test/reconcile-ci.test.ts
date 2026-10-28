@@ -667,7 +667,7 @@ test("off code scanning admits and reaches the close success contract when the A
   const admitted = admissionFixture();
   const f = fixture("code-scanning-off-403");
   try {
-    admitted.writeAnswers({ codeScanning: "off" });
+    admitted.writeConfig({ codeScanning: "off" });
     const bin = join(admitted.root, "dagu-bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "dagu"), `#!/bin/sh\nif [ "$1" = version ]; then printf '%s\\n' '2.24.0'; exit 0; fi\nprintf 'unexpected dagu %s\\n' "$*" >&2\nexit 1\n`);

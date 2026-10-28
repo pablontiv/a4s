@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync,
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { isMap, isSeq, parseDocument } from "yaml";
-import { readAnswersFile, type LifecycleAnswers } from "./answers.ts";
+import { readConfigFile, type LifecycleConfig } from "./config.ts";
 
 export interface RepoQueue { name: string; max_concurrency: number }
 
@@ -22,21 +22,21 @@ function optionalRead(path: string): string | undefined {
   }
 }
 
-export function answersQueue(answers: LifecycleAnswers): RepoQueue {
-  return { name: answers.lane, max_concurrency: answers.queueConcurrency };
+export function configQueue(config: LifecycleConfig): RepoQueue {
+  return { name: config.lane, max_concurrency: config.queueConcurrency };
 }
 
-export function queueFromAnswersFile(path: string): RepoQueue {
-  return answersQueue(readAnswersFile(path));
+export function queueFromConfigFile(path: string): RepoQueue {
+  return configQueue(readConfigFile(path));
 }
 
 export function currentQueueConcurrency(paths: string[]): number {
   const queues: RepoQueue[] = [];
   for (const path of paths) {
     if (optionalRead(path) === undefined) continue;
-    queues.push(queueFromAnswersFile(path));
+    queues.push(queueFromConfigFile(path));
   }
-  if (new Set(queues.map(queue => `${queue.name}:${queue.max_concurrency}`)).size > 1) throw new Error("Answers files disagree on queue concurrency; commit one lane policy before bootstrap");
+  if (new Set(queues.map(queue => `${queue.name}:${queue.max_concurrency}`)).size > 1) throw new Error("Config files disagree on queue concurrency; commit one lane policy before bootstrap");
   return queues[0]?.max_concurrency ?? 1;
 }
 
