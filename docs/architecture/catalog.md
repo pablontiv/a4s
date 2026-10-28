@@ -82,6 +82,8 @@ native skill root, or configure `skills.customDirectories`; see
 Spike #693 compared 1Password for Agents with operator-owned credentials and
 discarded product adoption and a secret-injection skill; see
 [1Password Agents](onepassword-agents.md).
+Spike #694 compared LayerFS workspaces with Dagu issue worktrees and discarded
+adoption; see [LayerFS and worktrees](layerfs-worktrees.md).
 
 ### Conditional #311 ingestion
 

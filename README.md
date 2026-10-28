@@ -30,6 +30,8 @@ workspaces, not public npm publication.
   spike #692 decision, descartar.
 - [1Password Agents](docs/architecture/onepassword-agents.md):
   spike #693 decision, descartar.
+- [LayerFS and git worktrees](docs/architecture/layerfs-worktrees.md):
+  spike #694 decision, descartar.
 
 ## Delivered components
 
