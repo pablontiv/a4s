@@ -1,0 +1,41 @@
+{
+  "mantisRevision": "f3162c039ecd9c9d5d8bc404dd1373c7ca3152f7",
+  "citations": [
+    {
+      "path": "docs/architecture/issue-lifecycle.md",
+      "includes": "sandbox shell expansion, external scripts, dynamic commands or other tools."
+    },
+    {
+      "path": "docs/architecture/issue-lifecycle.md",
+      "includes": "TUI access to Git and the Dagu store makes the boundary advisory."
+    },
+    {
+      "path": "docs/operations/deployment.md",
+      "includes": "not process or OS isolation."
+    },
+    {
+      "path": "docs/operations/v1-walkthrough.md",
+      "includes": "the assignment, not an enforced sandbox, constrained"
+    },
+    {
+      "path": "apps/message-bus/README.md",
+      "includes": "the checks are not a filesystem sandbox."
+    },
+    {
+      "path": "docs/architecture/catalog.md",
+      "includes": "local publishers can impersonate senders."
+    },
+    {
+      "path": "packages/issue-lifecycle/src/resources.ts",
+      "includes": "This is a tool-call guard, not a shell interpreter or an OS isolation boundary."
+    },
+    {
+      "path": "packages/issue-lifecycle/skills/issue-execution/SKILL.md",
+      "includes": "Access to Git and the Dagu store remains advisory, not a sandbox."
+    },
+    {
+      "path": "packages/issue-lifecycle/skills/issue-execution/SKILL.md",
+      "includes": "`dagu human-task` has no authentication."
+    }
+  ]
+}
