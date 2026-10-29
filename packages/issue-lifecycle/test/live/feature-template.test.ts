@@ -302,6 +302,88 @@ function runScript(script: string, repo: Repository, env: NodeJS.ProcessEnv = {}
 }
 
 for (const [name, definition] of definitions) {
+  for (const existing of [false, true]) {
+    test(`${name} repeated yes-triage reuses ${existing ? "a pre-existing" : "a newly enqueued"} PoC before publication`, () => {
+      const root = mkdtempSync(join(tmpdir(), "triage-reuse-"));
+      try {
+        const primary = join(root, "primary");
+        const state = join(primary, ".git", "dagu-feature", "runs", "repeat-triage");
+        const bin = join(root, "bin");
+        const calls = join(root, "calls");
+        const child = join(root, "child");
+        mkdirSync(state, { recursive: true });
+        mkdirSync(bin);
+        git(root, "init", primary);
+        writeFileSync(join(state, "dependencies"), "reviewed dependencies\n");
+        writeFileSync(calls, "");
+        if (existing) writeFileSync(child, "failed\n");
+        const stub = (command: string, script: string) =>
+          writeFileSync(join(bin, command), `#!/usr/bin/env bash\nset -euo pipefail\n${script}\n`, { mode: 0o755 });
+        stub("dagu", `[[ "$*" == 'status --run-id poc-repeat-triage poc' ]]
+printf 'status\\n' >> "$CALLS"
+test -f "$CHILD"`);
+        stub("a4s", `[[ "$1" == enqueue && "$4" == --run-id && "$5" == poc-repeat-triage ]]
+[[ ! -f "$CHILD" ]]
+printf 'enqueue\\n' >> "$CALLS"
+printf 'queued\\n' > "$CHILD"`);
+        stub("gh", `[[ "$PWD" == "$PRIMARY" ]]
+[[ "$*" == "issue comment 295 --body-file $STATE/triage.md" ]]
+[[ -f "$CHILD" ]]
+printf 'comment\\n' >> "$CALLS"
+cp "$STATE/triage.md" "$PUBLISHED"`);
+        const env = {
+          ...process.env, PRIMARY: primary, STATE: state, RUN: "repeat-triage", ISSUE: "295",
+          PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), POC: "yes",
+          TEST_PATH: `${bin}:${process.env.PATH}`,
+          QUESTION: "Can this runtime work?", BASIS: "Unexercised runtime", REVIEW: "review",
+          OMP_SESSION_ID: "parent", REQUIRED_TARGETS: "[]", AUTHORIZED_TARGETS: "[]",
+          SCOPE_BASIS: "authorized", SCOPE_REQUEST: "request", CALLS: calls, CHILD: child,
+          PUBLISHED: join(root, "published"),
+        };
+        const run = (step: string) => {
+          const result = spawnSync("bash", ["-c", `export PATH="$TEST_PATH"\n${extractScript(definition, `  - id: ${step}`)}`], { env, encoding: "utf8" });
+          assert.equal(result.status, 0, result.stdout + result.stderr);
+        };
+        for (let iteration = 0; iteration < 2; iteration++) {
+          run("triage_decision");
+          assert.equal(readFileSync(calls, "utf8").split("comment\n").length - 1, iteration);
+          run("poc_admit");
+        }
+        assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"),
+          existing ? ["status", "comment", "status", "comment"] : ["status", "enqueue", "comment", "status", "comment"]);
+        assert.equal(readFileSync(child, "utf8"), existing ? "failed\n" : "queued\n");
+        assert.match(readFileSync(env.PUBLISHED, "utf8"), /<!-- poc-triage:yes run:repeat-triage -->/);
+        assert.equal(readFileSync(join(state, "reviewed-dependencies"), "utf8"), "reviewed dependencies\n");
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+  }
+  test(`${name} failed PoC enqueue leaves no yes-triage comment`, () => {
+    const root = mkdtempSync(join(tmpdir(), "triage-enqueue-failure-"));
+    try {
+      const state = join(root, ".git", "dagu-feature", "runs", "failed-triage");
+      const bin = join(root, "bin");
+      mkdirSync(state, { recursive: true });
+      mkdirSync(bin);
+      git(root, "init");
+      for (const [command, script] of [
+        ["dagu", "exit 1"], ["a4s", "exit 42"], ["gh", 'touch "$PUBLISHED"'],
+      ]) writeFileSync(join(bin, command!), `#!/usr/bin/env bash\n${script}\n`, { mode: 0o755 });
+      const env = {
+        ...process.env, PRIMARY: root, RUN: "failed-triage", ISSUE: "295",
+        PATH: `${bin}:${process.env.PATH}`, A4S_BIN: join(bin, "a4s"), POC: "yes",
+        TEST_PATH: `${bin}:${process.env.PATH}`,
+        QUESTION: "Runtime question", BASIS: "Unexercised runtime", REVIEW: "review",
+        OMP_SESSION_ID: "parent", REQUIRED_TARGETS: "[]", AUTHORIZED_TARGETS: "[]",
+        SCOPE_BASIS: "authorized", SCOPE_REQUEST: "request", PUBLISHED: join(root, "published"),
+      };
+      const decision = spawnSync("bash", ["-c", `export PATH="$TEST_PATH"\n${extractScript(definition, "  - id: triage_decision")}`], { env, encoding: "utf8" });
+      assert.equal(decision.status, 0, decision.stdout + decision.stderr);
+      assert.equal(existsSync(env.PUBLISHED), false);
+      const admission = spawnSync("bash", ["-c", `export PATH="$TEST_PATH"\n${extractScript(definition, "  - id: poc_admit")}`], { env, encoding: "utf8" });
+      assert.equal(admission.status, 42, admission.stdout + admission.stderr);
+      assert.equal(existsSync(env.PUBLISHED), false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test(`${name} PR publication creates and refreshes concise run-populated bodies`, () => {
     const repo = repository();
     try {
@@ -508,8 +590,8 @@ test("template isolated PoC parent succeeds after exactly one child enqueue acro
     const bin = join(repo.root, "bin");
     const calls = join(repo.root, "external-calls");
     writeFileSync(calls, "");
-    writeFileSync(join(bin, "gh"), `#!/bin/bash\nprintf '%s\\n' "gh $*" >> ${JSON.stringify(calls)}\n`);
-    writeFileSync(join(bin, "a4s-routing"), `#!/bin/bash
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\nprintf '%s\\n' "gh $*" >> ${JSON.stringify(calls)}\n`);
+    writeFileSync(join(bin, "a4s-routing"), `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" != enqueue ]]; then exec ${JSON.stringify(a4sBin)} "$@"; fi
 arguments="$*"
@@ -554,8 +636,8 @@ printf '%s\\n' "a4s $arguments" >> ${JSON.stringify(calls)}
     assert.deepEqual(request.input, { issue: "189", question: "runtime behavior", requiredTargets: ["linux-arm64"],
       authorizedTargets: ["linux-arm64"], basis: "regression test authorized linux-arm64" });
     assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
-      `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", run, "triage.md")}`,
       `a4s enqueue --parent ${join(repo.primary, ".git", "dagu-feature", "runs", run, "receipt.json")} --run-id poc-${run} ${repo.primary}/.workspace/dagu/dags/poc.yaml -- ISSUE=189 QUESTION=runtime behavior OMP_SESSION_ID=parent-id REQUIRED_TARGETS=["linux-arm64"] AUTHORIZED_TARGETS=["linux-arm64"] SCOPE_BASIS=regression test authorized linux-arm64 SCOPE_REQUEST=${request.id}`,
+      `gh issue comment 189 --body-file ${join(repo.primary, ".git", "dagu-feature", "runs", run, "triage.md")}`,
     ]);
   } finally { rmSync(repo.root, { recursive: true, force: true }); }
 });

@@ -259,8 +259,11 @@ steps:
         printf '<!-- poc-triage:%s run:%s -->\n\n' "$POC" "$RUN"
         printf '## Pregunta\n\n%s\n\n## BASIS\n\n%s\n\n## REVIEW\n\n%s\n' "$QUESTION" "$BASIS" "${REVIEW:-}"
       } > "$STATE/triage.md"
-      cd "$PRIMARY"
-      gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
+      # A yes decision is published only after PoC admission succeeds.
+      if [[ "$POC" == no ]]; then
+        cd "$PRIMARY"
+        gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
+      fi
 
   - id: detect_start_primary
     depends: triage_decision
@@ -413,11 +416,16 @@ steps:
       - SCOPE_REQUEST: ${steps.poc_scope_prepare.outputs.SCOPE_REQUEST}
     run: |
       set -euo pipefail
-      parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
-      "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-        ISSUE="$ISSUE" QUESTION="$QUESTION" OMP_SESSION_ID="$OMP_SESSION_ID" \
-        REQUIRED_TARGETS="$REQUIRED_TARGETS" AUTHORIZED_TARGETS="$AUTHORIZED_TARGETS" \
-        SCOPE_BASIS="$SCOPE_BASIS" SCOPE_REQUEST="$SCOPE_REQUEST"
+      if ! dagu status --run-id "poc-$RUN" poc >/dev/null 2>&1; then
+        parent_receipt=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN/receipt.json")
+        "$A4S_BIN" enqueue --parent "$parent_receipt" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+          ISSUE="$ISSUE" QUESTION="$QUESTION" OMP_SESSION_ID="$OMP_SESSION_ID" \
+          REQUIRED_TARGETS="$REQUIRED_TARGETS" AUTHORIZED_TARGETS="$AUTHORIZED_TARGETS" \
+          SCOPE_BASIS="$SCOPE_BASIS" SCOPE_REQUEST="$SCOPE_REQUEST"
+      fi
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      cd "$PRIMARY"
+      gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
 
 
   - id: start_gate
