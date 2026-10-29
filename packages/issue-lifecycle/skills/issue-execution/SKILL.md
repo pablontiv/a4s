@@ -802,10 +802,14 @@ Every emitted report contains all four sections; a section with no entries says 
 
 ## Triage
 
-`triage` automatically runs the registered `triage-reviewer` against the issue
-body and comments. A PoC is required when implementation depends on unexercised
-external/runtime behavior that could change the implementation path; reuse of
-demonstrated behavior proceeds directly. Bug reproduction is defect investigation.
+`triage` automatically runs the registered, tool-less `triage-reviewer`. The
+dispatcher fetches `gh issue view <issue> --json title,body,comments` and embeds
+the complete JSON in `assignment.json`: title, body and every returned comment.
+Coordinators must not compose reviewer assignments or substitute commands, file
+paths, comment URLs or unfilled placeholders for that content. A PoC is required
+when implementation depends on unexercised external/runtime behavior that could
+change the implementation path; reuse of demonstrated behavior proceeds directly.
+Bug reproduction is defect investigation.
 The native structured result supplies `POC`, `QUESTION`, `BASIS` and `REVIEW`
 (the role-job id). Before the `POC=no` publication, `triage_decision` verifies
 the bound completed receipt, native session/model event, sealed transcript
@@ -832,6 +836,31 @@ fields as `TRIAGE_REVIEW_INVALID: field=... expected=... observed=...`.
 The job id seals repository, run, SHA, iteration and native step attempt.
 This current authorized job receipt replaces coordinator-task parent/session
 namespace correlation; dependency rewinds and retries receive fresh identities.
+
+### Native triage adoption and acceptance
+
+A legacy consumer whose `triage` is `action: human.task` needs the current
+[bootstrap adoption](#adopt-in-a-repository), not a hand-composed reviewer call.
+Current releases commit consumer policy and materialize a command stage invoking
+`"$A4S_BIN" role-jobs stage triage` at admission (the former bundle command was
+`dagu-role-jobs stage triage`). Do not copy templates or rewrite an admitted
+snapshot to convert an existing run. Adoption and any existing-run recovery stay
+with that repository's operator.
+
+For one real feature triage per adopted repository, retain the role-job
+`assignment.json`, `native-result.json`, `result.json` and native transcript.
+Compare the embedded title/body/comments with the issue content at dispatch;
+comments posted after dispatch are not missing input. Record the comment count;
+an empty array does not exercise delivery of non-empty comments. Require a
+completed receipt, native `aborted=false`, a valid structured
+`poc/behavior/question/reason` decision and the matching transcript result.
+Synthetic assignment tests are not evidence of a real role execution.
+
+One week after migration, run
+`python3 skills/model-routing-audit/scripts/role_scorecard.py --days 7` on the
+station retaining those transcripts. Inspect any `triage-reviewer` aborts for
+missing scope; unavailable transcripts or an empty sample do not establish zero
+missing-scope aborts. Retain the report privately with the migration evidence.
 
 ## Recover a checkpoint after native stale-process repair
 
