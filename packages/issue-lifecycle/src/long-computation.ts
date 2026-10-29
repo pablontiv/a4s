@@ -1,10 +1,11 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { setTimeout as delay } from "node:timers/promises";
 import { atomicJson } from "./role-jobs.ts";
 import { spawnEngine } from "./executable.ts";
+import { processMatches, processStart } from "./process-identity.ts";
 
 export const LONG_COMPUTATION_CONTRACT = [
   "Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.",
@@ -481,12 +482,6 @@ export async function superviseRunComputations(options: ComputationClock & {
   }
 }
 
-function processStart(pid: number): string | undefined {
-  try {
-    const started = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return started || undefined;
-  } catch { return undefined; }
-}
 interface WorkerIdentity { schemaVersion: 1; pid: number; processStartedAt: string }
 function readWorker(directory: string): WorkerIdentity | undefined {
   const path = join(directory, "worker.json");
@@ -499,11 +494,11 @@ function readWorker(directory: string): WorkerIdentity | undefined {
 }
 export function workerAlive(directory: string): boolean {
   const worker = readWorker(directory);
-  return worker !== undefined && processStart(worker.pid) === worker.processStartedAt;
+  return worker !== undefined && processMatches(worker.pid, worker.processStartedAt);
 }
 export function stopWorker(directory: string): void {
   const worker = readWorker(directory);
-  if (!worker || processStart(worker.pid) !== worker.processStartedAt) return;
+  if (!worker || !processMatches(worker.pid, worker.processStartedAt)) return;
   try { process.kill(worker.pid, "SIGTERM"); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
