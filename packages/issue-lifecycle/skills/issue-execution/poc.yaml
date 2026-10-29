@@ -273,6 +273,9 @@ steps:
         TEST_PATHS=${TEST_PATHS} belongs to implementation cutover, not this PoC diff.
         INCONCLUSIVE also requires ## Inconclusive cause containing exactly scope, access, or other.
         An empty diff is valid. Complete only after recording observed evidence.
+        Results become public issue comments: use repository-relative paths or placeholders
+        (<primary>, <worktree>, ~, $DAGU_HOME) in prose and commands; retain raw
+        host-specific commands/results only in run artifacts and identify placeholder substitutions.
         Long computation contract: before a long computation, run a bounded representative sample and record measured throughput and the projected duration.
         Run the full computation as a background job with durable shard checkpoints under the run evidence directory (<git-dir>/dagu-feature/runs/<run>/computations/<id>/, or <git-dir>/poc/runs/<run>/computations/<id>/ for run_poc).
         Each shard records its index, range and completion time.
@@ -413,6 +416,10 @@ steps:
       if [[ -f "$STATE/result.path" && -f "$(cat "$STATE/result.path")" ]]; then
         cp "$(cat "$STATE/result.path")" "$STATE/result.md"
       fi
+      # Keep raw evidence intact; only public copies replace known host roots.
+      if [[ -f "$STATE/result.md" ]]; then
+        "$A4S_BIN" pr-body redact-paths "$STATE/result.md" "$PRIMARY" "$WORKTREE" > "$STATE/result-public.md"
+      fi
       VERDICT=$(head -n 1 "$STATE/result.md" 2>/dev/null | tr -d '\r' | cut -d ' ' -f 2 || true)
       case "$VERDICT" in PASS|FAIL|INCONCLUSIVE) ;; *) VERDICT=ORCHESTRATION_FAILURE ;; esac
       printf '%s\n' "$VERDICT" > "$STATE/verdict"
@@ -430,7 +437,7 @@ steps:
       shasum -a 256 "$STATE/full.patch" | awk '{print $1}' > "$STATE/full.patch.sha256"
       {
         printf '<!-- poc-verdict:%s scope:%s run:%s attempt:%s base:%s -->\n\n' "$VERDICT" "$SCOPE" "$RUN" "$ATTEMPT" "$BASE_SHA"
-        if [[ -f "$STATE/result.md" ]]; then cat "$STATE/result.md"; else printf 'Orchestration failure before a capacity verdict.\n'; fi
+        if [[ -f "$STATE/result.md" ]]; then cat "$STATE/result-public.md"; else printf 'Orchestration failure before a capacity verdict.\n'; fi
         printf '\n## Diffstat\n\n```text\n'
         cat "$STATE/diffstat"
         printf '\n```\n\n'
@@ -440,7 +447,8 @@ steps:
         printf '<details>\n<summary>Parche de la PoC</summary>\n\n```diff\n'
         cat "$STATE/full.patch"
         printf '\n```\n</details>\n'
-      } > "$STATE/comment-$ATTEMPT.txt"
+      } > "$STATE/comment-$ATTEMPT.raw.txt"
+      "$A4S_BIN" pr-body redact-paths "$STATE/comment-$ATTEMPT.raw.txt" "$PRIMARY" "$WORKTREE" > "$STATE/comment-$ATTEMPT.txt"
       "$A4S_BIN" pr-body check-paths "$STATE/comment-$ATTEMPT.txt"
       if ! URL=$(gh issue comment "$ISSUE" --repo "$REPO" --body-file "$STATE/comment-$ATTEMPT.txt" 2> "$STATE/publish.err"); then
         grep -Ei 'too long|maximum.*characters|body.*large' "$STATE/publish.err"
@@ -465,7 +473,7 @@ steps:
       printf '%s\n' "$URL" > "$STATE/comment.url"
       if [[ "$VERDICT" == PASS && "$SCOPE" == OK ]]; then
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/body.json"
-        jq -er -L "$STATE" --rawfile result "$STATE/result.md" '
+        jq -er -L "$STATE" --rawfile result "$STATE/result-public.md" '
           include "sections";
           ($result|section("## Después del PASS")) as $after |
           if ($after|norm|length) > 0 then .body + "\n\n## Después del PASS\n" + $after

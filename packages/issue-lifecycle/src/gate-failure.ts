@@ -4,6 +4,7 @@ import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 import type { JobBinding } from "./role-jobs.ts";
 import { isRecord } from "./type-guard.ts";
+import { redactRoots } from "./host-paths.ts";
 
 export interface GateFailureEvidence {
   run: string;
@@ -32,19 +33,11 @@ type Diagnostic = Pick<GateFailureEvidence, "diagnostic" | "diagnosticTruncated"
 
 function carriedText(value: string, binding: JobBinding): string {
   // Newlines are the only control characters retained in carried diagnostics.
-  let text = stripVTControlCharacters(value).replace(/[\p{Cc}\p{Cf}]/gu, character => character === "\n" ? character : "");
-  const roots = [[binding.worktree, "<worktree>"], [binding.repo, "<repo>"]] as const;
-  for (const [root, placeholder] of [...roots].sort((a, b) => b[0].length - a[0].length)) {
-    if (!root) continue;
-    const source = text;
-    text = source.replaceAll(root, (_match, offset: number) => {
-      const next = source[offset + root.length];
-      return next === undefined || /[\/\\\s"'`<>()\[\]{}:;,]/.test(next) ? placeholder : root;
-    });
-  }
+  const text = redactRoots(stripVTControlCharacters(value).replace(/[\p{Cc}\p{Cf}]/gu, character => character === "\n" ? character : ""),
+    [[binding.worktree, "<worktree>"], [binding.repo, "<repo>"]]);
   // Quoted host paths may contain spaces; relative paths after placeholders stay useful.
-  text = text.replace(/(["'`])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\n]*?\1/g, (_match, quote: string) => `${quote}<host-path>${quote}`);
-  return text.replace(/(^|[\s"'`(\[{:;,=])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'`<>()\[\]{}|;,]*/g,
+  const quoted = text.replace(/(["'`])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\n]*?\1/g, (_match, quote: string) => `${quote}<host-path>${quote}`);
+  return quoted.replace(/(^|[\s"'`(\[{:;,=])(?:[A-Za-z]:[\\/]|\\\\|\/)[^\s"'`<>()\[\]{}|;,]*/g,
     (_match, prefix: string) => `${prefix}<host-path>`);
 }
 

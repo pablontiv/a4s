@@ -106,17 +106,32 @@ function pocFixture() {
   const pages = join(root, "pages.json");
   const calls = join(root, "calls.jsonl");
   const enqueues = join(root, "enqueue.jsonl");
+  const published = join(root, "published.jsonl");
+  writeFileSync(published, "");
   writeFileSync(calls, "");
   writeFileSync(enqueues, "");
   writeFileSync(pages, "[]");
-  writeFileSync(join(bin, "gh"), `#!/bin/bash
+  writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
 set -euo pipefail
 jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_GH_CALLS"
 case "$1 $2" in
   "repo view") printf 'owner/repo\\n' ;;
   "issue view") cat "$FAKE_ISSUE" ;;
   "api --paginate") cat "$FAKE_PAGES" ;;
-  "issue comment") printf 'https://example.test/comments/9\\n' ;;
+  "issue comment")
+    while (($#)); do
+      if [[ "$1" == --body-file ]]; then
+        if [[ "\${FAKE_LARGE_COMMENT:-}" == yes && "$2" == */comment-*.txt ]]; then
+          printf 'body too large\\n' >&2
+          exit 1
+        fi
+        jq -nc --rawfile body "$2" '$body' >> "$FAKE_PUBLISHED"
+        printf 'https://example.test/comments/9\\n'
+        exit 0
+      fi
+      shift
+    done
+    exit 1 ;;
   "issue edit")
     while (($#)); do
       if [[ "$1" == --body-file ]]; then
@@ -129,7 +144,7 @@ case "$1 $2" in
   *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 1 ;;
 esac
 `);
-  writeFileSync(join(bin, "a4s"), `#!/bin/bash
+  writeFileSync(join(bin, "a4s"), `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$1" == enqueue ]]; then
   jq -nc --args '$ARGS.positional' -- "$@" >> "$FAKE_ENQUEUES"
@@ -144,11 +159,12 @@ fi
     WORKTREE: join(root, "worktree"), RUN: "existing-issue", ISSUE: "41",
     QUESTION: "", BASE_BRANCH: "main", OMP_SESSION_ID: "same-session",
     FAKE_GH_CALLS: calls, FAKE_ISSUE: issue, FAKE_PAGES: pages, FAKE_ENQUEUES: enqueues,
+    FAKE_PUBLISHED: published,
     DAGU_OUTPUT_FILE: join(root, "outputs"),
     PATH: `${bin}:${process.env.PATH ?? ""}`,
   };
   return {
-    root, state, issue, pages, calls, enqueues, primary,
+    root, state, issue, pages, calls, enqueues, primary, published,
     run(id: string, overrides: NodeJS.ProcessEnv = {}) {
       return spawnSync("bash", ["-c", pocScript(id)], { encoding: "utf8", env: { ...env, ...overrides } });
     },
@@ -375,18 +391,75 @@ for (const mode of ["local", "pushed", "unreachable"] as const) {
     } finally { fixture.cleanup(); }
   });
 }
+test("PoC prompt requires public-safe placeholders and retained raw artifacts", () => {
+  const prompt = readFileSync(template, "utf8").split("  - id: run_poc\n")[1]!.split("      form:")[0]!;
+  for (const placeholder of ["<primary>", "<worktree>", "~", "$DAGU_HOME"]) assert.ok(prompt.includes(placeholder));
+  assert.match(prompt, /retain raw/);
+  assert.match(prompt, /identify placeholder substitutions/);
+});
 
-test("PoC publication checks both result prose and patch content before any GitHub mutation", () => {
+for (const mode of ["normal", "failure", "chunked"] as const) {
+  test(`PoC ${mode} publication redacts known roots and preserves raw evidence`, () => {
+    const fixture = cleanupFixture();
+    try {
+      const home = "/home/PoC Operator";
+      const daguHome = `${home}/.dagu`;
+      const evidence = `primary=${fixture.primary}/config\nworktree=${fixture.worktree}/probe\nhome="${home}/notes"\ndagu="${daguHome}/runs"\n`;
+      const raw = `VERDICT: PASS\n## Comandos y salida\n${evidence}\n## Después del PASS\nInspect ${fixture.worktree}/probe.\n`;
+      const input = join(fixture.state, "input.md");
+      writeFileSync(input, raw);
+      fixture.save("result.path", input);
+      fixture.save("scope", "OK\n");
+      writeFileSync(join(fixture.worktree, "probe.txt"), evidence);
+      const result = fixture.run("publish", {
+        WORKTREE: fixture.worktree, HOME: home, DAGU_HOME: daguHome,
+        PUBLICATION_FAILURE: mode === "failure" ? "yes" : "",
+        FAKE_LARGE_COMMENT: mode === "chunked" ? "yes" : "",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(input, "utf8"), raw);
+      assert.equal(readFileSync(join(fixture.state, "result.md"), "utf8"), raw);
+      assert.ok(readFileSync(join(fixture.state, "full.patch"), "utf8").includes(fixture.worktree));
+      const comments: string[] = readFileSync(fixture.published, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      const publicText = comments.join("\n");
+      for (const root of [fixture.primary, fixture.worktree, home, daguHome]) assert.ok(!publicText.includes(root), root);
+      for (const placeholder of ["<primary>/config", "<worktree>/probe", "~/notes", "$DAGU_HOME/runs"]) assert.ok(publicText.includes(placeholder), placeholder);
+      for (const [index, comment] of comments.entries()) {
+        const path = join(fixture.root, `published-${index}.txt`);
+        writeFileSync(path, comment);
+        const checked = spawnSync(a4sBin, ["pr-body", "check-paths", path], { encoding: "utf8" });
+        assert.equal(checked.status, 0, checked.stderr);
+      }
+      if (mode === "chunked") {
+        const chunks = comments.map(comment => { try { return JSON.parse(comment); } catch { return undefined; } })
+          .filter(value => value?.kind === "poc-evidence-base64");
+        assert.ok(chunks.length > 0);
+        const decoded = Buffer.from(chunks.map(chunk => chunk.data).join(""), "base64").toString("utf8");
+        assert.equal(decoded, readFileSync(join(fixture.state, "comment-1.txt"), "utf8"));
+        for (const root of [fixture.primary, fixture.worktree, home, daguHome]) assert.ok(!decoded.includes(root), root);
+      }
+      if (mode !== "failure") {
+        const issue = JSON.parse(readFileSync(fixture.issue, "utf8")).body;
+        assert.ok(issue.includes("Inspect <worktree>/probe."));
+        assert.ok(!issue.includes(fixture.worktree));
+      }
+    } finally { fixture.cleanup(); }
+  });
+}
+
+for (const publicationFailure of ["", "yes"]) {
+test(`PoC publication checks result and patch before GitHub mutation (failure=${publicationFailure || "no"})`, () => {
   const fixture = cleanupFixture();
   try {
     const before = readFileSync(fixture.calls, "utf8");
     for (const [result, patch] of [
       ["VERDICT: FAIL\nEvidence: /Users/example/private/repo\n", "Safe probe\n"],
       ["VERDICT: FAIL\nSafe evidence\n", "Config: /home/example/private/repo\n"],
+      ["VERDICT: FAIL\nEvidence: /home/PoC-Operator-other/private/repo\n", "Safe probe\n"],
     ]) {
       fixture.save("result.md", result!);
       writeFileSync(join(fixture.worktree, "probe.txt"), patch!);
-      const rejected = fixture.run("publish", { WORKTREE: fixture.worktree });
+      const rejected = fixture.run("publish", { WORKTREE: fixture.worktree, HOME: "/home/PoC-Operator", PUBLICATION_FAILURE: publicationFailure });
       assert.equal(rejected.status, 1, rejected.stderr);
       assert.match(rejected.stderr, /host absolute path/);
       assert.equal(readFileSync(fixture.calls, "utf8"), before);
@@ -394,6 +467,7 @@ test("PoC publication checks both result prose and patch content before any GitH
     }
   } finally { fixture.cleanup(); }
 });
+}
 
 for (const outcome of ["PASS", "FAIL", "promote=no"]) {
   test(`PoC cleanup removes published tracked and untracked binary probes after ${outcome}`, () => {
