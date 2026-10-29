@@ -312,26 +312,14 @@ steps:
             jq -s --arg sha "$SHA" '
               [ (.[0][] .check_runs[] | {name, sha: .head_sha, app_id: .app.id, state: (if .status == "completed" then .conclusion | ascii_upcase else "PENDING" end), link: .details_url, id, text: ((.output.title // "") + "\n" + (.output.summary // "") + "\n" + (.output.text // ""))}),
                 (.[1] as $s | $s.statuses[] | {name: .context, sha: $s.sha, state: (.state | ascii_upcase), link: .target_url, id, text: .description}) ]
-              | sort_by(.id) | reverse
             ' "$TMP/runs" "$TMP/statuses" >"$TMP/checks"
-            CLASS=PASS CAUSE="All required checks passed for current head"
-            while IFS= read -r required; do
-              CHECK=$(jq -r .name <<<"$required")
-              app_id=$(jq -r '.app_id // ""' <<<"$required")
-              check=$(jq -c --arg name "$CHECK" --arg sha "$SHA" --arg app "$app_id" '[.[] | select(.name == $name and .sha == $sha and ($app == "" or (.app_id | tostring) == $app))][0] // empty' "$TMP/checks")
-              if [[ -z "$check" ]]; then
-                if jq -e --arg name "$CHECK" --arg sha "$SHA" --arg app "$app_id" '.[] | select(.name == $name and .sha != $sha and ($app == "" or (.app_id | tostring) == $app))' "$TMP/checks" >/dev/null; then
-                  CLASS=STALE_SHA CAUSE="Discarded result for another SHA; reobserve current head"
-                else
-                  CLASS=PENDING CAUSE="Required check $CHECK not published for $SHA"
-                fi
-                break
-              fi
+            "$A4S_BIN" reconcile required-results "$SHA" "$TMP/required" "$TMP/checks" >"$TMP/result"
+            CLASS=$(jq -r .class "$TMP/result")
+            CAUSE=$(jq -r .cause "$TMP/result")
+            CHECK=$(jq -r '.check.name // ""' "$TMP/result")
+            if [[ "$CLASS" == BLOCKED ]]; then
+              check=$(jq -c .check "$TMP/result")
               result=$(jq -r .state <<<"$check")
-              case "$result" in
-                SUCCESS|NEUTRAL|SKIPPED) continue ;;
-                PENDING|QUEUED|IN_PROGRESS|EXPECTED|REQUESTED|WAITING) CLASS=PENDING CAUSE="Required check $CHECK is $result"; break ;;
-              esac
               LOG=$(jq -r '.text // ""' <<<"$check")
               link=$(jq -r '.link // ""' <<<"$check")
               RETRY_RUN=
@@ -361,10 +349,6 @@ steps:
               else
                 CLASS=BLOCKED CAUSE="Unproven cause for $CHECK ($result); inspect $link and resolve permissions, protection or operator action"
               fi
-              break
-            done < <(jq -c 'sort_by([(if .state == "SUCCESS" or .state == "NEUTRAL" or .state == "SKIPPED" then 2 elif .state == "IN_PROGRESS" or .state == "PENDING" or .state == "QUEUED" then 1 else 0 end), .name])[]' "$TMP/required")
-            if [[ "$(jq length "$TMP/required")" == 0 ]]; then
-              CLASS=PENDING CAUSE="Required checks not yet published"
             fi
           fi
           # Observe code scanning independently: CodeQL findings can block a

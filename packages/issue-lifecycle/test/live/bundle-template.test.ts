@@ -355,6 +355,7 @@ test("CI workflow selector executes paginated rename records and the NUL-safe gi
 });
 
 test("CI validate executes the real aggregate and requires all selected job outcomes", () => {
+  assert.equal(ciWorkflow.jobs.validate.if, "${{ !cancelled() }}");
   const root = dirname(dirname(ciScript));
   const aggregate = ciWorkflow.jobs.validate.steps.find((step: { run?: string }) => step.run).run;
   const run = (workspaces: string, changes: string, tests: string,
@@ -363,6 +364,12 @@ test("CI validate executes the real aggregate and requires all selected job outc
       ...process.env, WORKSPACES: workspaces, CHANGES_RESULT: changes, TEST_RESULT: tests,
       PR_BODY_RESULT: prBody, EVENT_NAME: event,
     } });
+  for (const matrix of ["", " \n"]) {
+    const cancelled = run(matrix, "cancelled", "cancelled", "cancelled");
+    assert.equal(cancelled.status, 1);
+    assert.match(cancelled.stderr, /WORKSPACES is empty; the changes job did not publish a workspace matrix/);
+    assert.doesNotMatch(cancelled.stderr, /JSON|Unexpected end/);
+  }
   const dagu = JSON.stringify(ciJobs("@a4s/issue-lifecycle", "@a4s/review-routing"));
   const app = JSON.stringify(ciJobs("@a4s/message-bus"));
   for (const [matrix, tests] of [[dagu, "success"], [app, "success"], ["[]", "skipped"]]) {

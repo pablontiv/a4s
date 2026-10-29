@@ -1750,7 +1750,13 @@ later CI failure or merge conflict select its own static ancestor without
 changing run, branch, worktree or PR. Each tick reobserves `Waiting`, the current
 run-wide push-back iteration (default `0`), PR head SHA and all published required
 checks. Check-runs and legacy statuses are queried through the current commit
-endpoint; conclusions alone do not identify a failure's cause.
+endpoint. Each required check name is classified from its latest matching run
+on that SHA, retaining any required GitHub App binding. Actions workflow run IDs
+take precedence over check IDs because concurrency cancellation can create a
+late aggregate job in an older run; check IDs break ties within one run and
+order legacy statuses/non-Actions checks. Superseded failures, cancellations
+and skips never override the latest outcome. Conclusions alone do not identify
+a failure's cause.
 
 The exact exit-1/stdout CLI response `no required checks reported on the '<branch>' branch`
 is not itself a lookup failure or proof of no protection. Reconciliation independently

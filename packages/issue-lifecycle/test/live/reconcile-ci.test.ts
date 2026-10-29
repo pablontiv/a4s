@@ -330,6 +330,31 @@ function publish(f: Fixture, feature: string, value: string): string {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
+  test("a superseding successful workflow passes despite a later-created cancelled validate job", () => {
+    const f = fixture("superseded776");
+    try {
+      git(f.worktree, "push", "origin", f.branch);
+      const sha = git(f.worktree, "rev-parse", "HEAD");
+      update(f, { auto: false, conclusion: "failure",
+        required: [{ name: "validate", state: "FAILURE" }, { name: "validate", state: "SUCCESS" }],
+        checks: [
+          { id: 200, name: "validate", head_sha: sha, status: "completed", conclusion: "failure",
+            details_url: "https://github.com/example/repo/actions/runs/40871249330/job/200",
+            output: { summary: "Unexpected end of JSON input" } },
+          { id: 100, name: "validate", head_sha: sha, status: "completed", conclusion: "success",
+            details_url: "https://github.com/example/repo/actions/runs/40871252064/job/100" },
+        ] });
+      for (let tick = 0; tick < 2; tick++) {
+        const result = observe(f, reconcile);
+        assert.equal(result.class, "PASS");
+        assert.equal(result.action, "MERGE");
+        assert.equal(result.decisionRequest, undefined);
+      }
+      const calls = readFileSync(f.calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+      assert.ok(calls.every(call => call.args[0] !== "run"), "superseded failures need neither logs nor reruns");
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
   test("a failed aggregate required check is classified from the failed needed jobs of the same run", () => {
     const f = fixture("aggregate546");
     const summary = "changes=success test=success live=failure\nRequired CI jobs did not complete successfully";

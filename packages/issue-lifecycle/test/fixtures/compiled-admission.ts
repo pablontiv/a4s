@@ -18,6 +18,8 @@ export function inProcessAdmissionFixture() {
     if (git("status", "--porcelain", "--", CONFIG_PATH)) git("commit", "-qm", "config");
   };
   git("init", "-b", "main"); git("config", "user.name", "Admission Test"); git("config", "user.email", "admission@example.test");
+  // Background Git maintenance must not change metadata during read-only snapshots.
+  git("config", "maintenance.auto", "false");
   git("remote", "add", "origin", "https://github.com/example/fixture.git"); writeConfig();
   const previous = { DAGU_HOME: process.env.DAGU_HOME, A4S_PRIMARY: process.env.A4S_PRIMARY };
   process.env.DAGU_HOME = home; process.env.A4S_PRIMARY = packageDir;
