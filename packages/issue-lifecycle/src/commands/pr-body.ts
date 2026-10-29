@@ -2,7 +2,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 function checkPaths(body: string): void {
-  if (/\/(?:Users|home)\/[^/\r\n]+\//u.test(body)) {
+  // Match a path start, not a /home component inside /nix/home or a relative path.
+  // Unquoted usernames cannot consume prose whitespace; quoted paths may contain
+  // spaces, but must not cross their closing quote to reach an unrelated slash.
+  const unquoted = /(?:^|[\s=("'`:[{<>])\/(?:Users|home)\/[^/\s"'`<>]+\//u;
+  const quoted = /(?:^|[\s=(:[{<>])(["'`])\/(?:Users|home)\/(?:(?!\1)[^/\r\n])+\//u;
+  if (unquoted.test(body) || quoted.test(body)) {
     throw new Error("Body contains a host absolute path; use repository-relative paths or placeholders. Logs belong in run artifacts.");
   }
 }
