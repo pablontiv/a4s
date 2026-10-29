@@ -1278,7 +1278,7 @@ steps:
         expected: "re:^[1-9][0-9]*$"
     action: human.task
     with:
-      prompt: "gate failed. Inspect the gate logs; push back with the observed run-wide iteration to return to implement and repair the candidate in the same worktree."
+      prompt: "gate failed. The wait handler automatically pushes back with the observed run-wide iteration through implement_budget to repair the candidate in the same worktree; exhausted budgets wait at escalation for an owner decision."
       push_back:
         rewind_to: implement_budget
       form:
@@ -1913,6 +1913,7 @@ handler_on:
       for SPEC in \
         "dependency_review dependency-action dependency-transition.log" \
         "conflict_review conflict-action conflict-transition.log" \
+        "recover_gate - gate-transition.log" \
         "recover_poc_scope - scope-transition.log"; do
         read -r STEP ACTION LOG <<<"$SPEC"
         if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* ]]; then
@@ -1926,7 +1927,7 @@ handler_on:
               if grep -q "^Waiting -" <<<"$STATUS"; then
                 ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
                 transition=0
-                if [[ "$STEP" == recover_poc_scope ]] || [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
+                if [[ "$STEP" == recover_gate || "$STEP" == recover_poc_scope ]] || [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
                   dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}" || transition=$?
                 else
                   dagu human-task complete feature --run-id "$RUN" --step "$STEP" || transition=$?
@@ -1938,6 +1939,7 @@ handler_on:
                     case "$STEP" in
                       dependency_review) RETRY=checkpoint_push ;;
                       conflict_review) RETRY=rebase ;;
+                      recover_gate) RETRY=gate ;;
                       recover_poc_scope) RETRY=poc_scope_prepare ;;
                     esac
                     printf "stale-process repair: run=%s attempt=%s step=%s; recover: dagu retry --run-id %s --step %s --downstream feature\n" "$RUN" "${ATTEMPT:-unknown}" "$STEP" "$RUN" "$RETRY" >&2
