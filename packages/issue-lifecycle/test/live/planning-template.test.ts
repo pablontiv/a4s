@@ -188,6 +188,35 @@ test("typed prerequisites and parent intent retain the exact snapshot through re
   } finally { f.close(); }
 });
 
+test("review generation marker tolerates only the leading native OMP assignment prefix", () => {
+  const f = fixture();
+  try {
+    successful(f.importRows([unit()])); successful(f.run("check_plan"));
+    const marker = readFileSync(join(f.out, "generation"), "utf8").trim();
+    for (const task of [
+      `${marker}\nReview these units.`,
+      `Complete assignment thoroughly:\n\n${marker}\nReview these units.`,
+      ` \ncomplete ASSIGNMENT thoroughly:\t\n\n${marker}\nReview these units.`,
+    ]) {
+      transcript(f, undefined, { marker: task });
+      successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
+    }
+    for (const task of [
+      `Review these units.\n${marker}`,
+      `Complete assignment thoroughly:\n\nReview these units.\n${marker}`,
+      `Review these units.\nComplete assignment thoroughly:\n\n${marker}`,
+      marker.replace("ITERATION=0", "ITERATION=1"),
+      `Complete assignment thoroughly:\n\n${marker.replace(`RUN=${f.env.RUN}`, "RUN=wrong-run")}`,
+      `Complete assignment thoroughly:\n\n${marker} extra`,
+    ]) {
+      transcript(f, undefined, { marker: task });
+      const result = f.run("check_review", { REVIEW: "PlanReviewTest" });
+      assert.notEqual(result.status, 0, task);
+      assert.ok(result.stderr.includes(`generation marker missing from reviewer session_init.task; expected ${marker}`), result.stderr);
+    }
+  } finally { f.close(); }
+});
+
 
 test("review binds parent, generation, agent, cutoff and final structured verdict before publication", () => {
   const f = fixture();

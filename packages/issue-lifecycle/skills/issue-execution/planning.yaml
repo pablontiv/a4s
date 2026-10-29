@@ -178,7 +178,7 @@ steps:
         if ($sessions | length) != 1 or ($inits | length) < 1 then error("ambiguous transcript")
         elif $sessions[0].parentSession != $parent or $inits[0].agent != "plan-reviewer" then error("foreign transcript")
         elif ($inits | all(.agent == $inits[0].agent and .task == $inits[0].task) | not) then error("mixed init identity")
-        elif (($inits[0].task // "") | split("\n")[0]) != $marker then error("generation marker missing from reviewer session_init.task; expected " + $marker)
+        elif (($inits[0].task // "") | sub("^\\s*Complete assignment thoroughly:\\s*"; ""; "i") | split("\n")[0]) != $marker then error("generation marker missing from reviewer session_init.task; expected " + $marker)
         elif ($inits[0].timestamp | epoch) <= ($cutoff | epoch) then error("stale transcript")
         elif ($data | type) != "object" then error("last yield")
         elif ($data.verdict != "accept" and $data.verdict != "revise") or ($data.findings | type) != "array" then error("review schema")
