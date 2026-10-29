@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { approvedPocScope, assessPocScope, decidePocScope, requirePocScope, scopeTargets, type PocScopeDecision, type PocScopeInput } from "../poc-scope.ts";
+import { approvedPocScope, assessPocScope, decidePocScope, pocScopeRequest, pocScopeRejection, PocScopeRejection, recordPocScopeRejection, requirePocScope, scopeTargets, type PocScopeDecision, type PocScopeDecisionInput, type PocScopeInput } from "../poc-scope.ts";
 
 const env = process.env;
 const primary = env.PRIMARY || ".";
@@ -13,6 +13,16 @@ function input(prefix = ""): PocScopeInput {
   return { issue, question: env[`${prefix}QUESTION`] || "", requiredTargets: scopeTargets(JSON.parse(env[`${prefix}REQUIRED_TARGETS`] || "[]")),
     authorizedTargets: scopeTargets(JSON.parse(env[`${prefix}AUTHORIZED_TARGETS`] || "[]")), basis: env[`${prefix}SCOPE_BASIS`] || "" };
 }
+function answer(name: string): string | undefined {
+  const value = env[name];
+  return !value || /^\$\{steps\.[^}]+\}$/.test(value) ? undefined : value;
+}
+function decisionTargets(name: string): string[] | undefined {
+  const value = answer(name);
+  if (value === undefined) return undefined;
+  try { return scopeTargets(JSON.parse(value)); }
+  catch { throw new PocScopeRejection(name, "a JSON string array of nonempty targets", value); }
+}
 export function main(argv: string[]): void {
 try {
   const action = argv[0];
@@ -21,12 +31,18 @@ try {
     emit("SCOPE_DECISION", request.decisionRequired ? "yes" : "no");
     emit("SCOPE_REQUEST", request.id);
     emit("SCOPE_REASON", request.reason);
+    emit("SCOPE_REJECTION", env.RUN ? pocScopeRejection(primary, env.RUN, issue, request.id) : "");
   } else if (action === "decide") {
     const id = env.SCOPE_REQUEST || "";
-    // Native skipped human tasks leave their optional output bindings unresolved.
-    const choice = /^\$\{steps\.[^}]+\}$/.test(env.POC_SCOPE_ACTION || "") ? "" : env.POC_SCOPE_ACTION || "";
+    const request = pocScopeRequest(primary, issue, id);
+    const choice = answer("POC_SCOPE_ACTION");
+    if (!choice && request.decisionRequired) throw new PocScopeRejection("POC_SCOPE_DECISION_REQUIRED", ["narrow", "provide-access", "defer"], null);
     if (choice) {
-      decidePocScope(primary, issue, id, choice as PocScopeDecision["action"], input("POC_"), env.USER || "operator", env.POC_SCOPE_BASIS || "");
+      const value: PocScopeDecisionInput = choice === "defer" ? {} : {
+        issue, question: answer("POC_QUESTION"), requiredTargets: decisionTargets("POC_REQUIRED_TARGETS"),
+        authorizedTargets: decisionTargets("POC_AUTHORIZED_TARGETS"), basis: answer("POC_SCOPE_BASIS"),
+      };
+      decidePocScope(primary, issue, id, choice as PocScopeDecision["action"], value, env.USER || "operator", answer("POC_SCOPE_BASIS") || "");
       if (choice === "defer") process.exit(77);
     }
     const approved = approvedPocScope(primary, issue, id);
@@ -39,6 +55,10 @@ try {
   } else throw new Error("Usage: dagu-poc-scope assess|decide|require");
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  if (argv[0] === "decide" && error instanceof PocScopeRejection) {
+    // Persist before Dagu opens the recovery checkpoint and resets step outputs.
+    if (env.RUN) recordPocScopeRejection(primary, env.RUN, issue, env.SCOPE_REQUEST || "", error);
+    process.exitCode = 23;
+  } else process.exitCode = 1;
 }
 }

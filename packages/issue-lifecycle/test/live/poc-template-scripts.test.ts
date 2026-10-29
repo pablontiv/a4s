@@ -625,9 +625,9 @@ test("scope CLI passes an assessed reachable route and defers an unreachable rou
     const blockedId = /SCOPE_REQUEST=([a-f0-9]{64})/.exec(blocked.stdout)![1]!;
     assert.match(blocked.stdout, /SCOPE_DECISION=yes/);
     const unresolved = run("decide", { ...skippedDecision, SCOPE_REQUEST: blockedId });
-    assert.equal(unresolved.status, 1);
+    assert.equal(unresolved.status, 23);
     assert.match(unresolved.stderr, /POC_SCOPE_DECISION_REQUIRED/);
-    const deferred = run("decide", { SCOPE_REQUEST: blockedId, POC_SCOPE_ACTION: "defer", POC_SCOPE_BASIS: "Operator deferred inaccessible target" });
+    const deferred = run("decide", { ...skippedDecision, SCOPE_REQUEST: blockedId, POC_SCOPE_ACTION: "defer", POC_SCOPE_BASIS: "Operator deferred inaccessible target" });
     assert.equal(deferred.status, 77, deferred.stderr);
     const rejected = run("require", { SCOPE_REQUEST: blockedId, AUTHORIZED_TARGETS: "[]" });
     assert.equal(rejected.status, 1);

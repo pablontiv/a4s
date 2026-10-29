@@ -40,6 +40,19 @@ for (const [name, definition] of definitions) {
     assert.match(extractStep(source, "await_merge"), /rewind_to: rebase/);
     assert.match(extractStep(source, "await_ci"), /rewind_to: implement/);
   });
+  test(`${name} scope rejects rewind only correctable decisions and guard admission`, () => {
+    const source = readFileSync(definition, "utf8");
+    assert.match(extractStep(source, "poc_scope_resolve"), /exit_code: \[23\]/);
+    const recovery = extractStep(source, "recover_poc_scope");
+    assert.match(recovery, /condition: "\$\{poc_scope_resolve.exit_code\}"\n        expected: "23"/);
+    assert.match(recovery, /rewind_to: poc_scope_prepare/);
+    const admit = extractStep(source, "poc_admit");
+    assert.match(admit, /depends: recover_poc_scope_cancellation/);
+    assert.match(admit, /condition: "\$\{poc_scope_resolve.exit_code\}"\n        expected: "0"/);
+    assert.match(extractStep(source, "poc_scope_prepare"), /name: SCOPE_REJECTION/);
+    assert.match(extractStep(source, "poc_scope_decision"), /outputs.SCOPE_REJECTION/);
+    assert.match(source, /"recover_poc_scope - scope-transition.log"/);
+  });
   for (const [step, downstream] of [["start_gate", "implement"], ["gate", "validation"], ["push", "pr"]]) {
     test(`${name} ${step} routes failure through its recovery checkpoint`, () => {
       const source = readFileSync(definition, "utf8");
