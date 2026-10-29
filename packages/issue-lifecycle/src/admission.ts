@@ -16,6 +16,7 @@ import { artifactToken, parseArtifact, releaseRepository, resolveRelease, sameAr
 import { artifactLock, ensureArtifact, inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
 import { withFileLockAsync } from "./file-lock.ts";
+import { stationReadiness } from "./queue.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -35,7 +36,7 @@ function tree(path: string): Record<string, string> {
 }
 export const loadedExtensionDigest = deploymentFingerprint(tree(join(packageRoot, "src")));
 export interface AdmissionOptions {
-  cwd: string; dag: string; run: string; params: string[]; artifact?: string; parent?: string;
+  cwd: string; dag: string; run: string; params: string[]; artifact?: string; parent?: string; check?: boolean;
   session?: { transcriptRoot?: string; model?: unknown; extensionDigest?: string };
 }
 export interface Receipt {
@@ -216,12 +217,16 @@ export function appendObservation(path: string, observation: Omit<Observation, "
 export function enqueueArguments(args: string[], cwd: string): AdmissionOptions {
   const separator = args.indexOf("--");
   const flags = separator < 0 ? args : args.slice(0, separator);
-  let run = ""; let dag = ""; let artifact: string | undefined; let parent: string | undefined;
+  let run = ""; let dag = ""; let artifact: string | undefined; let parent: string | undefined; let check = false;
   const seen = new Set<string>();
   for (let index = 0; index < flags.length; index++) {
     const arg = flags[index]!;
     const key = arg.split("=", 1)[0]!;
-    if (["--run-id", "--artifact", "--parent"].includes(key)) {
+    if (arg === "--check") {
+      if (seen.has(arg)) throw new Error(`Duplicate admission flag ${arg}`);
+      seen.add(arg);
+      check = true;
+    } else if (["--run-id", "--artifact", "--parent"].includes(key)) {
       if (seen.has(key)) throw new Error(`Duplicate admission flag ${key}`);
       seen.add(key);
       const value = arg.includes("=") ? arg.slice(key.length + 1) : flags[++index] || "";
@@ -229,7 +234,7 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
       if (key === "--run-id") run = value;
       else if (key === "--artifact") { parseArtifact(value); artifact = value; }
       else parent = value;
-    } else if (arg.startsWith("-")) throw new Error(`Unsupported admission flag ${arg}; use --run-id <id> [--artifact <tuple> | --parent <receipt>] <DAG> -- PARAM=value`);
+    } else if (arg.startsWith("-")) throw new Error(`Unsupported admission flag ${arg}; use [--check] --run-id <id> [--artifact <tuple> | --parent <receipt>] <DAG> -- PARAM=value`);
     else if (dag) throw new Error("Ambiguous DAG identity; provide exactly one DAG path");
     else dag = arg;
   }
@@ -244,7 +249,8 @@ export function enqueueArguments(args: string[], cwd: string): AdmissionOptions 
     if (!isRecord(value) || (value.transcriptRoot !== undefined && typeof value.transcriptRoot !== "string") || (value.extensionDigest !== undefined && typeof value.extensionDigest !== "string")) throw new Error("Indeterminate loaded session identity");
     session = { ...(typeof value.transcriptRoot === "string" ? { transcriptRoot: value.transcriptRoot } : {}), ...(typeof value.extensionDigest === "string" ? { extensionDigest: value.extensionDigest } : {}), ...(value.model !== undefined ? { model: value.model } : {}) };
   }
-  return { cwd, dag, run, params, ...(artifact ? { artifact } : {}), ...(parent ? { parent } : {}), ...(session ? { session } : {}) };
+  if (check && (artifact || parent)) throw new Error("--check resolves committed uses; --artifact and --parent are not supported");
+  return { cwd, dag, run, params, ...(artifact ? { artifact } : {}), ...(parent ? { parent } : {}), ...(check ? { check } : {}), ...(session ? { session } : {}) };
 }
 /** Root CLI: resolve once, publish/check cache, then replace this process. Child
  * CLI: inherit from the parent receipt, never resolve or download anything. */
@@ -252,6 +258,15 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
   try {
     const options = enqueueArguments(args, cwd);
     const context = preflightAdmission(options);
+    // Planning checks stop before cache publication, handoff, locks, receipts or
+    // Dagu CLI calls. Reuse queue's GET-only station readiness boundary.
+    if (options.check) {
+      const release = resolveRelease(context.committed.config.uses);
+      const report = await stationReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), context.committed.config.lane);
+      console.log(report.checks.join("\n"));
+      console.log(`admissible=${report.ready ? "yes" : "no"} uses=${context.committed.config.uses} artifact=${artifactToken(release)} lane=${context.committed.config.lane}`);
+      return report.ready ? 0 : 1;
+    }
     if (!options.artifact && !options.parent) {
       const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
       const release = resolveRelease(context.committed.config.uses);
@@ -270,7 +285,14 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
       console.log(`receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
       return result.status ?? 1;
     });
-  } catch (error) { throw new Error(`DAGU_ADMISSION_REJECTED: ${error instanceof Error ? error.message : String(error)}`); }
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    if (args.includes("--check")) {
+      console.log(`admissible=no cause=${JSON.stringify(cause)}`);
+      return 1;
+    }
+    throw new Error(`DAGU_ADMISSION_REJECTED: ${cause}`);
+  }
 }
 /** Append runtime facts; initial identities are never recalculated for an old run. */
 export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime", error?: string,

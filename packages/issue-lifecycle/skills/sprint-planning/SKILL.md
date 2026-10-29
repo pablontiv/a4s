@@ -25,12 +25,23 @@ Convert the goal into 3–5 checks. Each check is one command with an expected r
 
 | Check | Command | Expected |
 |---|---|---|
-| Admission | `dagu-feature-bundle admit --run-id <probe> feature -- ISSUE=<n>` in each repo with a committed config file, then delete the probe receipt | exit 0 |
+| Admission | `a4s admit --check --run-id sprint-admission-check feature -- ISSUE=<n> OMP_SESSION_ID=<session>` in each adopted repository | exit 0 and `admissible=yes` |
 | Reconciler | `dagu history reconcile --format json --limit 5` | all `succeeded` |
 | Station | owner `OMP_SESSION_ID` of every `waiting`/`queued` run | a live session owns each run |
 | CI | `gh run list --branch main --limit 1` | `success` |
 
 Run every check and record its output. The operator confirms the checks together with the goal. The `sprint-review` skill re-runs the same checks at the end of the sprint.
+
+For Admission, run from each repository's checkout with the station's `DAGU_HOME`
+and PRIMARY binding (`A4S_PRIMARY` or its existing station path file). Replace
+`<n>` with the issue number and `<session>` with the coordinator's persistent OMP
+session id. Use the installed release's `a4s` executable. `--check` validates
+committed config and resolves its `uses`, then runs the same lane, scheduler and
+service checks as `a4s queue .workspace/dagu/config.json`. It returns exit 1 and
+`admissible=no` with the reason on rejection; a schema-valid config alone is not
+enough. The run id only validates command shape: no run, receipt, cache, issue
+comment, ref movement or working-tree change is created, and nothing needs
+deleting. Never substitute real `admit`/`enqueue` without `--check` for this check.
 
 ### Definition of Done
 

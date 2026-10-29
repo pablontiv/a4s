@@ -1,12 +1,17 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { testRunId } from "../fixtures/run-id.ts";
-import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { admissionFixture } from "../fixtures/admission.ts";
+import { admissionFixture, compiledA4sBin } from "../fixtures/admission.ts";
+import { installGithubFixture, writeReleaseDirectory, repository } from "../fixtures/artifact.ts";
+import { archiveName } from "../../src/release.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 
 import { exampleConfig, serializeConfig } from "../../src/config.ts";
@@ -43,7 +48,7 @@ test("CLI reports committed config and the reconciler as compatible", () => {
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, "#!/bin/sh\nprintf '2.24.0\\n'\n");
     chmodSync(dagu, 0o755);
-    const result = spawnSync(process.execPath, [cli, repo], {
+    const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, repo], {
       encoding: "utf8",
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
@@ -71,7 +76,7 @@ test("CLI exits nonzero when committed config is missing", () => {
     const dagu = join(bin, "dagu");
     writeFileSync(dagu, "#!/bin/sh\nprintf '2.24.0\\n'\n");
     chmodSync(dagu, 0o755);
-    const result = spawnSync(process.execPath, [cli, repo], {
+    const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, repo], {
       encoding: "utf8",
       env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
     });
@@ -178,4 +183,115 @@ test("admission ignores station files, forged consumer templates, and notice-onl
     assert.equal(stale.status, 0, stale.stderr);
     assert.deepEqual(JSON.parse(readFileSync(fixture.receipt(absentRun), "utf8")).artifact, JSON.parse(readFileSync(fixture.receipt(staleRun), "utf8")).artifact);
   } finally { fixture.dispose(); }
+});
+
+function snapshot(root: string): Record<string, string> {
+  return Object.fromEntries(readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    const path = join(root, entry.name);
+    return entry.isDirectory() ? [[`${entry.name}/`, ""], ...Object.entries(snapshot(path)).map(([name, bytes]) => [`${entry.name}/${name}`, bytes])]
+      : [[entry.name, readFileSync(path).toString("hex")]];
+  }));
+}
+
+test("installed admission check preserves history, receipts, refs and checkout in a4s and consumer repos", { ...liveDagu, skip: liveDagu.skip || process.platform !== "linux" }, async () => {
+  const binary = compiledA4sBin();
+  const exec = promisify(execFile);
+  for (const lane of ["a4s", "consumer"]) {
+    const fixture = admissionFixture();
+    let service: ChildProcess | undefined;
+    let active = true, queuePresent = true;
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(`${request.method} ${request.url}`);
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(request.url?.endsWith("/queues")
+        ? { queues: queuePresent ? [{ name: lane, type: "global" }] : [] }
+        : { schedulers: active ? [{ status: "active" }] : [] }));
+    });
+    try {
+      fixture.writeConfig({ lane });
+      const bin = installGithubFixture(join(fixture.root, "probe-bin"));
+      const serviceBin = join(fixture.root, "service-bin");
+      mkdirSync(serviceBin);
+      for (const tool of ["bash", "git", "gh", "jq", "node", "omp", "dagu"]) {
+        writeFileSync(join(serviceBin, tool), "#!/bin/sh\nexit 0\n");
+        chmodSync(join(serviceBin, tool), 0o755);
+      }
+      writeReleaseDirectory(fixture.releases, {
+        repository, moving: { v0: "a".repeat(40) }, releases: [{ tag_name: "v0.6.0", commit: "a".repeat(40) }],
+      });
+      writeFileSync(join(fixture.releases, `${archiveName("0.6.0")}.sha256`), `${"b".repeat(64)}  ${archiveName("0.6.0")}\n`);
+      const stationConfig = (present: boolean) => writeFileSync(join(fixture.home, "config.yaml"),
+        `auth: {mode: none}\ncoordinator: {enabled: true}\nqueues:\n  config:\n    - name: ${present ? lane : "foreign"}\n      max_concurrency: 2\n`);
+      stationConfig(true);
+      // Retain pre-existing lifecycle evidence and use real history reads.
+      const retained = join(fixture.packageDir, ".git", "dagu-feature", "runs", "retained");
+      mkdirSync(retained, { recursive: true });
+      writeFileSync(join(retained, "receipt.json"), '{"retained":true}\n');
+      for (const dag of ["feature", "poc", "planning"]) {
+        writeFileSync(join(fixture.home, "dags", `${dag}.yaml`), `name: ${dag}\nsteps:\n  - run: echo untouched\n`);
+      }
+      const history = () => ["feature", "poc", "planning"].map(dag => {
+        const result = spawnSync("dagu", ["history", dag, "--format", "json"], { env: { ...process.env, DAGU_HOME: fixture.home }, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout;
+      });
+      history();
+      service = spawn(process.execPath, ["-e", "process.stdin.resume(); console.log('ready')", "start-all"], {
+        argv0: "dagu", env: { DAGU_HOME: fixture.home, PATH: serviceBin }, stdio: ["pipe", "pipe", "pipe"],
+      });
+      await once(service.stdout!, "data");
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      assert.ok(address && typeof address !== "string");
+      const env = { ...process.env, DAGU_HOME: fixture.home, A4S_PRIMARY: fixture.packageDir,
+        DAGU_URL: `http://127.0.0.1:${address.port}`, A4S_FIXTURE_RELEASES: fixture.releases,
+        PATH: `${dirname(binary)}:${bin}:${process.env.PATH ?? ""}` };
+      const check = async (status: number, reason: RegExp) => {
+        const histories = history();
+        const homeBefore = snapshot(fixture.home), repoBefore = snapshot(fixture.packageDir);
+        const result = await exec("a4s", ["admit", "--check", "--run-id", "sprint-admission-check", "feature", "--", "ISSUE=277", "OMP_SESSION_ID=owner-session"], {
+          cwd: fixture.packageDir, env, timeout: 15000,
+        }).then(output => ({ ...output, status: 0 }), error => ({ stdout: String(error.stdout), stderr: String(error.stderr), status: error.code }));
+        assert.equal(result.status, status, result.stdout + result.stderr);
+        assert.match(result.stdout, status === 0 ? /admissible=yes/ : /admissible=no/);
+        assert.match(result.stdout, reason);
+        assert.deepEqual(history(), histories);
+        assert.deepEqual(snapshot(fixture.home), homeBefore);
+        assert.deepEqual(snapshot(fixture.packageDir), repoBefore);
+      };
+      await check(0, /artifact=0\.6\.0@/);
+      // Repeating a check with the same id still creates no receipt or run.
+      await check(0, /service-environment ready=yes/);
+      stationConfig(false);
+      queuePresent = false;
+      await check(1, /missing lane queue/);
+      stationConfig(true);
+      queuePresent = true;
+      active = false;
+      await check(1, /no active Dagu scheduler/);
+      active = true;
+      fixture.writeConfig({ lane, uses: "a4s@v99.0.0" });
+      await check(1, /Missing exact release v99\.0\.0/);
+      fixture.writeConfig({ lane });
+      writeFileSync(fixture.configPath, `${readFileSync(fixture.configPath, "utf8")}\n`);
+      await check(1, /uncommitted config file/);
+      fixture.writeConfig({ lane });
+      for (const args of [["rm", "-q", ".workspace/dagu/config.json"], ["commit", "-qm", "remove config"]]) {
+        const result = spawnSync("git", ["-C", fixture.packageDir, ...args], { encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+      }
+      await check(1, /missing committed config file/);
+      assert.ok(requests.length > 0);
+      assert.ok(requests.every(request => request === "GET /api/v1/queues" || request === "GET /api/v1/services/scheduler"));
+      const calls = readFileSync(join(fixture.releases, "gh-calls.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+      assert.ok(calls.every(args => args[0] === "api" && !args.some(arg => ["POST", "PATCH", "PUT", "DELETE"].includes(arg)) && args.some(arg => /\/(?:git\/ref\/tags|releases)/.test(arg))
+        || args[0] === "release" && args[1] === "download" && args.includes("-") && args.some(arg => arg.endsWith(".sha256"))), "only release GETs/checksum reads; no issue comments or archive downloads");
+    } finally {
+      server.close();
+      if (service) { service.kill(); await once(service, "exit"); }
+      fixture.dispose();
+    }
+  }
 });

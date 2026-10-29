@@ -4,6 +4,7 @@
 
 - Redact known PoC worktree, primary, home and Dagu-home roots to public-safe placeholders before checking or publishing normal/failure comments (including chunked evidence and PASS follow-through), while preserving raw run evidence and rejecting unrelated host paths. Tell `run_poc` executors the placeholder rule (#679).
 - Accept native OMP's optional leading `Complete assignment thoroughly:` assignment prefix in planning review transcripts while preserving exact first-line generation binding after the prefix; document host behavior and cover misplaced, wrong-run and wrong-iteration markers (#747).
+- Replace Sprint Planning/Review's effecting admission probe with installed `a4s admit --check`: validate committed config, resolve `uses` and reuse read-only queue/scheduler/service readiness before any cache, receipt, handoff or enqueue. Rejections explain why admission is unavailable without changing lifecycle state (#746).
 - Tell implementation and conflict-resolution roles that summaries become PR bodies: use repository-relative paths or explicit placeholders, with raw host-specific commands/results retained only in run artifacts. Bound host-path checks to path starts and unquoted username tokens (allow spaces inside quoted paths), so nested sandbox paths and `/home/shared` prose no longer block feature PRs or PoC publication (#677).
 - Register the TypeScript loader inside the station-home isolation test worker before importing source fixtures, preserving the regression check under Node's strip-only TypeScript support.
 
