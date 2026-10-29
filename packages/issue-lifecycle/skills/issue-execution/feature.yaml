@@ -534,11 +534,12 @@ steps:
         expected: "no"
     run: |
       set -euo pipefail
+      reject() { printf 'rule=start_gate.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || reject "$@"; }
       apply_promoted_poc_basis() {
         [[ -n "${POC_BASIS:-}" ]] || return 0
         [[ -n "$poc_carry_base" && -f "$poc_carry_patch" && "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && -n "$poc_carry_run" ]] || {
-          printf 'start_gate: promoted PoC basis was not resolved\n' >&2
-          exit 1
+          reject poc_basis_resolved complete "base=$poc_carry_base patch=$poc_carry_patch digest=$poc_carry_digest run=$poc_carry_run"
         }
         patch_digest() {
           local out digest
@@ -555,8 +556,7 @@ steps:
           recorded_basis=$(jq -er '.digest' "$STATE/poc-basis.json")
           observed=$(patch_digest)
           [[ "$recorded_basis" == "$poc_carry_digest" && "$observed" == "$poc_carry_digest" ]] || {
-            printf 'start_gate: feature worktree no longer matches PoC basis %s\n' "$poc_carry_digest" >&2
-            exit 1
+            reject recorded_poc_basis "$poc_carry_digest" "recorded=$recorded_basis worktree=$observed"
           }
           printf 'poc_basis=applied digest=%s\n' "$poc_carry_digest"
           return 0
@@ -564,26 +564,22 @@ steps:
         if [[ -n "$(git -C "$WORKTREE" status --porcelain --untracked-files=all)" ]]; then
           observed=$(patch_digest)
           [[ "$observed" == "$poc_carry_digest" ]] || {
-            printf 'start_gate: worktree changes are not the published PoC basis; preserved\n' >&2
-            exit 1
+            reject existing_poc_basis "$poc_carry_digest" "$observed"
           }
         else
           head_sha=$(git -C "$WORKTREE" rev-parse HEAD)
           [[ "$head_sha" == "$poc_carry_base" ]] || {
-            printf 'start_gate: feature HEAD %s is not PoC base %s; preserved\n' "$head_sha" "$poc_carry_base" >&2
-            exit 1
+            reject poc_base "$poc_carry_base" "$head_sha"
           }
           if [[ -s "$poc_carry_patch" ]]; then
             git -C "$WORKTREE" apply --binary --check "$poc_carry_patch" || {
-              printf 'start_gate: published PoC patch does not apply onto %s; preserved\n' "$poc_carry_base" >&2
-              exit 1
+              reject poc_patch_applicable "$poc_carry_base" "published PoC patch does not apply; preserved"
             }
             git -C "$WORKTREE" apply --binary "$poc_carry_patch"
           fi
           observed=$(patch_digest)
           [[ "$observed" == "$poc_carry_digest" ]] || {
-            printf 'start_gate: applied worktree does not match PoC basis %s\n' "$poc_carry_digest" >&2
-            exit 1
+            reject applied_poc_basis "$poc_carry_digest" "$observed"
           }
         fi
         jq -n --arg pocRun "$poc_carry_run" --arg url "$POC_BASIS" --arg digest "$poc_carry_digest" --arg base "$poc_carry_base" \
@@ -594,17 +590,18 @@ steps:
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock claim
       umask 0022
-      test -n "$PRIMARY"
-      test -n "$GATE" && test -n "$REQUIRED_CHECK"
+      [[ -n "$PRIMARY" ]] || reject primary nonempty "$PRIMARY"
+      [[ -n "$GATE" ]] || reject gate nonempty "$GATE"
+      [[ -n "$REQUIRED_CHECK" ]] || reject required_check nonempty "$REQUIRED_CHECK"
       primary_path=$(cd "$PRIMARY" && pwd -P)
       primary_root=$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)
-      test "$primary_root" = "$primary_path" || { printf 'start_gate: PRIMARY %s resolves to %s, repository root is %s\n' "$PRIMARY" "$primary_path" "$primary_root" >&2; exit 1; }
-      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
-      git -C "$PRIMARY" check-ignore -q "$WORKTREE"
-      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE_BRANCH"
-      test -z "$(git -C "$PRIMARY" status --porcelain)"
-      lifecycle_fetch "$PRIMARY" origin || { printf 'start_gate: fetch origin failed; restore origin access and recover this run\n' >&2; exit 1; }
-      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || { printf 'start_gate: ff-only failed; reconcile primary with origin/%s preserving commits, then recover this run\n' "$BASE_BRANCH" >&2; exit 1; }
+      equal primary_root "$primary_path" "$primary_root"
+      equal primary_git_dir "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)"
+      git -C "$PRIMARY" check-ignore -q "$WORKTREE" || reject ignored_worktree ignored "$WORKTREE"
+      equal primary_branch "$BASE_BRANCH" "$(git -C "$PRIMARY" branch --show-current)"
+      equal primary_clean "" "$(git -C "$PRIMARY" status --porcelain)"
+      lifecycle_fetch "$PRIMARY" origin || reject fetch success "fetch origin failed; restore origin access and recover this run"
+      git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH" || reject fast_forward "origin/$BASE_BRANCH" "ff-only failed; reconcile primary preserving commits, then recover this run"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       OWNER=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/resources/$(printf '%s' "$BRANCH" | git hash-object --stdin).json")
       mkdir -p "$STATE" "${OWNER%/*}"
@@ -613,47 +610,43 @@ steps:
           --arg primary "$primary_path" --arg branch "$BRANCH" --arg worktree "$WORKTREE" \
           '.primary == $primary and .branch == $branch and .worktree == $worktree and
            (.run == $run or ($previous != "" and .run == $previous))' "$OWNER" >/dev/null ||
-          { printf 'start_gate: resource ownership identity mismatch: %s; preserved\n' "$OWNER" >&2; exit 1; }
+          reject resource_identity "primary=$primary_path branch=$BRANCH worktree=$WORKTREE run=$RUN previous=$RESOURCE_PREVIOUS_OWNER" "$(cat "$OWNER")"
       fi
       poc_carry_base=
       poc_carry_patch=
       poc_carry_digest=
       poc_carry_run=
       if [[ -n "${POC_BASIS:-}" ]]; then
-        [[ "$RUN" == feature-* ]] || { printf 'start_gate: POC_BASIS requires run id feature-<poc-run>\n' >&2; exit 1; }
+        [[ "$RUN" == feature-* ]] || reject promoted_run 'feature-<poc-run>' "$RUN"
         poc_carry_run=${RUN#feature-}
-        [[ "$poc_carry_run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { printf 'start_gate: invalid promoted PoC run %s\n' "$poc_carry_run" >&2; exit 1; }
+        [[ "$poc_carry_run" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || reject poc_run valid_run_id "$poc_carry_run"
         poc_state=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$poc_carry_run")
         [[ -f "$poc_state/full.patch" && -s "$poc_state/full.patch.sha256" && -s "$poc_state/comment.url" && -s "$poc_state/promotion.url" && -s "$poc_state/base.sha" ]] || {
-          printf 'start_gate: promoted PoC basis is incomplete for %s; evidence %s\n' "$poc_carry_run" "$poc_state" >&2
-          exit 1
+          reject poc_evidence "full.patch full.patch.sha256 comment.url promotion.url base.sha" "incomplete promoted PoC basis: $poc_state"
         }
         poc_comment=$(tr -d '\r\n' < "$poc_state/comment.url")
         poc_promotion=$(tr -d '\r\n' < "$poc_state/promotion.url")
         [[ "$poc_comment" == "$POC_BASIS" && "$poc_promotion" == "$POC_BASIS" ]] || {
-          printf 'start_gate: POC_BASIS does not match the published PoC comment for %s\n' "$poc_carry_run" >&2
-          exit 1
+          reject poc_comment "$POC_BASIS" "comment=$poc_comment promotion=$poc_promotion"
         }
         poc_carry_base=$(tr -d '\r\n' < "$poc_state/base.sha")
-        [[ "$poc_carry_base" =~ ^[a-f0-9]{40}$ ]] || { printf 'start_gate: PoC base SHA is invalid for %s\n' "$poc_carry_run" >&2; exit 1; }
-        git -C "$PRIMARY" cat-file -e "${poc_carry_base}^{commit}" || { printf 'start_gate: PoC base %s is not in this repository\n' "$poc_carry_base" >&2; exit 1; }
+        [[ "$poc_carry_base" =~ ^[a-f0-9]{40}$ ]] || reject poc_base_sha 40_hex "$poc_carry_base"
+        git -C "$PRIMARY" cat-file -e "${poc_carry_base}^{commit}" || reject poc_base_commit available "$poc_carry_base"
         git -C "$PRIMARY" merge-base --is-ancestor "$poc_carry_base" "origin/$BASE_BRANCH" || {
-          printf 'start_gate: PoC base %s is not an ancestor of origin/%s\n' "$poc_carry_base" "$BASE_BRANCH" >&2
-          exit 1
+          reject poc_base_ancestry "ancestor of origin/$BASE_BRANCH" "$poc_carry_base"
         }
         poc_carry_digest=$(tr -d '[:space:]' < "$poc_state/full.patch.sha256")
         poc_observed=$(shasum -a 256 "$poc_state/full.patch" | awk '{print $1}')
         [[ "$poc_carry_digest" =~ ^[a-f0-9]{64}$ && "$poc_observed" == "$poc_carry_digest" ]] || {
-          printf 'start_gate: full.patch digest mismatch for %s\n' "$poc_carry_run" >&2
-          exit 1
+          reject poc_patch_digest "$poc_carry_digest" "$poc_observed"
         }
         poc_carry_patch=$poc_state/full.patch
       fi
       if test -e "$WORKTREE"; then
         worktree_path=$(cd "$WORKTREE" && pwd -P)
         worktree_root=$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)
-        test "$worktree_root" = "$worktree_path" || { printf 'start_gate: WORKTREE %s resolves to %s, repository root is %s\n' "$WORKTREE" "$worktree_path" "$worktree_root" >&2; exit 1; }
-        test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
+        equal worktree_root "$worktree_path" "$worktree_root"
+        equal worktree_branch "$BRANCH" "$(git -C "$WORKTREE" branch --show-current)"
       elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$PRIMARY" worktree add "$WORKTREE" "$BRANCH"
       elif [[ -n "$poc_carry_base" ]]; then
@@ -669,8 +662,7 @@ steps:
         --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
         '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
       ownership_refused() {
-        printf 'dagu-feature: ownership identity mismatch; resource=%s requesting_run=%s observed=%s expected=%s; preserved\n' \
-          "$1" "$RUN" "$(cat "$1")" "$identity (previous owner $previous_owner)" >&2
+        printf 'rule=start_gate.ownership expected=%q observed=%q\n' "$identity (previous owner $previous_owner)" "$(cat "$1")" >&2
         exit 1
       }
       if test -f "$owner"; then
@@ -812,29 +804,32 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
-      fail() { printf 'capture: %s\n' "$*" >&2; exit 1; }
+      fail() { printf 'rule=capture.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || fail "$@"; }
       primary=$(cd "$PRIMARY" && pwd -P)
       worktree=$(cd "$WORKTREE" && pwd -P)
-      test "$primary" = "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)"
-      test "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" = "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)"
-      test "$worktree" = "$primary/.workspace/worktrees/issue-$ISSUE" || fail "worktree outside assigned path"
-      test "$worktree" = "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)"
-      test "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" = "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)"
-      test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH" || fail "branch mismatch"
+      equal primary_root "$primary" "$(cd "$(git -C "$PRIMARY" rev-parse --show-toplevel)" && pwd -P)"
+      equal primary_git_dir "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)"
+      equal assigned_worktree "$primary/.workspace/worktrees/issue-$ISSUE" "$worktree"
+      equal worktree_root "$worktree" "$(cd "$(git -C "$WORKTREE" rev-parse --show-toplevel)" && pwd -P)"
+      equal common_git_dir "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)"
+      equal branch "$BRANCH" "$(git -C "$WORKTREE" branch --show-current)"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       identity=$(jq -nc --arg primary "$primary" --arg worktree "$worktree" \
         --arg branch "$BRANCH" --arg run "$RUN" --arg session "$OMP_SESSION_ID" \
         '{primary:$primary,worktree:$worktree,branch:$branch,run:$run,session:$session}')
-      test "$(cat "$STATE/identity")" = "$identity" || fail "run identity mismatch"
-      test "$(cat "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)")" = "$identity" || fail "worktree owner mismatch"
-      test -n "$SUMMARY" && test -n "$MESSAGE" && test -n "$IMPLEMENTER"
+      equal run_identity "$identity" "$(cat "$STATE/identity")"
+      equal worktree_owner "$identity" "$(cat "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path dagu-feature-owner)")"
+      for field in SUMMARY MESSAGE IMPLEMENTER; do
+        [[ -n "${!field}" ]] || fail "delivery_$field" nonempty "${!field}"
+      done
       cd "$WORKTREE"
       base=$(cat "$STATE/base")
       head=$(git rev-parse HEAD)
       expected=$base
       if test -f "$STATE/initial-head"; then expected=$(cat "$STATE/initial-head"); fi
       if test -f "$STATE/candidate.json"; then expected=$(jq -r .sha "$STATE/candidate.json"); fi
-      test "$head" = "$expected" || fail "HEAD differs from Dagu candidate"
+      equal candidate_head "$expected" "$head"
       # Resolve every changed path and symlink lexically and physically, including dangling links.
       confined() {
         local path=$1 part resolved=$worktree links=0
@@ -848,34 +843,34 @@ steps:
               resolved="$resolved/$part"
               if test -L "$resolved"; then
                 links=$((links + 1))
-                test "$links" -le 40 || fail "symlink cycle"
+                test "$links" -le 40 || fail symlink_depth "<=40" "$links"
                 target=$(readlink "$resolved")
                 resolved=${resolved%/*}
                 if [[ "$target" == /* ]]; then
-                  case "$target/" in "$worktree/"*) target=${target#"$worktree/"}; resolved=$worktree ;; *) fail "path escapes worktree: $1" ;; esac
+                  case "$target/" in "$worktree/"*) target=${target#"$worktree/"}; resolved=$worktree ;; *) fail confined_path "$worktree" "$1 -> $target" ;; esac
                 fi
                 path="$target${path:+/$path}"
               fi ;;
           esac
-          case "$resolved/" in "$worktree/"*|/) ;; *) fail "path escapes worktree: $1" ;; esac
+          case "$resolved/" in "$worktree/"*|/) ;; *) fail confined_path "$worktree" "$1 -> $resolved" ;; esac
         done
-        case "$resolved/" in "$worktree/"*) ;; *) fail "path escapes worktree: $1" ;; esac
+        case "$resolved/" in "$worktree/"*) ;; *) fail confined_path "$worktree" "$1 -> $resolved" ;; esac
       }
       scratch=$(mktemp -d)
       trap 'rm -rf "$scratch"' EXIT
       # Reject disposable work before inspecting patches or staging any candidate files.
       git ls-files --others --exclude-standard -z -- .workspace/ > "$scratch/untracked-workspace"
       while IFS= read -r -d '' path; do
-        fail "untracked worktree scratch: $path; put disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree"
+        fail untracked_workspace "disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree" "untracked worktree scratch: $path"
       done < "$scratch/untracked-workspace"
       find . -path ./.git -prune -o -name .git -print0 -prune > "$scratch/nested-git"
       while IFS= read -r -d '' path; do
-        fail "nested git entry: ${path#./}; put disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree"
+        fail nested_git "disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree" "nested git entry: ${path#./}"
       done < "$scratch/nested-git"
       poc_basis=null
       if [[ -f "$STATE/poc-basis.json" ]]; then
         basis_digest=$(jq -r 'if .schemaVersion == 1 and .applied == true and (.digest | test("^[a-f0-9]{64}$")) then .digest else "" end' "$STATE/poc-basis.json")
-        [[ -n "$basis_digest" ]] || fail "recorded PoC basis is invalid"
+        [[ -n "$basis_digest" ]] || fail poc_basis valid_applied_digest "$(cat "$STATE/poc-basis.json")"
         git diff --binary HEAD > "$scratch/basis.patch"
         while IFS= read -r -d '' path; do
           git diff --no-index --binary -- /dev/null "$path" >> "$scratch/basis.patch" || test "$?" -eq 1
@@ -902,7 +897,7 @@ steps:
           '.id == $id and .state == "completed" and .binding.repo == $repo and .binding.worktree == $worktree and
            .binding.run == $run and .binding.stage == "implement" and .binding.sha == $head and
            (.output.summary | type == "string" and test("\\S")) and (.output.message | type == "string" and test("\\S"))' "$result" >/dev/null ||
-          fail "implementation receipt differs from delivered HEAD"
+          fail implementation_receipt "completed receipt for $head" "$(cat "$result")"
         # Dagu outputs are single-line; the verified receipt keeps the multi-line summary and commit message.
         SUMMARY=$(jq -r .output.summary "$result")
         MESSAGE=$(jq -r .output.message "$result")
@@ -1383,6 +1378,8 @@ steps:
       - TESTED_SHA: ${steps.validation.outputs.TESTED_SHA}
     run: |
       set -euo pipefail
+      reject() { printf 'rule=push.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || reject "$@"; }
       umask 0022
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       eval "$DAGU_RESOURCE_GUARD"
@@ -1397,20 +1394,20 @@ steps:
         sleep "${A4S_INTEGRATION_POLL_SEC:-1}"
       done
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      test -s "$STATE/gate.json" || { echo "push: no gated candidate; run gate first" >&2; exit 1; }
+      test -s "$STATE/gate.json" || reject gated_candidate gate.json missing
       gated=$(jq -r .sha "$STATE/gate.json")
       candidate=$(git -C "$WORKTREE" rev-parse HEAD)
-      test "$candidate" = "$gated" || { printf 'push: stale candidate HEAD=%s gated=%s; revalidation required\n' "$candidate" "$gated" >&2; exit 1; }
+      equal gated_head "$gated" "$candidate"
       sha=$(jq -r .sha "$STATE/candidate.json")
-      test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
-      test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha"
-      test -z "$(git -C "$WORKTREE" status --porcelain)"
-      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      equal branch "$BRANCH" "$(git -C "$WORKTREE" branch --show-current)"
+      equal candidate_head "$sha" "$(git -C "$WORKTREE" rev-parse HEAD)"
+      equal clean "" "$(git -C "$WORKTREE" status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
+        reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
       if [[ -n "${VALIDATION:-}" ]]; then
-        test "$APPROVED" = yes
+        equal validation_approval yes "$APPROVED"
         if [[ "$TESTED_SHA" != "$sha" ]]; then
-          printf 'validation: approval SHA %s differs from tested candidate %s; return through gate and validation\n' "$TESTED_SHA" "$sha" >&2
-          exit 1
+          reject validation_sha "$sha" "$TESTED_SHA"
         fi
         jq -nc --arg sha "$sha" --arg procedure "$VALIDATION" \
           '{sha:$sha,procedure:$procedure,approved:"yes"}' > "$STATE/validation.json"
@@ -1426,9 +1423,11 @@ steps:
         gh pr merge "$pr_number" --repo "$repo" --disable-auto
         resolve_run_pr
         integrated_terminal push
-        jq -e '.state == "OPEN" and .autoMergeRequest == null' <<<"$RUN_PR" >/dev/null
+        jq -e '.state == "OPEN" and .autoMergeRequest == null' <<<"$RUN_PR" >/dev/null ||
+          reject disarmed_pr "OPEN autoMergeRequest=null" "$RUN_PR"
       fi
-      git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"
+      git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref" ||
+        reject remote_lease "$expected" "$(git -C "$WORKTREE" ls-remote origin "$remote_ref" | cut -f1)"
       printf '%s\n' "$sha" > "$STATE/published-sha"
       printf 'INTEGRATED=no\n' >> "${DAGU_OUTPUT_FILE:-/dev/null}"
     outputs:
@@ -1472,27 +1471,30 @@ steps:
         expected: "re:^(|no)$"
     run: |
       set -euo pipefail
+      reject() { printf 'rule=pr.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || reject "$@"; }
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       if [[ -z "$PR_NUMBER" && -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
       sha=$(jq -r .sha "$STATE/candidate.json")
-      test "$(git branch --show-current)" = "$BRANCH"
-      test "$(git rev-parse HEAD)" = "$sha"
-      test -z "$(git status --porcelain)"
-      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
-      test "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)" = "$sha"
+      equal branch "$BRANCH" "$(git branch --show-current)"
+      equal candidate_head "$sha" "$(git rev-parse HEAD)"
+      equal clean "" "$(git status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
+        reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
+      equal remote_head "$sha" "$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
       "$A4S_BIN" pr-body render "$STATE" "$ISSUE" > "$STATE/pr-body.md"
       "$A4S_BIN" pr-body validate "$STATE/pr-body.md"
       if test -n "$PR_NUMBER"; then
-        test "$(gh pr view "$PR_NUMBER" --json state --jq .state)" = OPEN
-        test "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)" = "$BRANCH"
-        test "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)" = "$sha"
+        equal state OPEN "$(gh pr view "$PR_NUMBER" --json state --jq .state)"
+        equal head_branch "$BRANCH" "$(gh pr view "$PR_NUMBER" --json headRefName --jq .headRefName)"
+        equal head_sha "$sha" "$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
         gh pr edit "$PR_NUMBER" --body-file "$STATE/pr-body.md"
         gh pr view "$PR_NUMBER" --json number,url,headRefOid
       elif gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
-        test "$(gh pr view "$BRANCH" --json state --jq .state)" = OPEN
-        test "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)" = "$BRANCH"
-        test "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)" = "$sha"
+        equal state OPEN "$(gh pr view "$BRANCH" --json state --jq .state)"
+        equal head_branch "$BRANCH" "$(gh pr view "$BRANCH" --json headRefName --jq .headRefName)"
+        equal head_sha "$sha" "$(gh pr view "$BRANCH" --json headRefOid --jq .headRefOid)"
         gh pr edit "$BRANCH" --body-file "$STATE/pr-body.md"
         gh pr view "$BRANCH" --json number,url,headRefOid
       else
@@ -1526,6 +1528,8 @@ steps:
     depends: code_scanning
     run: |
       set -euo pipefail
+      reject() { printf 'rule=auto_merge.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || reject "$@"; }
       export A4S_INTEGRATION_WAITER=$$
       while true; do
         integration_status=0
@@ -1542,10 +1546,11 @@ steps:
       # CodeQL: GitHub merge state follows REQUIRED_CHECK, still bound to this SHA.
       if [[ "${CODE_SCANNING:-required}" != off ]] &&
          ! jq -e --arg sha "$sha" '.sha == $sha and .class == "PASS"' "$STATE/codeql-observation.json" >/dev/null; then exit 0; fi
-      test "$(git branch --show-current)" = "$BRANCH"
-      test "$(git rev-parse HEAD)" = "$sha"
-      test -z "$(git status --porcelain)"
-      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
+      equal branch "$BRANCH" "$(git branch --show-current)"
+      equal candidate_head "$sha" "$(git rev-parse HEAD)"
+      equal clean "" "$(git status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
+        reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
       pr_ref=${PR_NUMBER:-$BRANCH}
       if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
       for ((attempt = 0; attempt <= 12; attempt++)); do
@@ -1554,18 +1559,18 @@ steps:
           break
         fi
         if test "$attempt" -eq 12; then
-          printf 'auto_merge: PR head did not converge after 60s: expected %s, last observed %s\n' "$sha" "$observed_sha" >&2
-          exit 1
+          reject head_convergence "$sha" "$observed_sha"
         fi
         sleep 5
       done
       observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
-      test "$(jq -r '.headRefOid' <<< "$observation")" = "$sha"
+      equal head_sha "$sha" "$(jq -r '.headRefOid' <<< "$observation")"
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
       if test "$(jq -r '.state' <<< "$observation")" = MERGED; then
-        jq -e '.mergeCommit.oid | type == "string" and length > 0' <<< "$observation" >/dev/null
+        jq -e '.mergeCommit.oid | type == "string" and length > 0' <<< "$observation" >/dev/null ||
+          reject merge_commit nonempty_oid "$observation"
       elif test "$(jq -r '.state' <<< "$observation")" != OPEN; then
-        printf 'auto_merge: PR is not OPEN: %s\n' "$observation" >&2; exit 1
+        reject state OPEN_or_MERGED "$(jq -r '.state' <<< "$observation")"
       else
         if jq -e '.autoMergeRequest != null' <<< "$observation" >/dev/null; then
           gh pr merge "$pr_ref" --disable-auto
@@ -1574,7 +1579,7 @@ steps:
           CLEAN) gh pr merge "$pr_ref" --squash --match-head-commit "$sha" --body "$merge_body" ;;
           BEHIND|BLOCKED|UNSTABLE|DIRTY|UNKNOWN)
             gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha" --body "$merge_body" ;;
-          *) printf 'Unexpected PR merge state: %s\n' "$observation" >&2; exit 1 ;;
+          *) reject merge_state CLEAN_BEHIND_BLOCKED_UNSTABLE_DIRTY_UNKNOWN "$(jq -r '.mergeStateStatus' <<< "$observation")" ;;
         esac
       fi
       pr_number=$(gh pr view "$pr_ref" --json number --jq .number)

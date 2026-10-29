@@ -27,6 +27,7 @@ export interface RunNode {
   step: { id?: string; name: string; humanTask?: { prompt?: string } };
   statusLabel: string;
   approvalIteration?: number;
+  error?: string;
 }
 
 export const isActive = (run: RunDetails): boolean =>
@@ -36,6 +37,13 @@ export const topicFor = (run: RunDetails): string => `dagrun:${run.name}/${run.d
 
 // Terminal control characters from Dagu data must remain plain widget text.
 const plain = (text: string): string => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+
+// Dagu prefixes command failures with an exit status, then the captured stderr.
+function failureCause(node: RunNode | undefined): string | undefined {
+  const tail = node?.error?.split(/recent stderr \(tail\):\r?\n/)[1];
+  const lines = tail?.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  return lines?.find(line => line.startsWith("rule=")) ?? lines?.[0];
+}
 
 export function issueNumber(run: RunDetails): string | undefined {
   const issue = runParam(run, "ISSUE");
@@ -210,7 +218,8 @@ export class Transitions {
   } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
-    const terminalStep = run.nodes?.find(node => node.statusLabel === run.statusLabel)?.step.name;
+    const terminalNode = run.nodes?.find(node => node.statusLabel === run.statusLabel);
+    const terminalStep = terminalNode?.step.name;
     this.states.set(key, { status: run.statusLabel, step: currentStep(run) });
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
@@ -258,7 +267,11 @@ export class Transitions {
         const diagnosed = ["await_ci", "await_merge"].includes(step) && ["BLOCKED", "PENDING"].includes(ci?.class ?? "") && ci?.iteration === iteration;
         const ciCause = returned || diagnosed
           ? ` ci=${plain(ci!.class)}${ci!.class === "PENDING" ? " action=WAIT" : ""} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
-        const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
+        const failedNode = step.startsWith("recover_")
+          ? run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === step.slice("recover_".length) && candidate.statusLabel === "failed")
+          : undefined;
+        const causeText = step.startsWith("recover_") ? failureCause(failedNode)
+          : step.endsWith("_primary_unavailable") ? node.step.humanTask.prompt
           : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
         const escalation = ["escalation", "rebase_escalation"].includes(step) ? options.escalationDiagnostic : undefined;
         const cause = escalation ? ` ${plain(escalation)}` : causeText ? ` cause=${plain(causeText)}` : ciCause;
@@ -278,8 +291,9 @@ export class Transitions {
       }
       if (["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
         const step = terminalStep ?? previous?.step;
+        const cause = run.statusLabel === "failed" ? failureCause(terminalNode) : undefined;
         notice(JSON.stringify([key, run.statusLabel]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel}${run.statusLabel !== "succeeded" && step ? ` step=${plain(step)}` : ""}${identity}${bundleNotice}`);
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel}${run.statusLabel !== "succeeded" && step ? ` step=${plain(step)}` : ""}${identity}${bundleNotice}${cause ? ` cause=${plain(cause)}` : ""}`);
       }
     }
     if (previous && previous.status !== run.statusLabel

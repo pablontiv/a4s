@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.8
+
+- Explain feature `start_gate`, `capture`, `push`, `pr` and `auto_merge` rejections on stderr with `rule`, `expected` and `observed`. Recovery and terminal failure notices use the failed node's REST stderr tail, preferring its first rule diagnostic over generic recovery prompts (#355).
+
 ## 0.7.7
 
 - Disarm an existing open PR's auto-merge before publishing a changed admitted feature head, then request merge afresh with the current gated SHA, including the CLEAN direct-merge path. Resolve and retain the run's PR number even after remote branch deletion (#294).

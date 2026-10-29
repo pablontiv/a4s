@@ -198,12 +198,36 @@ for (const step of ["start_gate", "gate", "push"]) {
     const transitions = new Transitions("session-a");
     const candidate = waitingAt("feature", `recover_${step}`, 2);
     candidate.nodes![0]!.step.humanTask = { prompt: `${step} failed.\nInspect logs.` };
+    candidate.nodes!.unshift({
+      step: { id: step, name: `${step} display name` }, statusLabel: "failed",
+      error: "exit status 1\nrecent stderr (tail):\ncontext before rule\nrule=head expected=abc observed=def\nrule=later expected=x observed=y",
+    });
     const message = transitions.observe(candidate).wakeMessage!;
     assert.ok(message.includes(`step=recover_${step} issue=176`), message);
-    assert.ok(message.endsWith(`iteration=2 cause=${step} failed. Inspect logs.`), message);
+    assert.ok(message.endsWith("iteration=2 cause=rule=head expected=abc observed=def"), message);
     assert.deepEqual(transitions.observe(candidate), {});
     const repaired = waitingAt("feature", "implement", 3);
     assert.ok(transitions.observe(repaired).wakeMessage?.includes("step=implement"));
+  });
+}
+
+for (const tail of [
+  ["context\nrule=head expected=abc observed=def\nrule=later expected=x observed=y", "rule=head expected=abc observed=def"],
+  ["\npermission denied\u001b\nmore detail", "permission denied "],
+  ["", undefined],
+] as const) {
+  test(`recovery and terminal notices select stderr cause ${JSON.stringify(tail[1])}`, () => {
+    const failed = { step: { name: "push" }, statusLabel: "failed", error: `exit status 1\nrecent stderr (tail):\n${tail[0]}` };
+    for (const terminal of [false, true]) {
+      const candidate = waitingAt("feature", "recover_push");
+      candidate.nodes![0]!.step.humanTask = { prompt: "Static prompt is not a failure cause." };
+      candidate.nodes = terminal ? [failed] : [failed, ...candidate.nodes!];
+      if (terminal) candidate.statusLabel = "failed";
+      const message = new Transitions("session-a").observe(candidate).wakeMessage!;
+      if (tail[1]) assert.ok(message.endsWith(`cause=${tail[1]}`), message);
+      else assert.ok(!message.includes("cause="), message);
+      assert.ok(!message.includes("Static prompt"), message);
+    }
   });
 }
 
