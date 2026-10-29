@@ -56,7 +56,7 @@ dagu-feature-bundle enqueue --run-id "<repo>-breakdown-<slug>" planning -- \
   UNITS_FROM="<absolute-units.jsonl>" SOURCE=refine OMP_SESSION_ID="<session-id>"
 ```
 
-The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → materialize`. `init` prints the bundle identity and `out_dir`: `${DAGU_HOME:-$HOME/.dagu}/data/planning/<owner>__<repo>/<run-id>/`. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` invokes the same package validator and records the complete structured diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
+The installed filename and DAG name remain `planning.yaml` / `planning`. Its steps are `init → import_units → check_plan → review → check_review → approve → approve_cancellation → materialize`. `init` prints the bundle identity and `out_dir`: `${DAGU_HOME:-$HOME/.dagu}/data/planning/<owner>__<repo>/<run-id>/`. `import_units` makes a deterministic copy to `units.jsonl`. `check_plan` invokes the same package validator and records the complete structured diagnostics in `findings.md`. Inspect import/check errors at the waiting `review` checkpoint before requesting a reviewer.
 
 ## Independent review
 
@@ -68,6 +68,14 @@ dagu human-task complete planning --run-id <run> --step review --input REVIEW=<a
 
 The verifier binds the unique transcript to the parent session, reviewer agent, run/generation and review start time. It checks the last structured yield and stores `review-<iteration>.json` with `verdict`, `findings`, and the `reviewer` identity above. `findings.md` explains revisions or verification failures. Inspect `check_review` logs as well. A missing generation marker is reported as absent from the reviewer's `session_init.task`, together with the expected marker. A failed or `revise` review remains at `approve` for explicit correction; only an accepted review of the unchanged imported units can publish.
 
+`import_units`, `check_plan` and `check_review` complete their native handoff even
+when their command rejects the input. Otherwise Dagu retries those failed nodes
+on human-task completion and reopens `approve`, discarding its cancellation
+input. A native succeeded handoff is **not** an accepted review: inspect
+`findings.md` and step logs; publication still requires the unchanged validated
+snapshot and accepted-review artifacts. Corrections still require explicit
+push-back and fresh review.
+
 `check_plan`, `check_review` and `materialize` bind the same canonical native review iteration: `approvalIteration` on the unique `review` node in `/api/v1/dag-runs/planning/<run>`. On the official Dagu runtime, an omitted counter on that present node means initial iteration zero; a native push-back advances it even while mechanical steps run and review is not waiting. The current REST review start time remains the independent transcript-freshness cutoff.
 
 ## Approval and corrections
@@ -75,8 +83,8 @@ The verifier binds the unique transcript to the parent session, reviewer agent, 
 At `approve`, present the units, their relationship intent and review to the operator. Obtain explicit authorization for all or the exact subset of IDs. An approved subset must include every same-snapshot target referenced by its units, transitively; external issue targets remain references rather than authorization to edit those issues. The CLI does not authenticate the operator: the coordinator owns this approval boundary.
 
 ```sh
-dagu human-task complete planning --run-id <run> --step approve --input APPROVED=all
-# Or: --input APPROVED=id-one,id-two
+dagu human-task complete planning --run-id <run> --step approve --input CANCEL=no --input APPROVED=all
+# Or: --input CANCEL=no --input APPROVED=id-one,id-two
 ```
 
 For invalid units, a `revise` verdict, or requested changes, refine/the coordinator edits the original `UNITS_FROM` file first. Read `dagu status planning --run-id <run>` and its run-wide `push-back iteration` (default zero), then explicitly push back the currently waiting checkpoint:
@@ -88,6 +96,33 @@ dagu human-task push-back planning --run-id <run> --step approve --expected-iter
 ```
 
 Both rewind to `import_units`, re-copy the corrected upstream file, and require fresh validation and independent review. A retry uses the current generation marker and a fresh allocated reviewer ID. The backend waits for explicit push-back; it does not automatically reimport unchanged rejected input. If approval was mistakenly completed and materialization failed, use Dagu's terminal-run recovery before repeating review/approval.
+
+### Cancel a stale approval
+
+For a run waiting at `approve`, the authorized coordinator/operator can cancel
+without approving any units:
+
+```sh
+dagu status planning --run-id <run>
+dagu human-task complete planning --run-id <run> --step approve --input CANCEL=yes
+dagu status planning --run-id <run>
+```
+
+`CANCEL` is required (`yes|no`); `APPROVED` is unnecessary for cancellation.
+`approve_cancellation` records `outcome=cancelled` in `out_dir/cancellation.json`
+and stops its resumed, active gate, deliberately producing native **Aborted**
+(there is no native cancelled status). Unlike stopping a waiting human task,
+stopping this active, effect-free gate terminates the run while leaving
+`materialize` `not_started`. Wait for that terminal state: CLI completion only
+queues the resume. Cancellation performs no GitHub writes. Imported units,
+review and findings remain available in `out_dir`.
+Normal publication requires `CANCEL=no` plus a valid `APPROVED` selection and
+the existing accepted-review checks.
+
+This route applies only to newly admitted snapshots declaring the `CANCEL`
+field, `approve_cancellation` gate and materialize precondition. Existing
+immutable snapshots do not gain it; inspect the actual run snapshot first.
+Do not substitute `dagu stop` or selective retry for this guarded route.
 
 ## Created backlog
 

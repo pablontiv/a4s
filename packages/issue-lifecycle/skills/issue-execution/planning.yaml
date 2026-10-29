@@ -42,10 +42,14 @@ steps:
       - name: OUT_DIR
       - name: NWO
 
+  # Validation failures hand off to the operator; they must not be retried by
+  # human-task completion, which would rewind approve and discard CANCEL.
+  # Findings and accepted-review artifacts, not these handoff statuses, gate writes.
   - id: import_units
     depends: init
     continue_on:
       failure: true
+      mark_success: true
     env:
       - OUT_DIR: ${steps.init.outputs.OUT_DIR}
     run: |
@@ -74,6 +78,7 @@ steps:
     depends: import_units
     continue_on:
       failure: true
+      mark_success: true
     env:
       - OUT_DIR: ${steps.init.outputs.OUT_DIR}
     run: |
@@ -129,6 +134,7 @@ steps:
     depends: review
     continue_on:
       failure: true
+      mark_success: true
     env:
       - OUT_DIR: ${steps.init.outputs.OUT_DIR}
       - REVIEW: ${steps.review.outputs.REVIEW}
@@ -209,14 +215,17 @@ steps:
         then explicitly push back to import_units for a fresh import and review.
         Only the operator authorizes APPROVED=all or a comma-separated subset of ids.
         GitHub issues are created only after this approval and an accepted review.
+        Complete CANCEL=yes to cancel without APPROVED or GitHub writes.
+        Normal publication requires CANCEL=no and APPROVED.
       form:
         type: object
         additionalProperties: false
         properties:
+          CANCEL: {type: string, enum: ['yes', 'no']}
           APPROVED:
             type: string
             minLength: 1
-        required: [APPROVED]
+        required: [CANCEL]
       push_back:
         rewind_to: import_units
         form:
@@ -226,8 +235,33 @@ steps:
             FEEDBACK:
               type: string
 
-  - id: materialize
+  - id: approve_cancellation
     depends: approve
+    env:
+      - CANCEL: ${steps.approve.outputs.CANCEL}
+      - APPROVED: ${steps.approve.outputs.APPROVED}
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        jq -n --arg run "$RUN" \
+          '{run:$run,checkpoint:"approve",outcome:"cancelled",nativeExpected:"aborted"}' > "$OUT_DIR/cancellation.json"
+        printf 'Cancellation requested at approve; terminating before materialize; evidence=%s/cancellation.json\n' "$OUT_DIR"
+        # Stop this resumed active gate, not the waiting human task. A failed
+        # gate would mark its pending materialize descendant aborted.
+        dagu stop --run-id "$RUN" planning
+        sleep 30
+        printf 'Native stop did not terminate the active cancellation gate\n' >&2
+        exit 77
+      fi
+      [[ -n "$APPROVED" && "$APPROVED" != '${steps.'* ]] ||
+        { printf 'Normal completion requires APPROVED at approve\n' >&2; exit 1; }
+
+  - id: materialize
+    depends: approve_cancellation
+    preconditions:
+      - condition: "${steps.approve.outputs.CANCEL}"
+        expected: "no"
     env:
       - APPROVED: ${steps.approve.outputs.APPROVED}
       - OUT_DIR: ${steps.init.outputs.OUT_DIR}
