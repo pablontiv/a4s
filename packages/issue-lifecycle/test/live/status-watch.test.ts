@@ -16,7 +16,6 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
   const manifest = join(primary, "packages/issue-lifecycle/package.json");
   if (drift === "unreadable manifest") mkdirSync(manifest);
   else writeFileSync(manifest, drift === "invalid JSON" ? "{" : JSON.stringify({ version: drift === "main" ? "0.3.8" : BUNDLE_VERSION }));
-  const stale = drift === "main" || drift === "invalid JSON" || drift === "unreadable manifest";
   const [major, minor, patch] = BUNDLE_VERSION.split(".").map(Number);
   const compatiblePatch = `${major}.${minor}.${patch! + 1}`;
   let aborts = 0;
@@ -101,13 +100,11 @@ for (const drift of [undefined, "main", "bundle", "invalid JSON", "unreadable ma
     assert.deepEqual(received.map(message => message.match(/run=(\S+)/)?.[1]), runs.map(run => run.dagRunId));
     assert.ok(requests.some(path => path.endsWith("/spec")));
     assert.equal(aborts, 0);
-    assert.equal(instructions.length, stale ? 5 : 0);
+    assert.equal(instructions.length, 0, "main drift cannot establish that restarting loads newer modules");
     for (const message of received) {
-      const mainVersion = drift === "main" ? "0.3.8" : stale ? "unknown" : BUNDLE_VERSION;
-      assert.ok(message.includes(`main=${mainVersion} compat=${stale ? "stale" : "ok"}`), message);
-    }
-    for (const instruction of instructions) {
-      assert.equal(instruction.type, "warning");
+      const mainVersion = drift === "main" ? "0.3.8"
+        : drift === "invalid JSON" || drift === "unreadable manifest" ? "unknown" : BUNDLE_VERSION;
+      assert.ok(message.includes(`main=${mainVersion} compat=ok installed=${BUNDLE_VERSION}`), message);
     }
   } finally {
     handlers.session_shutdown!(null, ctx);

@@ -6,6 +6,7 @@
 
 ## 0.7.7
 
+- Distinguish main's pending release from the installed plugin and loaded extension in status notices. Re-read the managed plugin release link and warn to restart only when the installed release is newer than the loaded modules; retain `main=n/a` for consumer repositories (#778).
 - Disarm an existing open PR's auto-merge before publishing a changed admitted feature head, then request merge afresh with the current gated SHA, including the CLEAN direct-merge path. Resolve and retain the run's PR number even after remote branch deletion (#294).
 - Treat an already-MERGED PR at checkpoint or publication as successful integration without republishing. Shared exit cleanup proves ownership, integration and clean resources before removing run-owned worktrees, branches and matching recovery checkpoints; otherwise it retains local work with a durable recovery diagnostic. Preserve the operator-authorized pre-gate recovery checkpoint, separate from PR publication (#294).
 

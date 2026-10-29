@@ -97,6 +97,18 @@ but mutations are rejected with `A4S_RUN_UNSUPPORTED`. Tool mutations must use
 one literal Bash command with an explicit run and PRIMARY (or the bound
 checkout); compound/expanded mutation commands are rejected before execution.
 
+Status notices distinguish the admitted `bundle`, loaded `extension`, currently
+`installed` plugin and lifecycle source version on `main`. The installed version
+is re-read through `~/.omp/plugins/node_modules/@a4s/issue-lifecycle` so replacing
+the managed release link is visible to an already-running OMP process. One-off
+package loads without that registration use their own on-disk manifest.
+Only an installed version newer than the loaded extension produces `compat=stale`
+and the restart warning. Main ahead of the installed release is release-pending,
+not restart-pending, and produces no restart warning; publishing, installing and
+re-pinning that release remain operator actions. Consumer repositories without
+the lifecycle manifest continue to report `main=n/a`. Unknown manifest versions
+do not establish that a restart would help. These labels never authorize runs.
+
 
 Every command below preserves its existing arguments, environment variables,
 stdout and exit status. `planning` and `reconcile` provide engine utility and
