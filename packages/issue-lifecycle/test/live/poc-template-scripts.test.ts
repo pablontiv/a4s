@@ -362,7 +362,7 @@ function cleanupFixture() {
     exit() {
       return spawnSync("bash", ["-c", pocExitScript()], {
         encoding: "utf8",
-        env: { ...process.env, DAGU_PARAMS_JSON: "{}", PRIMARY: fixture.primary, WORKTREE: worktree, RUN: "existing-issue" },
+        env: { ...process.env, DAGU_PARAMS_JSON: "{}", PRIMARY: fixture.primary, WORKTREE: worktree, RUN: "existing-issue", DAGU_OUTPUT_FILE: join(fixture.root, "exit-outputs") },
       });
     },
     branchExists() {

@@ -27,10 +27,13 @@ async function run(argv: string[], io: RoleJobIO, deps: RoleJobDependencies): Pr
     try { io.log(JSON.stringify(await detectRoleRuntime(realpathSync(process.env.PRIMARY || process.cwd())))); }
     catch (error) { throw new Error(`bootstrap detect: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (command === "stage" && stage) {
+    // Native execution removes step-scoped environment before the agent starts.
+    // Keep the stage's own sink out of the environment inherited by agent tools.
+    const outputFile = process.env.DAGU_OUTPUT_FILE;
     await deps.dispatchStage(stage, (name, value) => {
       const line = `${name}=${value.replace(/[\r\n]+/g, " ")}\n`;
-      if (!process.env.DAGU_OUTPUT_FILE) throw new Error("Dagu output file is required");
-      appendFileSync(process.env.DAGU_OUTPUT_FILE, line);
+      if (!outputFile) throw new Error("Dagu output file is required");
+      appendFileSync(outputFile, line);
     });
   } else if (command === "verify-triage" && !stage) {
     const primary = realpathSync(process.env.PRIMARY || "");

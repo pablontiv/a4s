@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { roleAdmission } from "../role-job-fixtures.ts";
+import { parse } from "yaml";
 import { compiledArtifact } from "../fixtures/admission.ts";
 
 const cli = fileURLToPath(new URL("../../bin/dagu-role-jobs.ts", import.meta.url));
@@ -21,9 +22,17 @@ function runtime(root: string): void {
   writeFileSync(join(dir, "src/task/discovery.ts"), `export async function discoverAgents() { return { agents: [{ name: "task", source: "fixture-agent", model: ["fixture-model"], systemPrompt: "fixture" }] }; }\n`);
   writeFileSync(join(dir, "src/task/settings.ts"), `export const cfgTaskAgentModelOverrides = { get() { return { task: ["fixture-model"] }; } };\n`);
   writeFileSync(join(dir, "src/config/model-resolver.ts"), `export function resolveAgentModelSelection() { return { patterns: ["fixture-model"], role: "implement" }; }\n`);
-  writeFileSync(join(dir, "src/task/executor.ts"), `import { createServer } from "node:net";
-import { mkdirSync, writeFileSync } from "node:fs";
+  writeFileSync(join(dir, "src/task/executor.ts"), `import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createServer } from "node:net";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+// Check the in-process runtime boundary as well as its spawned agent command.
+assert.equal(Object.keys(process.env).some(name => name === "DAGU_OUTPUT_FILE" || name === "DAG_RUN_LOG_FILE" || name.startsWith("DAG_RUN_STEP_")), false);
+assert.ok(process.env.DAGU_HOME);
+assert.ok(process.env.DAGU_OMP_ROLE_RUNTIME);
+assert.match(process.env.RUN, /^role-exit-/);
+assert.equal(process.env.DAG_PUSHBACK_ITERATION, "0");
 const tcp = createServer();
 await new Promise((resolve, reject) => { tcp.once("error", reject); tcp.listen(0, "127.0.0.1", () => resolve(undefined)); });
 const unix = createServer();
@@ -31,6 +40,8 @@ await new Promise((resolve, reject) => { unix.once("error", reject); unix.listen
 const address = tcp.address();
 writeFileSync(process.env.A4S_ROLE_BRIDGE_READY, JSON.stringify({ port: address && typeof address === "object" ? address.port : 0 }) + "\\n");
 export async function runSubprocess(options) {
+  execFileSync("bash", ["-c", 'printf "X=1\\\\n" >> "\${DAGU_OUTPUT_FILE:-/dev/null}"']);
+  assert.equal(readFileSync(process.env.A4S_TEST_STEP_OUTPUT, "utf8"), "");
   if (process.env.A4S_ROLE_RESULT === "blocked") return { exitCode: 1, aborted: true, error: "BLOCKED_AUTHORIZATION fixture", output: "" };
   const output = { summary: "completed with bridge open", message: "feat: exit while the bridge is open" };
   const rows = [
@@ -86,6 +97,10 @@ async function stage(root: string, result: "blocked" | "completed"): Promise<{ c
       ISSUE: "189",
       DAGU_URL: `http://127.0.0.1:${port}`,
       DAGU_OUTPUT_FILE: output,
+      A4S_TEST_STEP_OUTPUT: output,
+      DAG_RUN_STEP_NAME: "implement",
+      DAG_RUN_STEP_STDOUT_FILE: join(root, "step-stdout"),
+      DAG_RUN_LOG_FILE: join(root, "step-log"),
       DAG_PUSHBACK_ITERATION: "0",
       DAGU_OMP_ROLE_RUNTIME: join(root, "runtime"),
       A4S_ROLE_RESULT: result === "blocked" ? "blocked" : "completed",
@@ -127,6 +142,12 @@ test("implement exits when a BLOCKED role leaves its tool bridge listening", { t
     assert.match(completed.output, /SUMMARY=completed with bridge open/);
     assert.match(completed.output, /MESSAGE=feat: exit while the bridge is open/);
     assert.match(completed.output, /IMPLEMENTER=/);
+    const definition = parse(readFileSync(new URL("../../skills/issue-execution/feature.yaml", import.meta.url), "utf8")) as {
+      steps: Array<{ id: string; outputs?: Array<{ name: string }> }>;
+    };
+    const declared = definition.steps.find(step => step.id === "implement")!.outputs!.map(output => output.name);
+    assert.deepEqual(declared, ["SUMMARY", "MESSAGE", "IMPLEMENTER"]);
+    assert.deepEqual(completed.output.trim().split("\n").map(line => line.split("=")[0]), declared);
     assert.ok(readFileSync(join(root, "bridge-completed"), "utf8").includes("port"));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
