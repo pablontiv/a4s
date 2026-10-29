@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.6
+
+- Brace the PoC resource-lock run variable at the `.lock` boundary so Dagu does not interpret the shell filename as a dotted JSON reference; preserve per-run ownership, collision handling and cleanup (#483).
+
 ## 0.7.5
 
 - Classify GitHub CLI's exact exit-1/stdout no-required-check response as `PENDING` / `WAIT` only after independently confirming classic and effective ruleset policy on the PR's effective base and complete current-head publication evidence. Preserve app constraints, paginated statuses, changed PR/head/base binding rejection and actionable lookup failures; report pending publication accurately to the owner (#411).

@@ -59,7 +59,7 @@ env:
         if [[ -e "$WORKTREE" ]]; then actual=$(cd "$WORKTREE" && pwd -P); fi
         [[ "$actual" == "$expected" && "$actual" != "$primary" ]] ||
           { echo "dagu-feature: protected primary or unmanaged target $WORKTREE" >&2; exit 1; }
-        RESOURCE_LOCK="$common/poc/resource-$RUN.lock"
+        RESOURCE_LOCK="$common/poc/resource-${RUN}.lock"
         mkdir -p "$(dirname "$RESOURCE_LOCK")"
         attempt=0
         # The syscall result must distinguish creation from a concurrent EEXIST.
