@@ -43,10 +43,16 @@ test("reconcile fixtures leave an inherited populated station home byte-identica
   }
   const before = snapshot(station);
 
-  // A file-backed worker runs the same preloads as a test-file process, with an
-  // explicit station environment. Unlike eval workers, it loads --import hooks.
-  // This exercises the real cache writer without leaving the no-spawn lane.
+  // File-backed worker with the same isolation/no-spawn preloads as the suite.
+  // Replace inherited execArgv so relative --import paths stay valid and Node 22
+  // strip-only does not load the .ts import chain (tsx's loader does not win
+  // inside worker_threads; --experimental-transform-types does).
   const worker = new Worker(new URL("./fixtures/dagu-home-worker.mjs", import.meta.url), {
+    execArgv: [
+      "--experimental-transform-types",
+      "--import", new URL("./fixtures/dagu-home.mjs", import.meta.url).href,
+      "--import", new URL("../../../scripts/test-no-spawn.mjs", import.meta.url).href,
+    ],
     env: { ...process.env, DAGU_HOME: station, HOME: station, A4S_RELEASE_DIR: releases },
     workerData: { primary },
   });
