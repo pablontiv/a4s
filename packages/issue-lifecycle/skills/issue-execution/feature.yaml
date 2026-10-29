@@ -811,6 +811,15 @@ steps:
       }
       scratch=$(mktemp -d)
       trap 'rm -rf "$scratch"' EXIT
+      # Reject disposable work before inspecting patches or staging any candidate files.
+      git ls-files --others --exclude-standard -z -- .workspace/ > "$scratch/untracked-workspace"
+      while IFS= read -r -d '' path; do
+        fail "untracked worktree scratch: $path; put disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree"
+      done < "$scratch/untracked-workspace"
+      find . -path ./.git -prune -o -name .git -print0 -prune > "$scratch/nested-git"
+      while IFS= read -r -d '' path; do
+        fail "nested git entry: ${path#./}; put disposable evidence in $STATE/computations/ or \$TMP, never inside the worktree"
+      done < "$scratch/nested-git"
       poc_basis=null
       if [[ -f "$STATE/poc-basis.json" ]]; then
         basis_digest=$(jq -r 'if .schemaVersion == 1 and .applied == true and (.digest | test("^[a-f0-9]{64}$")) then .digest else "" end' "$STATE/poc-basis.json")

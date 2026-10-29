@@ -238,6 +238,7 @@ test("each required semantic stage has a registered role contract and Dagu consu
       assert.ok(assignment.includes(jobId(binding))); assert.ok(assignment.includes("Actual issue acceptance"));
       if (role !== "triage") {
         assert.ok(assignment.includes("/state/ci-return.json"));
+        assert.ok(assignment.includes("/state/computations/ or $TMP, never inside the worktree"));
         assert.ok(assignment.includes("CodeQL findings (rule, severity, location and message)"));
         assert.ok(assignment.includes("Your summary is published verbatim in the PR body: no host absolute paths."));
         assert.ok(assignment.includes("repository-relative paths or placeholders (<primary>, <worktree>, ~, $DAGU_HOME)"));
@@ -279,6 +280,8 @@ test("gate push-back hands the current failed attempt to the implementer without
       `not ok 1 - bundle version must change\nAssertionError: template changed without a version bump\n${binding.worktree}/test/bundle-version.test.ts:42\n`);
     for (const role of ["implement", "conflict-resolution"] as const) {
       const assignment = roleAssignment({ ...binding, role }, "513", "Actual issue acceptance", state);
+      assert.ok(assignment.includes(`${state}/computations/ or $TMP, never inside the worktree`));
+      assert.ok(assignment.includes("This also applies when repairing a returned gate failure."));
       const serialized = assignment.match(/BEGIN_UNTRUSTED_GATE_FAILURE\n([\s\S]*?)\nEND_UNTRUSTED_GATE_FAILURE/);
       assert.ok(serialized);
       const failure = JSON.parse(serialized[1]!);

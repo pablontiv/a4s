@@ -650,6 +650,31 @@ for (const [name, definition] of definitions) {
   const captureScript = extractScript(definition, "  - id: capture");
   const gateScript = extractScript(definition, "  - id: gate");
 
+  for (const kind of ["workspace", "workspace-repository", "nested-repository", "nested-git-file"] as const) {
+    test(`${name} capture rejects disposable ${kind} before staging`, () => {
+      const repo = repository();
+      try {
+        // The seed ignores .workspace globally; expose it to exercise ordinary untracked discovery.
+        writeFileSync(join(repo.primary, ".git", "info", "exclude"), "");
+        const path = kind.startsWith("workspace") ? ".workspace/issue-evidence" : "nested evidence";
+        const directory = join(repo.worktree, path);
+        mkdirSync(directory, { recursive: true });
+        if (kind.endsWith("repository")) git(directory, "init");
+        else if (kind === "nested-git-file") writeFileSync(join(directory, ".git"), "gitdir: missing\n");
+        else writeFileSync(join(directory, "archive.tar"), "disposable\n");
+        const beforeHead = git(repo.worktree, "rev-parse", "HEAD");
+        const beforeIndex = git(repo.worktree, "ls-files", "--stage");
+        const result = spawnSync("bash", ["-c", captureScript], { encoding: "utf8", env: featureScriptEnv(repo) });
+        assert.notEqual(result.status, 0);
+        assert.ok(result.stderr.includes(path), result.stderr);
+        assert.ok(result.stderr.includes(`${repo.state}/computations/`), result.stderr);
+        assert.match(result.stderr, /\$TMP, never inside the worktree/);
+        assert.equal(git(repo.worktree, "rev-parse", "HEAD"), beforeHead);
+        assert.equal(git(repo.worktree, "ls-files", "--stage"), beforeIndex);
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
   for (const signing of [true, false]) {
     test(`${name} capture signs delivery commits with configured SSH signing (${signing})`, () => {
       const repo = repository();
