@@ -1621,6 +1621,126 @@ for (const [name, definition] of [
   }
 }
 
+function stubLifecycleFetch(repo: Repository, failures: number, stderr: string, firstFailure = 1) {
+  const executable = join(repo.root, "bin", "git");
+  const calls = join(repo.root, "fetch-calls");
+  writeFileSync(calls, "");
+  writeFileSync(executable, `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "\${3:-}" == fetch ]]; then
+  printf '%s\\n' "$*" >> "$FETCH_CALLS"
+  attempt=$(wc -l < "$FETCH_CALLS")
+  if (( attempt >= FETCH_FIRST_FAILURE && attempt < FETCH_FIRST_FAILURE + FETCH_FAILURES )); then
+    printf '%s\\n' "$FETCH_STDERR" >&2
+    exit 37
+  fi
+fi
+exec "$REAL_GIT" "$@"
+`);
+  chmodSync(executable, 0o755);
+  return {
+    calls: () => readFileSync(calls, "utf8").trim().split("\n"),
+    env: {
+      REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
+      FETCH_CALLS: calls, FETCH_FIRST_FAILURE: String(firstFailure),
+      FETCH_FAILURES: String(failures), FETCH_STDERR: stderr,
+    },
+  };
+}
+
+const refLockError = "error: cannot lock ref 'refs/remotes/origin/main': is at 2222222 but expected 1111111";
+
+test("lifecycle fetches use one identical bounded helper in feature and PoC", () => {
+  const helpers: string[] = [];
+  for (const [definition, fetches] of [
+    [definitions[0][1], 5],
+    [fileURLToPath(new URL("../../skills/issue-execution/poc.yaml", import.meta.url)), 1],
+  ] as const) {
+    const source = readFileSync(definition, "utf8");
+    const helper = source.match(/^      lifecycle_fetch\(\) \([\s\S]*?^      \)/m);
+    assert.ok(helper, definition);
+    helpers.push(helper[0]);
+    const rawFetches = source.split("\n").filter(line => /\bgit\b.*\bfetch\b/.test(line));
+    assert.equal(rawFetches.length, 1, `bare fetch outside helper in ${definition}`);
+    assert.ok(helper[0].includes(rawFetches[0]!));
+    assert.equal(source.split("\n").filter(line => /^\s+lifecycle_fetch /.test(line)).length, fetches);
+  }
+  assert.equal(helpers[0], helpers[1]);
+});
+
+for (const [name, definition] of [
+  ...definitions,
+  ["PoC template", fileURLToPath(new URL("../../skills/issue-execution/poc.yaml", import.meta.url))],
+  ["PoC rendered DAG", renderedPoc],
+] as const) {
+  const gate = name.startsWith("PoC") ? "base" : "start_gate";
+  for (const failure of ["transient ref lock", "persistent ref lock", "non-lock failure"] as const) {
+    test(`${name} ${gate} lifecycle fetch handles ${failure}`, () => {
+      const repo = repository();
+      try {
+        writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+        if (gate === "base") mkdirSync(join(repo.primary, ".git", "poc", "runs", "test-run"), { recursive: true });
+        const stderr = failure === "non-lock failure" ? "fatal: Authentication failed for origin" : refLockError;
+        const fetch = stubLifecycleFetch(repo, failure === "transient ref lock" ? 1 : 3, stderr);
+        const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${gate}`)], {
+          encoding: "utf8",
+          env: {
+            ...process.env, ...featureScriptEnv(repo), ...fetch.env, DAGU_FEATURE_BUNDLE: "test",
+            DAGU_OUTPUT_FILE: join(repo.root, "outputs"),
+          },
+        });
+        const expectedAttempts = failure === "transient ref lock" ? 2 : failure === "persistent ref lock" ? 3 : 1;
+        assert.equal(result.status, failure === "transient ref lock" ? 0 : 1, result.stderr);
+        assert.deepEqual(fetch.calls(), Array(expectedAttempts).fill(`-C ${repo.primary} fetch origin`), result.stderr);
+        assert.ok(result.stderr.includes(stderr), result.stderr);
+        if (failure !== "transient ref lock") {
+          assert.ok(result.stderr.includes(`${gate}: fetch origin failed; restore origin access and recover this run`), result.stderr);
+          assert.ok(existsSync(repo.worktree), "fetch failure must retain the candidate");
+        } else if (gate === "base") {
+          const base = join(repo.primary, ".git", "poc", "runs", "test-run", "base.sha");
+          assert.equal(readFileSync(base, "utf8").trim(), git(repo.primary, "rev-parse", "HEAD"));
+        }
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
+for (const [name, definition] of definitions) {
+  for (const [phase, firstFailure] of [
+    ["admit", 1], ["rebase", 1], ["close_gate", 1], ["close_gate", 2],
+  ] as const) {
+    test(`${name} ${phase} lifecycle fetch retries ref lock at refresh ${firstFailure}`, () => {
+      const repo = repository();
+      try {
+        writeFileSync(join(repo.primary, ".git", "info", "exclude"), "/.workspace/\n");
+        if (phase === "rebase") commit(repo, "feature.txt", "candidate\n");
+        if (phase === "close_gate") stubSuccessfulCloseGateGh(repo);
+        const fetch = stubLifecycleFetch(repo, 1, refLockError, firstFailure);
+        const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${phase}`)], {
+          encoding: "utf8", env: { ...process.env, ...featureScriptEnv(repo), ...fetch.env },
+        });
+        assert.equal(result.status, 0, result.stderr);
+        const cwd = phase === "rebase" ? repo.worktree : repo.primary;
+        const args = phase === "close_gate" ? "--prune origin" : "origin";
+        assert.deepEqual(fetch.calls(), Array(phase === "close_gate" ? 3 : 2).fill(`-C ${cwd} fetch ${args}`));
+        assert.ok(result.stderr.includes(refLockError), result.stderr);
+        if (phase === "close_gate") {
+          assert.equal(existsSync(repo.worktree), false);
+          assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+          assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
+          assert.equal(readFileSync(join(repo.state, "cleanup-phase"), "utf8").trim(), "complete");
+        } else if (phase === "rebase") {
+          assert.equal(readFileSync(join(repo.state, "conflict-action"), "utf8").trim(), "complete");
+        }
+      } finally {
+        rmSync(repo.root, { recursive: true, force: true });
+      }
+    });
+  }
+}
+
 function extractStep(source: string, id: string): string {
   const start = source.indexOf(`  - id: ${id}\n`);
   assert.ok(start >= 0, `missing step ${id}`);
