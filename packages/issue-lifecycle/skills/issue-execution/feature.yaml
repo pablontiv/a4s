@@ -116,7 +116,7 @@ env:
           sleep 0.1
         done
         RESOURCE_LOCK="$key.lock"
-        trap 'rm -f "$RESOURCE_LOCK/history" "$RESOURCE_LOCK/rows" "$RESOURCE_LOCK/owner" "$RESOURCE_LOCK/owner-history"; rmdir "$RESOURCE_LOCK"' EXIT
+        trap 'code=$?; rm -f "$RESOURCE_LOCK/history" "$RESOURCE_LOCK/rows" "$RESOURCE_LOCK/owner" "$RESOURCE_LOCK/owner-history"; rmdir "$RESOURCE_LOCK"; if [[ "$code" != 0 && "${cleanup_diagnosed:-false}" != true ]] && declare -F diagnostic >/dev/null; then diagnostic "resource proof or cleanup operation failed (exit $code)"; fi' EXIT
         if [[ -e "$WORKTREE" ]]; then
           [[ "$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-common-dir)" == "$(git -C "$primary" rev-parse --absolute-git-dir)" &&
              "$(git -C "$WORKTREE" branch --show-current)" == "$BRANCH" &&
@@ -200,6 +200,40 @@ env:
         fi
         rm "$key.lock/history" "$key.lock/rows"
         PRIMARY=$primary WORKTREE=$expected
+      }
+      resolve_run_pr() {
+        local repo ref rows
+        repo=$(git -C "$PRIMARY" remote get-url origin)
+        ref=${PR_NUMBER:-}
+        if [[ -z "$ref" && -f "$STATE/pr-number" ]]; then ref=$(cat "$STATE/pr-number"); fi
+        if [[ -n "$ref" ]]; then
+          RUN_PR=$(gh pr view "$ref" --repo "$repo" --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit)
+        else
+          rows=$(gh pr list --repo "$repo" --head "$BRANCH" --base "$BASE_BRANCH" --state all \
+            --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit --limit 100)
+          RUN_PR=$(jq -cr '
+            [.[] | select(.state == "OPEN")] as $open |
+            if ($open | length) == 1 then $open[0]
+            elif ($open | length) > 1 then error("ambiguous open run PR")
+            elif length == 0 then null
+            elif length == 1 then .[0]
+            else error("ambiguous completed run PR; supply PR_NUMBER") end' <<<"$rows")
+        fi
+        if [[ "$RUN_PR" == null ]]; then return; fi
+        jq -e --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
+          '.headRefName == $branch and .baseRefName == $base and (.number | type == "number") and
+           (.state == "OPEN" or .state == "MERGED")' <<<"$RUN_PR" >/dev/null
+        jq -r .number <<<"$RUN_PR" > "$STATE/pr-number"
+      }
+      integrated_terminal() {
+        if [[ "$RUN_PR" != null && "$(jq -r .state <<<"$RUN_PR")" == MERGED ]]; then
+          jq --arg run "$RUN" --arg checkpoint "$1" --arg candidate "$(jq -r .sha "$STATE/candidate.json")" \
+            '. + {run:$run,checkpoint:$checkpoint,candidate:$candidate}' <<<"$RUN_PR" > "$STATE/integrated.json"
+          printf 'INTEGRATED=yes\n' >> "${DAGU_OUTPUT_FILE:-/dev/null}"
+          printf 'integrated: PR #%s already MERGED at %s; no publication; cleanup will verify local resources\n' \
+            "$(jq -r .number <<<"$RUN_PR")" "$1"
+          exit 0
+        fi
       }
 steps:
   - id: admit
@@ -916,9 +950,13 @@ steps:
     run: |
       set -euo pipefail
       umask 0022
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      eval "$DAGU_RESOURCE_GUARD"
+      resolve_run_pr
+      integrated_terminal checkpoint_push
       test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
       test -z "$(git -C "$WORKTREE" status --porcelain)"
-      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      printf 'INTEGRATED=no\n' >> "${DAGU_OUTPUT_FILE:-/dev/null}"
       head=$(jq -r .sha "$STATE/candidate.json")
       test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$head"
       repo=$WORKTREE base=$(cat "$STATE/base")
@@ -986,9 +1024,14 @@ steps:
       git -C "$WORKTREE" push "--force-with-lease=$ref:$expected" origin "$sha:$ref"
       printf '%s\n' "$sha" > "$STATE/checkpoint-sha"
       printf 'checkpoint_sha=%s\n' "$sha"
+    outputs:
+      - name: INTEGRATED
 
   - id: dependency_review
     depends: checkpoint_push
+    preconditions:
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     action: human.task
     with:
       prompt: "Dependency net checkpoint: the wait handler completes unchanged dependencies or pushes back to triage."
@@ -1001,6 +1044,9 @@ steps:
 
   - id: dependency_review_cancellation
     depends: dependency_review
+    preconditions:
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     env:
       - CANCEL: ${steps.dependency_review.outputs.CANCEL}
       - CHECKPOINT: dependency_review
@@ -1011,6 +1057,8 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     run: '"$A4S_BIN" escalation check'
     outputs:
       - name: ESCALATE
@@ -1061,6 +1109,8 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     run: |
       set -euo pipefail
       umask 0022
@@ -1255,6 +1305,8 @@ steps:
   - id: validation
     depends: recover_gate_cancellation
     preconditions:
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
       - condition: "${gate.exit_code}"
         expected: "0"
       - condition: "${steps.triage.outputs.POC}"
@@ -1301,6 +1353,8 @@ steps:
     depends: validation
     continue_on: skipped
     preconditions:
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
       - condition: "${gate.exit_code}"
         expected: "0"
       - condition: "${steps.triage.outputs.POC}"
@@ -1322,12 +1376,18 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     env:
       - APPROVED: ${steps.validation.outputs.APPROVED}
       - TESTED_SHA: ${steps.validation.outputs.TESTED_SHA}
     run: |
       set -euo pipefail
       umask 0022
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      eval "$DAGU_RESOURCE_GUARD"
+      resolve_run_pr
+      integrated_terminal push
       export A4S_INTEGRATION_WAITER=$$
       while true; do
         integration_status=0
@@ -1356,8 +1416,23 @@ steps:
           '{sha:$sha,procedure:$procedure,approved:"yes"}' > "$STATE/validation.json"
       fi
       remote_ref="refs/heads/$BRANCH"
+      resolve_run_pr
+      integrated_terminal push
       expected=$(git -C "$WORKTREE" ls-remote origin "$remote_ref" | cut -f1)
+      if [[ "$RUN_PR" != null && "$expected" != "$sha" ]] &&
+         jq -e '.autoMergeRequest != null' <<<"$RUN_PR" >/dev/null; then
+        pr_number=$(jq -r .number <<<"$RUN_PR")
+        repo=$(git -C "$PRIMARY" remote get-url origin)
+        gh pr merge "$pr_number" --repo "$repo" --disable-auto
+        resolve_run_pr
+        integrated_terminal push
+        jq -e '.state == "OPEN" and .autoMergeRequest == null' <<<"$RUN_PR" >/dev/null
+      fi
       git -C "$WORKTREE" push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"
+      printf '%s\n' "$sha" > "$STATE/published-sha"
+      printf 'INTEGRATED=no\n' >> "${DAGU_OUTPUT_FILE:-/dev/null}"
+    outputs:
+      - name: INTEGRATED
 
   - id: recover_push
     depends: push
@@ -1391,10 +1466,15 @@ steps:
     preconditions:
       - condition: "${steps.triage.outputs.POC}"
         expected: "no"
+      - condition: "${steps.checkpoint_push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
+      - condition: "${steps.push.outputs.INTEGRATED}"
+        expected: "re:^(|no)$"
     run: |
       set -euo pipefail
       cd "$WORKTREE"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      if [[ -z "$PR_NUMBER" && -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
       sha=$(jq -r .sha "$STATE/candidate.json")
       test "$(git branch --show-current)" = "$BRANCH"
       test "$(git rev-parse HEAD)" = "$sha"
@@ -1467,6 +1547,7 @@ steps:
       test -z "$(git status --porcelain)"
       jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null
       pr_ref=${PR_NUMBER:-$BRANCH}
+      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
       for ((attempt = 0; attempt <= 12; attempt++)); do
         observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)
         if test "$observed_sha" = "$sha"; then
@@ -1483,9 +1564,12 @@ steps:
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")
       if test "$(jq -r '.state' <<< "$observation")" = MERGED; then
         jq -e '.mergeCommit.oid | type == "string" and length > 0' <<< "$observation" >/dev/null
-      elif jq -e '.autoMergeRequest != null' <<< "$observation" >/dev/null; then
-        :
+      elif test "$(jq -r '.state' <<< "$observation")" != OPEN; then
+        printf 'auto_merge: PR is not OPEN: %s\n' "$observation" >&2; exit 1
       else
+        if jq -e '.autoMergeRequest != null' <<< "$observation" >/dev/null; then
+          gh pr merge "$pr_ref" --disable-auto
+        fi
         case "$(jq -r '.mergeStateStatus' <<< "$observation")" in
           CLEAN) gh pr merge "$pr_ref" --squash --match-head-commit "$sha" --body "$merge_body" ;;
           BEHIND|BLOCKED|UNSTABLE|DIRTY|UNKNOWN)
@@ -1624,11 +1708,31 @@ steps:
       set -euo pipefail
       if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("A4S_PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       umask 0022
-      eval "$DAGU_RESOURCE_GUARD"
-      resource_lock cleanup
       MODE=${CLEANUP_CLOSE:-false}
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || exit 1
       mkdir -p "$STATE"
+      phase=identify
+      diagnostic() {
+        cleanup_diagnosed=true
+        printf 'cleanup: run=%s phase=%s preserved: %s; branch %s; worktree %s; evidence=%s\n' \
+          "$RUN" "$phase" "$*" "$BRANCH" "$WORKTREE" "$STATE" >&2
+        printf 'run=%s phase=%s preserved: %s; branch=%s; worktree=%s; evidence=%s\n' \
+          "$RUN" "$phase" "$*" "$BRANCH" "$WORKTREE" "$STATE" > "$STATE/cleanup-diagnostic"
+        printf 'Recovery: preserve branch %s and worktree %s; inspect %s before a suffixed run ID.\n' "$BRANCH" "$WORKTREE" "$STATE" >&2
+        [[ "${CLEANUP_CLOSE:-false}" != true ]] || exit 1
+        exit 0
+      }
+      eval "$DAGU_RESOURCE_GUARD"
+      resource_lock cleanup
+      TERMINAL_INTEGRATED=false
+      if [[ -f "$STATE/integrated.json" ]]; then
+        jq -e --arg run "$RUN" --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
+          '.run == $run and .headRefName == $branch and .baseRefName == $base and .state == "MERGED"' \
+          "$STATE/integrated.json" >/dev/null
+        TERMINAL_INTEGRATED=true
+      fi
+      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then PR_NUMBER=$(cat "$STATE/pr-number"); fi
       [[ "$MODE" != true ]] || printf 'true\n' > "$STATE/cleanup-close"
       [[ ! -f "$STATE/cleanup-close" ]] || MODE=true
       if [[ "$MODE" == true ]]; then
@@ -1637,15 +1741,6 @@ steps:
         "$A4S_BIN" protect release-auto --reason terminal
       fi
       [[ -f "$STATE/cleanup-phase" ]] || printf 'identify\n' > "$STATE/cleanup-phase"
-      phase=identify
-      diagnostic() {
-        printf 'cleanup: run=%s phase=%s preserved: %s; branch %s; worktree %s; evidence=%s\n' \
-          "$RUN" "$phase" "$*" "$BRANCH" "$WORKTREE" "$STATE" >&2
-        printf '%s\n' "$*" > "$STATE/cleanup-diagnostic"
-        printf 'Recovery: preserve branch %s and worktree %s; inspect %s before a suffixed run ID.\n' "$BRANCH" "$WORKTREE" "$STATE" >&2
-        [[ "${CLEANUP_CLOSE:-false}" != true ]] || exit 1
-        exit 0
-      }
       record() { phase=$1; printf '%s\n' "$phase" > "$STATE/cleanup-phase"; }
       primary=$(cd "$PRIMARY" && pwd -P) || diagnostic "PRIMARY unavailable"
       [[ "$(git -C "$PRIMARY" rev-parse --absolute-git-dir)" == "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" ]] ||
@@ -1724,6 +1819,8 @@ steps:
           --jq 'map(select(.name == env.REQUIRED_CHECK)) | if length == 0 then "MISSING" else .[0].state end') ||
           diagnostic "required check $REQUIRED_CHECK lookup failed"
         [[ "$check_state" == SUCCESS ]] || diagnostic "required check $REQUIRED_CHECK state=$check_state, expected SUCCESS"
+      fi
+      if [[ "$MODE" == true || "$TERMINAL_INTEGRATED" == true ]]; then
         primary_branch=$(git -C "$PRIMARY" branch --show-current)
         [[ "$primary_branch" == "$BASE_BRANCH" ]] ||
           diagnostic "close_gate: PRIMARY $PRIMARY on branch $primary_branch, expected $BASE_BRANCH"
@@ -1767,7 +1864,7 @@ steps:
       fi
       record branch-removed
       remote=absent
-      if [[ "$MODE" == true ]]; then
+      if [[ "$MODE" == true || "$TERMINAL_INTEGRATED" == true ]]; then
         owned || diagnostic "resource owner changed before remote removal"
         remote_head=$(git -C "$PRIMARY" ls-remote --heads origin "refs/heads/$BRANCH") || diagnostic "remote branch query failed"
         if [[ -n "$remote_head" ]]; then
@@ -1785,7 +1882,7 @@ steps:
            "$(git -C "$PRIMARY" rev-parse HEAD)" == "$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH")" ]] ||
           diagnostic "PRIMARY must be clean on refreshed base"
       fi
-      if [[ "$MODE" == true ]]; then
+      if [[ "$MODE" == true || "$TERMINAL_INTEGRATED" == true ]]; then
         owned || diagnostic "resource owner changed before checkpoint removal"
         checkpoint="refs/dagu/checkpoints/issue-$ISSUE"
         checkpoint_sha=$(git -C "$PRIMARY" ls-remote origin "$checkpoint" | cut -f1) ||

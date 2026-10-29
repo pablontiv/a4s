@@ -53,6 +53,46 @@ for (const [name, definition] of definitions) {
     assert.match(extractStep(source, "poc_scope_decision"), /outputs.SCOPE_REJECTION/);
     assert.match(source, /"recover_poc_scope - scope-transition.log"/);
   });
+  test(`${name} changed publication disarms the resolved PR and merge requests always guard the admitted SHA`, () => {
+    const source = readFileSync(definition, "utf8");
+    const push = extractStep(source, "push");
+    const publish = push.indexOf('push "--force-with-lease=$remote_ref:$expected"');
+    assert.ok(push.indexOf('resolve_run_pr') < publish);
+    assert.ok(push.indexOf('gh pr merge "$pr_number" --repo "$repo" --disable-auto') < publish);
+    assert.match(push, /jq -e '\.state == "OPEN" and \.autoMergeRequest == null'/);
+    assert.match(push, /test "\$candidate" = "\$gated"/);
+    assert.match(push, /if \[\[ "\$TESTED_SHA" != "\$sha" \]\]; then/);
+    assert.match(extractStep(source, "pr"), /STATE\/pr-number/);
+    const merge = extractStep(source, "auto_merge");
+    assert.match(merge, /autoMergeRequest != null[\s\S]*gh pr merge "\$pr_ref" --disable-auto/);
+    assert.match(merge, /CLEAN\) gh pr merge "\$pr_ref" --squash --match-head-commit "\$sha"/);
+    assert.match(merge, /gh pr merge "\$pr_ref" --auto --squash --match-head-commit "\$sha"/);
+    assert.doesNotMatch(merge, /autoMergeRequest[^]*then\n        :/);
+  });
+  test(`${name} integrated checkpoints terminate without publication and preserve recovery ownership proofs`, () => {
+    const source = readFileSync(definition, "utf8");
+    for (const checkpoint of ["checkpoint_push", "push"]) {
+      const step = extractStep(source, checkpoint);
+      assert.match(step, new RegExp(`integrated_terminal ${checkpoint}`));
+      assert.ok(step.indexOf(`integrated_terminal ${checkpoint}`) < step.indexOf('git -C "$WORKTREE" push'));
+      assert.match(step, /outputs:\n      - name: INTEGRATED/);
+    }
+    for (const step of ["dependency_review", "dependency_review_cancellation", "rebase_budget", "rebase", "validation", "validation_cancellation", "push", "pr"]) {
+      assert.match(extractStep(source, step), /condition: "\$\{steps.checkpoint_push.outputs.INTEGRATED\}"/);
+    }
+    assert.match(extractStep(source, "pr"), /condition: "\$\{steps.push.outputs.INTEGRATED\}"/);
+    assert.match(source, /gh pr list --repo "\$repo" --head "\$BRANCH" --base "\$BASE_BRANCH" --state all/);
+    // The operator's retained recovery protocol is separate from PR-head publication.
+    assert.match(extractStep(source, "checkpoint_push"), /ref="refs\/dagu\/checkpoints\/issue-\$ISSUE"/);
+    const cleanup = extractStep(source, "close_gate");
+    assert.match(cleanup, /TERMINAL_INTEGRATED/);
+    assert.match(cleanup, /dirty worktree; files retained/);
+    assert.match(cleanup, /\[\[ -n "\$expected_checkpoint" && "\$checkpoint_sha" == "\$expected_checkpoint" \]\]/);
+    assert.match(cleanup, /branch=%s; worktree=%s; evidence=%s/);
+    assert.match(cleanup, /diagnostic\(\) \{\n        cleanup_diagnosed=true/);
+    assert.match(source, /"\$\{cleanup_diagnosed:-false\}" != true/);
+    assert.match(source, /run: \*feature_cleanup/);
+  });
   for (const [step, downstream] of [["start_gate", "implement"], ["gate", "validation"], ["push", "pr"]]) {
     test(`${name} ${step} routes failure through its recovery checkpoint`, () => {
       const source = readFileSync(definition, "utf8");

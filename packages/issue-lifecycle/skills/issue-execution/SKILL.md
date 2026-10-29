@@ -723,10 +723,19 @@ by `base`, and accepts `initial-head` until `candidate.json` records the candida
 Conflict rewind preserves delivered files and refreshes `base` and `initial-head`
 for recapture.
 
-A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
-`gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
-Otherwise the replacement run's `push` can trigger that merge; the current
-candidate must complete its local gate before that publication.
+A failed run can leave its PR's auto-merge armed. `checkpoint_push` and `push`
+resolve the run's PR (explicit `PR_NUMBER`, recorded `pr-number`, or an unambiguous
+head/base lookup including completed PRs). A `MERGED` PR records `integrated.json`
+and finishes successfully without republishing or waiting on new admission/CI.
+Shared exit cleanup still independently proves the local candidate integrated;
+a newer or dirty worktree remains recoverable with its location in `cleanup-diagnostic`.
+
+For an open PR whose head will change, `push` clears an armed request with
+`--disable-auto` and verifies it is absent before publishing the current gated
+and, when declared, operator-validated SHA. `auto_merge` replaces any existing
+request instead of trusting it, using a fresh `--match-head-commit <SHA>` request;
+the CLEAN direct merge uses the same SHA guard. The sequence is disarm → publish
+→ request merge for the admitted candidate. This is not atomic against other actors.
 
 `checkpoint_push` preserves the captured candidate before the gate and any optional operator validation
 in the remote recovery ref `refs/dagu/checkpoints/issue-N`, using an explicit
@@ -739,9 +748,15 @@ auto-merge unchanged. To recover that checkpoint in a fresh clone:
 git fetch origin refs/dagu/checkpoints/issue-N
 git branch dagu/issue-N FETCH_HEAD
 ```
-`close_gate` removes the durable checkpoint with an explicit lease after merge.
-Keep the checkpoint until that lifecycle completes; it is the recovery source
-even when the gate failed and the PR branch still names the previous candidate.
+`close_gate`, or exit cleanup after an already-MERGED checkpoint, removes the
+durable checkpoint with an explicit lease after integration and ownership proofs.
+Otherwise keep it: it is the recovery source even when the gate failed and the PR
+branch still names the previous candidate. The operator's retained pre-gate
+recovery publication is distinct from the admitted PR-head publication at `push`;
+the older local-only checkpoint clause of #294 is not claimed as satisfied.
+The historical external-semantics PoC remains research (`PASS`, `scope:FAIL` and
+a failed native run), not promotable lifecycle admission. Its demonstrated GitHub
+semantics need not be rerun; current candidate admission and safe cleanup still do.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
@@ -1899,6 +1914,6 @@ successors have no proven safe interval.
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` applies the same ownership, integration and clean-state checks to terminal runs, preserving resources with durable diagnostics whenever proof is uncertain. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. An already-MERGED PR observed at `checkpoint_push` or `push` takes a successful integrated terminal path without republishing. `handler_on.exit` applies the same ownership, integration and clean-state checks, also removing run-owned branches and the matching recovery checkpoint on that terminal path. If any proof fails, it preserves recoverable resources and writes the reason, branch, worktree and evidence location to `cleanup-diagnostic`; successful terminal status alone does not certify cleanup. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by cleanup.
 
 Lifecycle completion evidence is distinct from sprint-goal evaluation. Sprint Planning defines Definition of Done and yes/no goal checks as content; Sprint Review evaluates those against the recorded outcomes. The existing lifecycle checkpoints establish candidate, merge, and cleanup evidence rather than adding a sprint-goal gate.
