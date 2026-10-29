@@ -65,6 +65,14 @@ flowchart LR
   change receipt declarations to make an action pass. A tick logs
   `reconcile-failure run=<id> status=1 cause=<diagnostic>` and continues other
   compatible runs. Restore a missing exact artifact under operator authority.
+  Native `retry`, `human-task` and `stop` mutations preflight the invoking
+  process's PATH for `bash`, `git`, `gh`, `jq`, `curl`, `node`, `bun`, `omp` and
+  `dagu` before calling Dagu: synchronous retries and terminal handlers do not
+  inherit the service's toolchain. Missing commands fail without starting any
+  step or changing the run. Supply the station toolchain's full PATH as a literal
+  value when retrying from an operator shell; shell expansion is not accepted by
+  the mutation guard. This check does not import service environment variables
+  or provision repository-specific gate tools.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.

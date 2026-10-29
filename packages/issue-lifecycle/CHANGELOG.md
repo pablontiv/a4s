@@ -6,6 +6,7 @@
 
 ## 0.7.5
 
+- Preflight native retry/resume/stop mutations against the caller's required toolchain before invoking Dagu, so a shell without `jq` fails before any step runs. Feature ownership cleanup distinguishes missing/unavailable `jq` from malformed history (#757).
 - Classify GitHub CLI's exact exit-1/stdout no-required-check response as `PENDING` / `WAIT` only after independently confirming classic and effective ruleset policy on the PR's effective base and complete current-head publication evidence. Preserve app constraints, paginated statuses, changed PR/head/base binding rejection and actionable lookup failures; report pending publication accurately to the owner (#411).
 
 ## 0.7.4
