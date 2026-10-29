@@ -254,9 +254,9 @@ export class Transitions {
         const iteration = node.approvalIteration ?? 0;
         const ci = options.ciDiagnostic;
         const returned = step === "implement" && ci?.class === "CODE_FAIL" && ci.iteration + 1 === iteration;
-        const diagnosed = ["await_ci", "await_merge"].includes(step) && ci?.class === "BLOCKED" && ci.iteration === iteration;
+        const diagnosed = ["await_ci", "await_merge"].includes(step) && ["BLOCKED", "PENDING"].includes(ci?.class ?? "") && ci?.iteration === iteration;
         const ciCause = returned || diagnosed
-          ? ` ci=${plain(ci!.class)} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
+          ? ` ci=${plain(ci!.class)}${ci!.class === "PENDING" ? " action=WAIT" : ""} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
         const causeText = (step.endsWith("_primary_unavailable") || step.startsWith("recover_")) ? node.step.humanTask.prompt
           : run.name === "poc" && step === "run_poc" && iteration > 0 ? run.scopeFailureCause : undefined;
         const escalation = ["escalation", "rebase_escalation"].includes(step) ? options.escalationDiagnostic : undefined;
@@ -270,7 +270,7 @@ export class Transitions {
             + `Approve: dagu human-task complete feature --run-id ${quote(run.dagRunId)} --step validation --input APPROVED=yes --input TESTED_SHA=${quote(sha ?? "<tested-sha unavailable; inspect dagu status>")}\n`
             + `Push back: dagu human-task push-back feature --run-id ${quote(run.dagRunId)} --step validation --expected-iteration ${iteration} --input REASON='<operator reason>'`
           : "";
-        const noticeKey = diagnosed ? [key, step, "ci", ci!.sha, iteration, ci!.cause]
+        const noticeKey = diagnosed ? [key, step, "ci", ci!.class, ci!.sha, iteration, ci!.cause]
           : [key, step, iteration, ...(escalation ? [escalation] : [])];
         notice(JSON.stringify(noticeKey),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}${validationNotice}`);

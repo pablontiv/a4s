@@ -120,6 +120,8 @@ else if(a[0]==='pr'&&a[1]==='view') {
  if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:fields==='autoMergeRequest'?c.auto!==false:process.env.BRANCH);
  else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,statusCheckRollup:[],mergeCommit:c.mergeOid?{oid:c.mergeOid}:null});
 } else if(a[0]==='pr'&&a[1]==='checks') {
+ if(c.requiredText) { emit(c.requiredText); process.exit(1); }
+ if(c.requiredError) { console.error(c.requiredError); process.exit(c.requiredExit??1); }
  const payload=c.required??[{name:'validate',state:c.pending?'IN_PROGRESS':c.conclusion.toUpperCase(),link:'https://github.com/example/repo/actions/runs/123/job/456'}];
  if(a.includes('--jq')) {
   const row=payload.find(x=>x.name===(process.env.REQUIRED_CHECK||'validate'));
@@ -131,7 +133,17 @@ else if(a[0]==='pr'&&a[1]==='view') {
  if(c.apiError) { console.error(c.apiError); process.exit(4); }
  const endpoint=a.at(-1);
  if(endpoint.includes('/check-runs')) emit([{check_runs:[...(c.checks??[{id:456,name:'validate',head_sha:c.checksSha??head(),status:c.pending?'in_progress':'completed',conclusion:c.conclusion,details_url:'https://github.com/example/repo/actions/runs/123/job/456',output:{summary:c.summary??''}}]),{id:457,name:'CodeQL',app:{slug:'github-advanced-security'},head_sha:head(),status:c.codeqlPending?'in_progress':'completed',conclusion:c.codeqlConclusion??'success'}]}]);
+ else if(endpoint.includes('/status?')) emit(c.statusPages??[{sha:head(),statuses:c.statuses??[]}]);
  else if(endpoint.endsWith('/status')) emit({sha:head(),statuses:c.statuses??[]});
+ else if(endpoint.includes('/pulls/')) {
+  c.bindingReads=(c.bindingReads??0)+1; save();
+  emit({number:77,base:{repo:{id:42,full_name:'example/repo'},ref:c.bindingReads>1&&c.changedBase?'integration/v2':'integration/v1',sha:c.baseSha??head()},head:{sha:c.bindingReads>1&&c.changedHead?c.changedHead:head()}});
+ }
+ else if(endpoint.includes('/protection/')) {
+  if(c.policyError) { console.error(c.policyError); process.exit(1); }
+  emit(c.classic??{strict:true,contexts:['validate'],checks:[{context:'validate',app_id:c.appId??null}]});
+ }
+ else if(endpoint.includes('/rules/branches/')) emit(c.rules??[[]]);
  else if(endpoint.includes('/code-scanning/alerts')) {
   if(c.codeScanningStatus===403) { console.error('HTTP 403: Code scanning is not enabled for this repository'); process.exit(1); }
   emit([c.alerts??[]]);
@@ -365,6 +377,67 @@ function publish(f: Fixture, feature: string, value: string): string {
       assert.equal(JSON.parse(readFileSync(f.control, "utf8")).statusStep, "both");
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
+
+test("unpublished CLI response waits, later publication passes, and unknown or changed evidence fails closed", async t => {
+  const f = fixture("unpublished411");
+  try {
+    git(f.worktree, "push", "origin", f.branch);
+    const sha = git(f.worktree, "rev-parse", "HEAD");
+    const sentinel = "no required checks reported on the 'dagu/issue-226' branch";
+    update(f, { requiredText: sentinel, checks: [], bindingReads: 0 });
+    const args = ["run", "--primary", f.primary, "--run", f.env.RUN!, "--", "reconcile", "step", "observe"];
+    let tick = 0;
+    const observeCurrent = () => {
+      f.env.CI_OBSERVATION_ID = String(++tick);
+      const direct = spawnSync(a4sBin, args, { env: f.env, encoding: "utf8" });
+      assert.equal(direct.status, 0, direct.stdout + direct.stderr);
+      return JSON.parse(readFileSync(join(f.state, "ci-observation.json"), "utf8"));
+    };
+    const pending = observeCurrent();
+    assert.equal(pending.class, "PENDING");
+    assert.equal(pending.action, "WAIT");
+    assert.equal(pending.sha, sha);
+    const diagnostic = await readCiDiagnostic(f.primary, f.env.RUN!, false, new AbortController().signal);
+    const waiting: RunDetails = { name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting", params: "OMP_SESSION_ID=owner",
+      nodes: [{ step: { name: "await_ci", humanTask: {} }, statusLabel: "waiting", approvalIteration: 0 }] };
+    assert.match(new Transitions("owner").observe(waiting, { ciDiagnostic: diagnostic! }).wakeMessage!, /ci=PENDING action=WAIT/);
+    update(f, { requiredText: null, checks: null });
+    const published = observeCurrent();
+    assert.equal(published.class, "PASS");
+    assert.equal(published.sha, sha);
+    t.diagnostic(JSON.stringify({ command: [a4sBin, ...args], observations: [pending, published],
+      ownerDiagnostic: new Transitions("owner").observe(waiting, { ciDiagnostic: diagnostic! }) }));
+    for (const error of ["HTTP 401: authentication required", "HTTP 403: permission denied", "HTTP 404: Not Found"]) {
+      update(f, { requiredText: sentinel, checks: [], policyError: error, bindingReads: 0 });
+      const blocked = observeCurrent();
+      assert.equal(blocked.class, "BLOCKED");
+      assert.match(blocked.cause, /policy lookup failed.*authentication, permissions/);
+      assert.ok(blocked.cause.includes(error));
+    }
+    for (const error of ["HTTP 401: authentication required", "HTTP 403: permission denied", "indeterminate lookup"]) {
+      update(f, { requiredText: null, requiredError: error, policyError: null, codeqlPending: true });
+      const blocked = observeCurrent();
+      assert.equal(blocked.class, "BLOCKED");
+      assert.ok(blocked.cause.includes(error));
+    }
+    update(f, { requiredText: sentinel, requiredError: null, codeqlPending: false, appId: 15368, bindingReads: 0,
+      checks: [{ id: 456, name: "validate", head_sha: sha, app: { id: 99 }, status: "completed", conclusion: "success" }] });
+    assert.equal(observeCurrent().class, "PENDING", "another app cannot satisfy the configured check");
+    update(f, { bindingReads: 0, checks: [{ id: 456, name: "validate", head_sha: sha, app: { id: 15368 }, status: "completed", conclusion: "success" }] });
+    assert.equal(observeCurrent().class, "PASS");
+    update(f, { bindingReads: 0, checks: [{ id: 456, name: "validate", head_sha: "a".repeat(40), app: { id: 15368 }, status: "completed", conclusion: "success" }] });
+    assert.equal(observeCurrent().class, "STALE_SHA");
+    for (const change of [{ changedBase: true }, { changedHead: "b".repeat(40) }]) {
+      update(f, { checks: [], bindingReads: 0, changedBase: false, changedHead: null, ...change });
+      const stale = observeCurrent();
+      assert.equal(stale.class, "STALE_SHA");
+      assert.equal(stale.action, "WAIT");
+      assert.equal(stale.sha, sha);
+    }
+    update(f, { changedHead: null, bindingReads: 0, statusPages: [] });
+    assert.equal(observeCurrent().class, "BLOCKED", "incomplete publication cannot establish absence");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
 
   test("all classes, rebase routes, retry backoff/exhaustion and stale iteration", () => {
     const f = fixture();

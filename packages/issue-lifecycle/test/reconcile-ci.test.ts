@@ -8,6 +8,7 @@ import { recordNoProgress } from "../src/ci-no-progress.ts";
 import { observeCodeScanning } from "../src/code-scanning.ts";
 import { finishRun, inspectRun, type ReconcileRunDependencies } from "../src/reconcile-run.ts";
 import { Transitions, type CiDiagnostic, type RunDetails } from "../src/status/progress.ts";
+import { observeRequiredCheckPolicy, requiredCheckBinding } from "../src/required-check-policy.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
 
 const root = mkdtempSync(join(tmpdir(), "a4s-reconcile-unit-"));
@@ -281,4 +282,54 @@ test("CodeQL waits for current-head results, returns findings and passes the fix
   assert.equal(blocked.class, "BLOCKED");
   assert.match(blocked.cause, /403/);
   assert.ok(calls.some(args => args.includes("--paginate") && args.at(-1)!.includes("/code-scanning/alerts")));
+});
+
+test("unpublished-check policy binds the effective base and preserves classic/ruleset app constraints across pages", () => {
+  const calls: string[][] = [];
+  const pull = { number: 77, base: { repo: { id: 42, full_name: "example/repo" }, ref: "integration/v1", sha: nextSha }, head: { sha } };
+  const policy = observeRequiredCheckPolicy("example/repo", "77", sha, args => {
+    calls.push(args);
+    if (args.at(-1)!.includes("/pulls/")) return pull;
+    if (args.at(-1)!.includes("/protection/")) return { strict: true, contexts: ["validate"], checks: [{ context: "validate", app_id: 15368 }] };
+    return [[], [{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "security", integration_id: 88 }] } }]];
+  });
+  assert.equal(policy.class, "PENDING");
+  assert.deepEqual(policy.required, [{ name: "validate", state: "EXPECTED", app_id: 15368 }, { name: "security", state: "EXPECTED", app_id: 88 }]);
+  assert.deepEqual(policy.binding, requiredCheckBinding(pull));
+  assert.ok(calls[1]!.at(-1)!.includes("branches/integration%2Fv1/protection"));
+  assert.deepEqual(calls[2]!.slice(0, 3), ["api", "--paginate", "--slurp"]);
+  assert.ok(calls[2]!.at(-1)!.includes("rules/branches/integration%2Fv1?per_page=100"));
+});
+
+test("required-policy unknown auth, protection, malformed and empty evidence fails closed; a moved head is stale", () => {
+  const pull = { number: 77, base: { repo: { id: 42, full_name: "example/repo" }, ref: "main", sha: nextSha }, head: { sha } };
+  const classic = { strict: true, contexts: ["validate"], checks: [{ context: "validate", app_id: null }] };
+  const observe = (protection: unknown, rules: unknown = [[]], binding: unknown = pull) =>
+    observeRequiredCheckPolicy("example/repo", "77", sha, args => {
+      const endpoint = args.at(-1)!;
+      if (endpoint.includes("/pulls/")) return binding;
+      const result = endpoint.includes("/protection/") ? protection : rules;
+      if (result instanceof Error) throw result;
+      return result;
+    });
+  assert.equal(observe(classic).class, "PENDING");
+  for (const response of [new Error("HTTP 401: authentication required"), new Error("HTTP 403: permission denied"), new Error("HTTP 404: Not Found"), {}, null]) {
+    const result = observe(response);
+    assert.equal(result.class, "BLOCKED");
+    assert.match(result.cause, /authentication, permissions and base-branch protection/);
+  }
+  for (const rules of [new Error("HTTP 403: rules unavailable"), [], {}, [null], [[{ type: "required_status_checks" }]]]) assert.equal(observe(classic, rules).class, "BLOCKED");
+  assert.equal(observe({ strict: true, contexts: [], checks: [] }).class, "BLOCKED");
+  assert.equal(observe(classic, [[]], { ...pull, head: { sha: nextSha } }).class, "STALE_SHA");
+  assert.equal(observe(classic, [[]], { ...pull, base: { ...pull.base, repo: { id: 99, full_name: "another/repo" } } }).class, "BLOCKED");
+  assert.throws(() => requiredCheckBinding({}), /Incomplete/);
+});
+
+test("owner diagnostics report pending publication as PENDING / WAIT without a blocked escalation", () => {
+  const diagnostic = observation({ class: "PENDING", action: "WAIT", cause: `Required check validate not published for ${sha}` });
+  const effects = new Transitions("owner").observe(waiting(), { ciDiagnostic: diagnostic });
+  const text = JSON.stringify(effects);
+  assert.match(text, /ci=PENDING action=WAIT/);
+  assert.ok(text.includes(sha));
+  assert.doesNotMatch(text, /BLOCKED|DAGU DECISION/);
 });
