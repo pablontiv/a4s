@@ -386,3 +386,27 @@ test("runtime primary resolves the enqueued host binding through its workspace m
   assert.equal(await resolveRunPrimary("http://dagu", { ...run, params: "ISSUE=623" }, new AbortController().signal), primary);
   assert.equal(await resolveRunPrimary("http://dagu", { ...run, resolvedPrimary: "/recorded/primary" }, new AbortController().signal), "/recorded/primary");
 });
+
+for (const statusLabel of ["succeeded", "failed", "aborted"]) {
+  test(`${statusLabel} terminal notices work as the first snapshot and never replay stale waiting nodes`, () => {
+    const terminal = { ...waitingAt("poc", "old-task"), statusLabel };
+    const effects = new Transitions("session-a").observe(terminal);
+    assert.match(effects.wakeMessage!, new RegExp(`status=${statusLabel}\\b`));
+    assert.equal(effects.wakeMessages, undefined, "stale waiting nodes cannot add checkpoint wakes");
+    const transitions = new Transitions("session-a");
+    assert.equal(transitions.observe(terminal, { baseline: true }).wakeMessage, undefined);
+    assert.deepEqual(transitions.observe(terminal), {}, "a startup terminal stays silent");
+    assert.equal(new Transitions("other").observe(terminal).wakeMessage, undefined);
+  });
+
+  test(`widget-only observations produce a ${statusLabel} toast but no duplicate owner wake`, () => {
+    const transitions = new Transitions("session-a");
+    transitions.observe(waitingAt("feature", "gate"), { checkpoints: false });
+    const effects = transitions.observe({
+      ...waitingAt("feature", "gate"), statusLabel, nodes: [{ step: { name: "gate" }, statusLabel }],
+    }, { checkpoints: false });
+    assert.ok(effects.notification?.message.endsWith(statusLabel));
+    assert.equal(effects.wakeMessage, undefined);
+    assert.equal(effects.wakeMessages, undefined);
+  });
+}

@@ -149,18 +149,32 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
 async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
   const transitions = new Transitions(ctx.sessionManager.getSessionId());
   const ledger = new EventLog();
-  const tracked = new Map<string, RunDetails>();
+  const tracked = new Map<string, { summary: RunDetails; detailsBaseline: boolean; ledgerBaseline: boolean }>();
   const completed = new Set<string>();
-  let baseline = true;
+  let initialDiscovery = true;
   while (!signal.aborted) {
     try {
       for (const summary of await discover(base, repo, signal, true)) {
         if (runParam(summary, "OMP_SESSION_ID") !== ctx.sessionManager.getSessionId()) continue;
-        if (!completed.has(topicFor(summary))) tracked.set(topicFor(summary), summary);
+        const topic = topicFor(summary);
+        if (completed.has(topic)) continue;
+        if (initialDiscovery && ["succeeded", "failed", "aborted"].includes(summary.statusLabel)) {
+          completed.add(topic);
+          continue;
+        }
+        const state = tracked.get(topic);
+        if (state) state.summary = summary;
+        else {
+          const detailed = summary.nodes?.every(node => node.statusLabel !== "waiting" || node.step.humanTask !== undefined) ?? false;
+          if (initialDiscovery && detailed) transitions.observe(summary, { baseline: true });
+          tracked.set(topic, { summary, detailsBaseline: initialDiscovery && !detailed, ledgerBaseline: initialDiscovery });
+        }
       }
-      for (const [topic, summary] of tracked) {
-        // A failed request leaves the run tracked, including terminal runs whose
-        // final event has not reached the eventually consistent ledger yet.
+      // Freeze membership before reading any individual run. A failed first
+      // detail or ledger read must not turn an existing run into a new one.
+      initialDiscovery = false;
+      for (const [topic, state] of tracked) {
+        const { summary } = state;
         try {
           const run = await runDetails(base, summary, signal);
           const primary = run.resolvedPrimary ?? runParam(run, "PRIMARY");
@@ -174,27 +188,51 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
             ? await readEscalationDiagnostic(primary, run.dagRunId, signal) : undefined;
           const stalls = await readStallNotices(primary, run.dagRunId, signal);
           const integrationProtection = primary ? readActiveProtection(primary) : undefined;
-          for (const snapshot of [...await ledger.read(base, run, signal), run]) {
+          const terminal = ["succeeded", "failed", "aborted"].includes(run.statusLabel);
+          let snapshots: RunDetails[] = [];
+          let ledgerRead = false;
+          if (!terminal) {
+            try {
+              snapshots = await ledger.read(base, run, signal);
+              ledgerRead = true;
+            } catch (error) {
+              // Current details can still establish the baseline or report a
+              // fresh opening while the historical ledger remains unbaselined.
+              try {
+                await recordRunObservation(run, primary || ctx.cwd, "observation-error",
+                  error instanceof Error ? error.message : String(error));
+              } catch (receiptError) { console.warn("DAGU_RECEIPT_OBSERVATION_FAILED", receiptError); }
+            }
+          }
+          // Seed/deliver the current opening before baselining recovered history,
+          // so a fresh current transition is not consumed by the silent ledger.
+          for (const snapshot of [run, ...snapshots]) {
             if (snapshot !== run) {
               try { await recordRunObservation(snapshot, primary || ctx.cwd, "persisted-transition"); }
               catch (error) { console.warn("DAGU_RECEIPT_OBSERVATION_REJECTED", error); }
             }
+            const baseline = snapshot === run
+              ? state.detailsBaseline && !terminal
+              : state.ledgerBaseline;
             const effects = transitions.observe(snapshot, { baseline, ...(ciDiagnostic ? { ciDiagnostic } : {}),
               ...(escalationDiagnostic ? { escalationDiagnostic } : {}), ...(stalls.length ? { stalls } : {}),
               ...(integrationProtection ? { integrationProtection } : {}) });
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.warningMessage) ctx.ui.notify(effects.warningMessage, "warning");
-            if (snapshot.statusLabel === "succeeded") {
-              completed.add(topic);
-              tracked.delete(topic);
-            }
+          }
+          state.detailsBaseline = false;
+          // An empty successful read establishes a baseline too. A failed read
+          // keeps its own baseline without suppressing later current-state changes.
+          if (ledgerRead) state.ledgerBaseline = false;
+          if (terminal) {
+            completed.add(topic);
+            tracked.delete(topic);
           }
         } catch (error) {
           try { await recordRunObservation(summary, summary.resolvedPrimary ?? runParam(summary, "PRIMARY") ?? ctx.cwd, "observation-error", error instanceof Error ? error.message : String(error)); }
           catch (receiptError) { console.warn("DAGU_RECEIPT_OBSERVATION_FAILED", receiptError); }
         }
       }
-      baseline = false;
     } catch { /* Discovery and ingestion recover independently of SSE. */ }
     await delay(1000, undefined, { signal }).catch(() => {});
   }

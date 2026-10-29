@@ -43,12 +43,14 @@ export class EventLog {
       const nodes = entry.data?.dag_run_status?.nodes ?? [];
       if (entry.type === "dag.run.waiting") {
         snapshots.push({ ...run, receiptEvent: { id: entry.id, type: entry.type, source: "dagu-persisted-event-log", cursorReset: restarted }, statusLabel: "waiting", nodes: nodes.filter(node => node.status === 7).flatMap(node => {
-          const metadata = run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === (node.step_id ?? node.step_name));
-          return metadata?.step.humanTask ? [{
+          const metadata = run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === (node.step_id ?? node.step_name)
+            && candidate.statusLabel === "waiting"
+            && (candidate.approvalIteration ?? 0) === (node.approval_iteration ?? 0));
+          return ["waiting", "running"].includes(run.statusLabel) && metadata?.step.humanTask ? [{
             step: metadata.step, statusLabel: "waiting", approvalIteration: node.approval_iteration ?? 0,
           }] : [];
         }) });
-      } else if (entry.type === "dag.run.succeeded") {
+      } else if (entry.type === "dag.run.succeeded" && run.statusLabel === "succeeded") {
         snapshots.push({ ...run, receiptEvent: { id: entry.id, type: entry.type, source: "dagu-persisted-event-log", cursorReset: restarted }, statusLabel: "succeeded", nodes: [] });
       }
       this.seen.add(entry.id);

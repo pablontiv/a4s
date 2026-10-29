@@ -355,6 +355,31 @@ display classification, not proof of admission. Native semantic jobs support
 `a4s role-jobs stage triage|implement`; resource recovery and exact receipt
 binding are detailed in the architecture and execution skill.
 
+### Session notification baseline
+
+The owner watcher freezes the existing-run set after its first successful full
+discovery. Each existing active run keeps separate current-details and persisted
+event-log baselines: a failed or timed-out first read never makes its history
+live on a later sweep. Current details can establish their baseline and deliver
+subsequent openings even while event-log reads are unavailable. New runs are live
+immediately. Notices are deduplicated by DAG, run, human-task step and approval
+iteration, with one terminal notice per run.
+
+Persisted waiting events are checked against the current active run's waiting
+human tasks and approval iterations; closed checkpoints do not wake the owner.
+The current snapshot is observed before recovered historical entries so a fresh
+opening is not consumed by a delayed ledger baseline. Terminal `succeeded`,
+`failed` and `aborted` runs need no event-log read: terminals already present at
+startup are retired silently, and live terminal transitions are notified once
+and removed from tracking. The widget retains terminal toasts but never produces
+a second owner wake.
+
+This removes repeated terminal detail/event-log polling; it does not establish
+the cause of the historical Dagu 2.20.1 event-log latencies reported in #296.
+Native session-restart checks and matched before/after endpoint measurements
+remain distinct operator acceptance evidence, not claims made by unit tests.
+
+
 ## Station-owned queue capacity and readiness
 
 The committed `.workspace/dagu/config.json` selects the lane and lifecycle policy,

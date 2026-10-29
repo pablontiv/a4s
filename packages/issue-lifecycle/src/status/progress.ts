@@ -249,7 +249,7 @@ export class Transitions {
           + " options=continue with a renewed budget; change scope or delivery route; stop. Reconciler retains transition ownership.");
       }
       for (const node of run.nodes ?? []) {
-        if (!node.step.humanTask || node.statusLabel !== "waiting") continue;
+        if (!["waiting", "running"].includes(run.statusLabel) || !node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
         const ci = options.ciDiagnostic;
@@ -275,9 +275,10 @@ export class Transitions {
         notice(JSON.stringify(noticeKey),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}${validationNotice}`);
       }
-      if (run.statusLabel === "succeeded") {
-        notice(JSON.stringify([key, "succeeded"]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=succeeded${identity}${bundleNotice}`);
+      if (["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
+        const step = terminalStep ?? previous?.step;
+        notice(JSON.stringify([key, run.statusLabel]),
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel}${run.statusLabel !== "succeeded" && step ? ` step=${plain(step)}` : ""}${identity}${bundleNotice}`);
       }
     }
     if (previous && previous.status !== run.statusLabel
@@ -286,12 +287,6 @@ export class Transitions {
         message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
-      const step = terminalStep ?? previous.step;
-      if (run.statusLabel !== "succeeded" && step && owned
-        && ["feature", "discovery", "planning"].includes(run.name)) {
-        notice(JSON.stringify([key, run.statusLabel]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(step)}${identity}${bundleNotice}`);
-      }
     }
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
