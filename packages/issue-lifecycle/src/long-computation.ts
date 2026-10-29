@@ -77,7 +77,27 @@ export interface ComputationClock {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   pollMs?: number;
 }
-type ComputationState = "running" | "completed" | "stopped";
+type ComputationFailure = {
+  schemaVersion: 1;
+  state: "failed";
+  shard: number;
+  exitCode: number | null;
+  log: string;
+  error: string;
+};
+type ComputationState = { schemaVersion: 1; state: "running" | "completed" | "stopped" } | ComputationFailure;
+type SupervisionResult = "completed" | "stopped" | "detached" | ComputationFailure | { state: "dead"; log: string };
+
+class ShardCommandError extends Error {
+  readonly exitCode: number | null;
+  readonly log: string;
+
+  constructor(message: string, exitCode: number | null, log: string) {
+    super(message);
+    this.exitCode = exitCode;
+    this.log = log;
+  }
+}
 
 function identifier(value: string, label: string): string {
   if (!value || value.length > 200 || /[\s\0/\\]/.test(value)) throw new Error(`Invalid computation ${label}`);
@@ -277,14 +297,19 @@ export function progressOf(manifest: ComputationManifest, completed: ShardCheckp
   return progress;
 }
 function readState(directory: string): ComputationState {
-  if (!existsSync(join(directory, "state.json"))) return "running";
-  const value = readJson(join(directory, "state.json")) as { schemaVersion?: number; state?: string };
-  if (value.schemaVersion !== 1 || (value.state !== "running" && value.state !== "completed" && value.state !== "stopped")) {
+  if (!existsSync(join(directory, "state.json"))) return { schemaVersion: 1, state: "running" };
+  const value = readJson(join(directory, "state.json")) as ComputationState;
+  if (value.schemaVersion !== 1 || !["running", "completed", "stopped", "failed"].includes(value.state)) {
     throw new Error("Computation state is invalid");
   }
-  return value.state;
+  if (value.state === "failed" && (!Number.isSafeInteger(value.shard) || value.shard < 1
+    || (value.exitCode !== null && (!Number.isInteger(value.exitCode) || value.exitCode === 0))
+    || typeof value.log !== "string" || !value.log || typeof value.error !== "string")) {
+    throw new Error("Computation failure is invalid");
+  }
+  return value;
 }
-function writeState(directory: string, state: ComputationState): void {
+function writeState(directory: string, state: "running" | "completed" | "stopped"): void {
   atomicJson(join(directory, "state.json"), { schemaVersion: 1, state });
 }
 export function writeProgress(directory: string, progress: ProgressRecord): void {
@@ -380,7 +405,7 @@ async function defaultSleep(ms: number, signal: AbortSignal): Promise<void> {
 export async function superviseComputation(directory: string, options: ComputationClock & {
   signal?: AbortSignal;
   notify?: (notice: StallNotice) => void | Promise<void>;
-} = {}): Promise<"completed" | "stopped" | "detached"> {
+} = {}): Promise<SupervisionResult> {
   const signal = options.signal ?? new AbortController().signal;
   const sleep = options.sleep ?? defaultSleep;
   const pollMs = options.pollMs ?? 200;
@@ -392,10 +417,16 @@ export async function superviseComputation(directory: string, options: Computati
     const completed = readCompleted(directory, manifest);
     const progress = progressOf(manifest, completed);
     writeProgress(directory, progress);
-    if (state === "stopped") return "stopped";
-    if (state === "completed" || completed.length === manifest.shards.length) {
-      if (state !== "completed") writeState(directory, "completed");
+    if (state.state === "failed") return state;
+    if (state.state === "stopped") return "stopped";
+    if (state.state === "completed" || completed.length === manifest.shards.length) {
+      if (state.state !== "completed") writeState(directory, "completed");
       return "completed";
+    }
+    if (!workerAlive(directory)) {
+      // The worker may have published its terminal record after our first read.
+      if (readState(directory).state !== "running" || readCompleted(directory, manifest).length === manifest.shards.length) continue;
+      return { state: "dead", log: "worker.log" };
     }
     const stall = readStall(directory);
     const decisionPath = join(directory, "decision.json");
@@ -463,6 +494,8 @@ export async function superviseRunComputations(options: ComputationClock & {
             continue;
           }
           if (manifest.session !== options.session) continue;
+          // An opened plan is not a dead worker: wait until a worker has registered.
+          if (!readWorker(directory) && readState(directory).state === "running") continue;
           const child = new AbortController();
           children.set(directory, child);
           tasks.set(directory, superviseComputation(directory, {
@@ -522,8 +555,9 @@ function writeWorker(directory: string): void {
 
 export async function runShards(directory: string, runShard: (shard: PlannedShard, signal: AbortSignal) => Promise<string>, signal: AbortSignal): Promise<"completed" | "interrupted"> {
   const state = readState(directory);
-  if (state === "stopped") throw new Error("Stopped computation cannot resume; completed shards are preserved");
-  if (state === "completed") return "completed";
+  if (state.state === "stopped") throw new Error("Stopped computation cannot resume; completed shards are preserved");
+  if (state.state === "failed") throw new Error("Failed computation cannot resume; completed shards are preserved");
+  if (state.state === "completed") return "completed";
   while (!signal.aborted) {
     const manifest = readManifest(directory);
     const next = nextShard(manifest, readCompleted(directory, manifest));
@@ -537,6 +571,13 @@ export async function runShards(directory: string, runShard: (shard: PlannedShar
       output = await runShard(next, signal);
     } catch (error) {
       if (signal.aborted) return "interrupted";
+      const failure: ComputationFailure = {
+        schemaVersion: 1, state: "failed", shard: next.index,
+        exitCode: error instanceof ShardCommandError ? error.exitCode : null,
+        log: error instanceof ShardCommandError ? error.log : "worker.log",
+        error: error instanceof Error ? error.message : String(error),
+      };
+      atomicJson(join(directory, "state.json"), failure);
       throw error;
     }
     if (signal.aborted) return "interrupted";
@@ -605,7 +646,7 @@ export async function computationCommand(args: string[]): Promise<void> {
   }
   if (command === "supervise") {
     const result = await superviseComputation(directory(), { notify: notice => { console.error(`ROLE_JOB_STALL ${JSON.stringify(notice)}`); } });
-    console.log(JSON.stringify({ state: result }));
+    console.log(JSON.stringify(typeof result === "string" ? { state: result } : result));
     return;
   }
   if (command !== "run") throw new Error("Usage: dagu-role-jobs computation sample|open|run|supervise|decide");
@@ -648,6 +689,9 @@ export async function computationCommand(args: string[]): Promise<void> {
       return `shard ${shard.index} complete\n`;
     }
     const output = await new Promise<string>((resolve, reject) => {
+      const log = `command-${shard.index}.log`;
+      const logPath = join(dir, log);
+      writeFileSync(logPath, "", { mode: 0o600 });
       const child = spawn("bash", ["-lc", commandText!], {
         env: {
           ...process.env, A4S_SHARD_INDEX: String(shard.index), A4S_SHARD_START: String(shard.range.start),
@@ -657,15 +701,20 @@ export async function computationCommand(args: string[]): Promise<void> {
       });
       let stdout = "";
       let stderr = "";
-      child.stdout.on("data", chunk => { stdout += String(chunk); });
-      child.stderr.on("data", chunk => { stderr += String(chunk); });
+      child.stdout.on("data", chunk => { stdout += String(chunk); appendFileSync(logPath, chunk); });
+      child.stderr.on("data", chunk => { stderr += String(chunk); appendFileSync(logPath, chunk); });
       const kill = (): void => { child.kill("SIGTERM"); };
       signal.addEventListener("abort", kill, { once: true });
-      child.once("close", code => {
+      child.once("error", error => {
+        signal.removeEventListener("abort", kill);
+        appendFileSync(logPath, `${error.message}\n`);
+        reject(new ShardCommandError(error.message, null, log));
+      });
+      child.once("close", (code, exitSignal) => {
         signal.removeEventListener("abort", kill);
         if (signal.aborted) reject(new Error("aborted"));
         else if (code === 0) resolve(stdout);
-        else reject(new Error(`Shard ${shard.index} command exited ${code}: ${stderr}`));
+        else reject(new ShardCommandError(`Shard ${shard.index} command exited ${code}${exitSignal ? ` (${exitSignal})` : ""}: ${stderr}`, code, log));
       });
     });
     return output;

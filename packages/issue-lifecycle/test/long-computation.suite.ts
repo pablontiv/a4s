@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import childProcess, { execFileSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { PassThrough } from "node:stream";
+import { test, type TestContext } from "node:test";
 import { parse } from "yaml";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
 import {
-  appendStallNotice, LONG_COMPUTATION_CONTRACT, nextShard, openComputation, readCompleted, readManifest, recordSample,
-  runShards, superviseComputation, writeDecision,
+  appendStallNotice, computationCommand, LONG_COMPUTATION_CONTRACT, nextShard, openComputation, readCompleted, readManifest, recordSample,
+  runShards, superviseComputation, superviseRunComputations, writeDecision,
 } from "../src/long-computation.ts";
 import { roleAssignment } from "../src/role-dispatch.ts";
 import { readStallNotices } from "../src/status/repository.ts";
@@ -27,6 +30,22 @@ const phrases = [
   "continue, resize, or stop",
   "Completed shards stay preserved.",
 ];
+
+function workerFixture(t: TestContext, directory: string) {
+  const worker = { alive: true, onProbe: undefined as (() => void) | undefined };
+  const started = "Thu Oct 29 05:49:57 2026";
+  const probe = t.mock.method(childProcess, "execFileSync", (command: string) => {
+    assert.equal(command, "ps");
+    worker.onProbe?.();
+    if (!worker.alive) throw new Error("No such process");
+    return `${started}\n`;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { probe.mock.restore(); syncBuiltinESMExports(); });
+  const register = (target: string) => writeFileSync(join(target, "worker.json"), JSON.stringify({ schemaVersion: 1, pid: process.pid, processStartedAt: `ps-c:${started}` }));
+  register(directory);
+  return Object.assign(worker, { die: () => { worker.alive = false; }, register });
+}
 
 test("sample, resume and stall math preserve completed shard output", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-computation-")));
@@ -57,13 +76,17 @@ test("sample, resume and stall math preserve completed shard output", async () =
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a stall produces one owner notice and a stop or resize keeps completed shards", async () => {
+test("a live worker stall produces one owner notice and stop, resize or continue keeps completed shards", async t => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-stall-")));
   try {
-    for (const decision of ["stop", "resize"] as const) {
+    let expectedNotices = 0;
+    t.mock.method(process, "kill", () => true);
+    const worker = workerFixture(t, root);
+    for (const decision of ["stop", "resize", "continue"] as const) {
       const directory = join(root, "computations", decision);
       recordSample(directory, { units: 1, elapsedMs: 50, projectedUnits: 2, shardUnits: 1 });
       openComputation(directory, { id: decision, run: "feature-560", session: "owner", totalUnits: 2, shardUnits: 1, stallMultiple: 2 });
+      worker.register(directory);
       const signal = new AbortController();
       await runShards(directory, async shard => {
         if (shard.index === 2) signal.abort();
@@ -90,15 +113,126 @@ test("a stall produces one owner notice and a stop or resize keeps completed sha
       assert.equal(notices[0]!.progress.total, 2);
       assert.equal(notices[0]!.progress.lastShard?.index, 1);
       assert.equal(notices[0]!.deadlineMs, 100);
-      assert.equal(readFileSync(join(root, "stall-notices.jsonl"), "utf8").trim().split("\n").length, decision === "stop" ? 1 : 2);
+      expectedNotices += 1;
+      assert.equal(readFileSync(join(root, "stall-notices.jsonl"), "utf8").trim().split("\n").length, expectedNotices);
       assert.equal(readFileSync(join(directory, "shards", "1.json"), "utf8"), preserved);
       assert.equal(readCompleted(directory).length, 1);
       if (decision === "stop") assert.equal(result, "stopped");
       else {
-        assert.equal(readManifest(directory).stallMultiple, 9);
+        assert.equal(readManifest(directory).stallMultiple, decision === "resize" ? 9 : 2);
         assert.notEqual(result, "stopped");
       }
     }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a nonzero shard command records failure and supervise returns before the stall deadline", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-shard-failure-")));
+  const directory = join(root, "computations", "failed");
+  try {
+    recordSample(directory, { units: 1, elapsedMs: 60_000, projectedUnits: 2, shardUnits: 1 });
+    const manifest = openComputation(directory, { id: "failed", run: "feature-775", session: "owner", totalUnits: 2, shardUnits: 1, stallMultiple: 8 });
+    const worker = workerFixture(t, directory);
+    const spawn = t.mock.method(childProcess, "spawn", (command: string, args: string[]) => {
+      assert.equal(command, "bash");
+      assert.deepEqual(args, ["-lc", "printf 'diagnostic' >&2; exit 7"]);
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
+      queueMicrotask(() => { child.stderr.write("diagnostic"); child.emit("close", 7, null); });
+      return child;
+    });
+    syncBuiltinESMExports();
+    t.after(() => { spawn.mock.restore(); syncBuiltinESMExports(); });
+    const started = Date.now();
+    let sleeps = 0;
+    const supervised = superviseComputation(directory, {
+      notify: () => assert.fail("a failed shard is not a stall"),
+      sleep: async () => {
+        assert.equal(sleeps++, 0);
+        await assert.rejects(computationCommand(["run", "--dir", directory, "--command", "printf 'diagnostic' >&2; exit 7"]), /Shard 1 command exited 7: diagnostic/);
+        worker.die();
+      },
+    });
+    const result = await supervised;
+    assert.equal(typeof result, "object");
+    if (typeof result !== "object" || result.state !== "failed") assert.fail("expected failed result");
+    assert.equal(result.shard, 1);
+    assert.equal(result.exitCode, 7);
+    assert.equal(result.log, "command-1.log");
+    assert.match(result.error, /diagnostic/);
+    assert.deepEqual(JSON.parse(readFileSync(join(directory, "state.json"), "utf8")), result);
+    assert.equal(readFileSync(join(directory, result.log), "utf8"), "diagnostic");
+    assert.ok(Date.now() - started < manifest.measuredShardMs * manifest.stallMultiple / 10);
+    assert.equal(existsSync(join(directory, "stall.json")), false);
+    assert.equal(existsSync(join(root, "stall-notices.jsonl")), false);
+    assert.equal(readCompleted(directory).length, 0);
+    const output: string[] = [];
+    t.mock.method(console, "log", (line: string) => { output.push(line); });
+    await computationCommand(["supervise", "--dir", directory]);
+    assert.deepEqual(JSON.parse(output[0]!), result);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a vanished worker returns dead even beyond the stall deadline and without a terminal record", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-dead-worker-")));
+  const directory = join(root, "computations", "dead");
+  try {
+    recordSample(directory, { units: 1, elapsedMs: 50, projectedUnits: 2, shardUnits: 1 });
+    const manifest = openComputation(directory, { id: "dead", run: "feature-775", session: "owner", totalUnits: 2, shardUnits: 1, stallMultiple: 2 });
+    const worker = workerFixture(t, directory);
+    let now = Date.parse(manifest.openedAt);
+    const result = await superviseComputation(directory, {
+      now: () => now,
+      notify: () => assert.fail("a dead worker is not a stall"),
+      sleep: async () => { worker.die(); now += 10_000; },
+    });
+    assert.deepEqual(result, { state: "dead", log: "worker.log" });
+    assert.equal(JSON.parse(readFileSync(join(directory, "state.json"), "utf8")).state, "running");
+    assert.equal(existsSync(join(directory, "stall.json")), false);
+    assert.equal(existsSync(join(root, "stall-notices.jsonl")), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("worker exit races preserve a terminal record or final checkpoint", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-worker-exit-")));
+  try {
+    const worker = workerFixture(t, root);
+    for (const terminal of ["completed", "stopped", "checkpoint"] as const) {
+      const directory = join(root, "computations", terminal);
+      recordSample(directory, { units: 1, elapsedMs: 50, projectedUnits: 1, shardUnits: 1 });
+      openComputation(directory, { id: terminal, run: "feature-775", session: "owner", totalUnits: 1, shardUnits: 1, stallMultiple: 2 });
+      worker.register(directory);
+      worker.onProbe = () => {
+        if (terminal === "checkpoint") {
+          mkdirSync(join(directory, "shards"), { recursive: true });
+          writeFileSync(join(directory, "shards", "1.json"), JSON.stringify({
+            schemaVersion: 1, index: 1, range: { start: 0, end: 1 }, completedAt: new Date().toISOString(), output: "done",
+          }));
+        } else writeFileSync(join(directory, "state.json"), JSON.stringify({ schemaVersion: 1, state: terminal }));
+        worker.die();
+      };
+      assert.equal(await superviseComputation(directory, { sleep: async () => assert.fail("terminal worker must return promptly") }), terminal === "stopped" ? "stopped" : "completed");
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the run watchdog waits for worker registration before supervising an opened plan", async t => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "a4s-worker-registration-")));
+  const directory = join(root, "computations", "pending");
+  try {
+    recordSample(directory, { units: 1, elapsedMs: 50, projectedUnits: 1, shardUnits: 1 });
+    openComputation(directory, { id: "pending", run: "feature-775", session: "owner", totalUnits: 1, shardUnits: 1, stallMultiple: 2 });
+    const controller = new AbortController();
+    let sleeps = 0;
+    let notices = 0;
+    await superviseRunComputations({
+      evidenceDir: root, session: "owner", signal: controller.signal, now: () => Date.now() + 10_000,
+      notify: () => { notices += 1; controller.abort(); },
+      sleep: async () => {
+        if (sleeps++ === 0) workerFixture(t, directory);
+        else if (!notices) { controller.abort(); assert.fail("registered worker was never supervised"); }
+      },
+    });
+    assert.equal(notices, 1);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

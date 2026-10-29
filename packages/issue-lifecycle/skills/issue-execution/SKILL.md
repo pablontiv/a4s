@@ -1257,7 +1257,7 @@ leaves those files in place. Starting the worker again resumes from the last com
 shard output.
 
 While the role job runs, the executor's stall watchdog polls those checkpoints.
-When no new shard completes within the configured multiple of the measured shard time,
+Only while the worker is alive, when no new shard completes within the configured multiple of the measured shard time,
 it writes one stall notice to `<run evidence>/stall-notices.jsonl` and
 reports that notice to the owning OMP session with the last progress. Completed shards stay preserved.
 The watchdog waits for continue, resize, or stop:
@@ -1273,6 +1273,16 @@ a4s role-jobs computation decide --dir <run-evidence>/computations/<id> --decisi
 leaves completed shards on disk. A later stall is a new notice; one episode
 produces one notice. The status extension delivers `[DAGU STALL]` to the session
 named on the run.
+
+A rejected shard writes a terminal `failed` record in `state.json`, including
+`shard`, `exitCode` (null when no exit code is available), `log` relative to the
+computation directory, and the error. Command stdout/stderr are retained in
+`command-<index>.log`. `computation supervise` promptly returns that failed
+record as JSON instead of waiting for a stall. If the worker identity is no
+longer alive and no terminal record or final checkpoint exists, it returns
+`{"state":"dead","log":"worker.log"}`. Neither case creates a stall notice;
+continue/resize cannot revive a dead worker. Inspect the referenced logs and
+preserved checkpoints before choosing the next computation.
 
 Every correction's run-wide iteration authorizes a fresh session. An interrupted
 job retains its artifacts and diagnosed outcome for owner-directed recovery.
