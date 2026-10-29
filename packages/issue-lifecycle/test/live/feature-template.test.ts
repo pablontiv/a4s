@@ -2875,7 +2875,7 @@ for (const [name, definition] of definitions) {
             transitions.observe({ ...done, statusLabel: "running" }, { baseline: true });
             assert.deepEqual(transitions.observe(done), {
               notification: { message: "dagu · feature #189 succeeded", type: "info" },
-              wakeMessage: `[DAGU STATE] run=${id} status=succeeded issue=189 bundle=unstamped extension=${BUNDLE_VERSION} main=n/a compat=unstamped installed=${BUNDLE_VERSION}`,
+              wakeMessage: `[DAGU STATE] run=${id} status=succeeded issue=189 bundle=unstamped extension=${BUNDLE_VERSION} main=n/a compat=unstamped installed=unknown`,
             });
             if (mode === "poc") {
               assert.match(dagu("history", "poc", "--run-id", `poc-${id}`), new RegExp(`poc-${id}`));
