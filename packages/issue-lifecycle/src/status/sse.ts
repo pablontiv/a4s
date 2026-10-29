@@ -10,7 +10,8 @@ export class SSEParser {
   private data: string[] = [];
   private afterCR = false;
 
-  constructor(private readonly emit: (event: SSEEvent) => void) {}
+  private readonly emit: (event: SSEEvent) => void;
+  constructor(emit: (event: SSEEvent) => void) { this.emit = emit; }
 
   feed(chunk: string): void {
     for (const char of chunk) {

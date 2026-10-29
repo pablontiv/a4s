@@ -200,7 +200,8 @@ export class Transitions {
   private states = new Map<string, State>();
   private notices = new Set<string>();
 
-  constructor(private readonly sessionId?: string) {}
+  private readonly sessionId: string | undefined;
+  constructor(sessionId?: string) { this.sessionId = sessionId; }
 
   observe(run: RunDetails, options: {
     baseline?: boolean; slug?: string; checkpoints?: boolean; ciDiagnostic?: CiDiagnostic; escalationDiagnostic?: string;

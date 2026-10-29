@@ -39,7 +39,8 @@ export async function verifiedRun(primary: string, run: string, inspect = inspec
 export class RunArtifactScope {
   readonly #artifacts = new Map<string, Promise<CachedArtifact>>();
   #executableDigest: Promise<string> | undefined;
-  constructor(private readonly inspect = inspectArtifact) {}
+  private readonly inspect: typeof inspectArtifact;
+  constructor(inspect = inspectArtifact) { this.inspect = inspect; }
   get artifactVerifications(): number { return this.#artifacts.size; }
   verify(primary: string, run: string): Promise<VerifiedRun> {
     return verifiedRun(primary, run, (home, tuple) => {

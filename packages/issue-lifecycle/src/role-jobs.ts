@@ -60,8 +60,10 @@ export function atomicJson(path: string, value: unknown): void {
 /** One transactional capacity domain per canonical DAGU_HOME, across repositories/processes. */
 export class RoleJobStore {
   private readonly db: DatabaseSync;
+  private readonly alive: (owner: ExecutorIdentity) => boolean;
   constructor(home: string, capacity: number,
-    private readonly alive: (owner: ExecutorIdentity) => boolean = executorAlive) {
+    alive: (owner: ExecutorIdentity) => boolean = executorAlive) {
+    this.alive = alive;
     mkdirSync(home, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(realpathSync(home), "role-jobs.sqlite"));
     // The default rollback journal lets concurrent first opens use busy_timeout;
