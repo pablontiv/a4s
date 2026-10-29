@@ -696,11 +696,16 @@ Failures outside these checkpoints and aborted runs remain terminal.
 prints its branch, worktree and evidence path. Inspect
 `<git-dir>/dagu-feature/runs/<RUN>/resource.json`, `tested-sha`, `cleanup-head`,
 `cleanup-proof.json`, `cleanup-phase` and `cleanup-diagnostic`. Recovery preserves
-those records and local changes. Restore origin access or resolve the reported
-integration/ownership discrepancy, then repeat the run's cleanup script with its
-original params. Already removed resources complete idempotently; a changed owner
-or SHA preserves the resource and flags the mismatch. Pass `PR_NUMBER` for an
-existing PR.
+those records and local changes. Cleanup binds its progress to `cleanup-head`.
+If the branch head advances while its registered worktree is retained on that
+head, cleanup resets the old phase, proof, diagnostic and close mode before
+evaluating integration again. An exit without a matching captured candidate
+retains even a base-only branch/worktree at `identify`, without an integration
+proof. Restore origin access or resolve the reported integration/ownership
+discrepancy, then repeat the run's cleanup script with its original params.
+Already removed resources complete idempotently; an exit without a matching
+captured candidate, a changed owner, or a changed SHA after worktree removal
+preserves the resource and flags the mismatch. Pass `PR_NUMBER` for an existing PR.
 The durable checkpoint remains available to fetch for candidate recovery before
 reenqueuing with a suffixed run ID; merged close removes its matching candidate
 ref with an exact-SHA lease after integration and ownership checks.
