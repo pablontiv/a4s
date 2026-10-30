@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, cpSync, existsSync, mkdirSync, openSync, closeSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, openSync, closeSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -290,9 +290,15 @@ export const nativeExecutor = {
     assert.match(readFileSync(join(c.fixtures.skillsOnly.directory, 'skills/issue-execution/SKILL.md'), 'utf8'), /skill sentinel: skillsOnly/);
     promote(c, 'agentOnly', evidence);
     assert.match(readFileSync(join(c.fixtures.agentOnly.directory, 'agents/triage-reviewer.md'), 'utf8'), /sentinel: agentOnly/);
-    const reviewSession = join(c.out, 'r9/planning.jsonl');
+    // `omp --session` only resumes an existing transcript; a fresh session directory
+    // records the new planning review, retained below as r9/planning.jsonl.
+    const reviewSessions = join(c.out, 'r9/planning-session');
+    mkdirSync(reviewSessions, { recursive: true });
     const prompt = 'This is a scratch native acceptance assignment for an older planning run. Invoke task with agent plan-reviewer (no model override), asking it to put SENTINEL=<its native acceptance sentinel> in its normal structured review strings. Do not read any files or use other tools. Report the result verbatim.';
-    const review = command(c, 'r9/planning', c.omp, ['-p', '--no-extensions', '-e', cached, '-e', observer, '--session', reviewSession, prompt], { timeout: 240000 });
+    const review = command(c, 'r9/planning', c.omp, ['-p', '--no-extensions', '-e', cached, '-e', observer, '--session-dir', reviewSessions, prompt], { timeout: 240000 });
+    const reviewTranscripts = readdirSync(reviewSessions, { recursive: true }).filter(name => String(name).endsWith('.jsonl'));
+    assert.ok(reviewTranscripts.length > 0, 'r9 planning review must record a session transcript');
+    copyFileSync(join(reviewSessions, String(reviewTranscripts.sort()[0])), join(c.out, 'r9/planning.jsonl'));
     assert.match(review.stdout, /SENTINEL=A\b/);
     assert.doesNotMatch(review.stdout, /SENTINEL=agentOnly/);
     const spawnEvents = readFileSync(spawns, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -338,15 +344,19 @@ async function runNative(c, label, options) {
       const [, pid, parent, args] = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/) ?? [];
       return { pid: Number(pid), parent: Number(parent), args };
     });
+    // OMP runs native subagents inside the host process; the child transcript above
+    // proves the native child session is live. Record any out-of-process descendants too.
     const descendants = new Set([launched.child.pid]);
     for (let i = 0; i < processes.length; i++) for (const row of processes) if (descendants.has(row.parent)) descendants.add(row.pid);
-    assert.ok(descendants.size > 1, 'Cancellation must observe a live native child, not just its host');
     launched.child.kill('SIGTERM');
     result = await launched.completion;
     assert.ok(result.code === 143 || result.signal === 'SIGTERM', JSON.stringify(result));
     assert.throws(() => process.kill(launched.child.pid, 0), /ESRCH/);
     await waitUntil(() => [...descendants].every(pid => { try { process.kill(pid, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } }), 'all cancelled native descendants to exit');
     writeEvidence(c.out, `${label}/cancelled-processes.json`, [...descendants]);
+    const transcript = join(directory, `${id}.jsonl`), settled = statSync(transcript).size;
+    await delay(2000);
+    assert.equal(statSync(transcript).size, settled, 'Cancelled native child must stop writing its transcript');
   } else {
     const timer = setTimeout(() => launched.child.kill('SIGTERM'), 180000);
     try { result = await launched.completion; } finally { clearTimeout(timer); }
