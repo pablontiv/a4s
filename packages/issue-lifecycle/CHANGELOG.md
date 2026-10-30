@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add the opt-in native station cutover acceptance driver, isolated ordered release fixtures, per-case evidence matrix and real-state byte-integrity guard; cover coordinator logic in the default no-spawn lane and document both operator phases (#821).
 - Complete tick-locked cache GC with all-history cursor traversal, fail-closed reference inventory, seven-day ambiguous-admission retention and an admission process lease across receipt/enqueue. Preserve terminal tick bindings until authoritative native history expiry and restore pruned receipts/ticks only from their recorded immutable tuple; cover references, process uncertainty, handoff/promotion/loader races and isolated Dagu retention/replay (#796).
 - Keep the GC process-probe fixture and loader constructor compatible with the lifecycle workspace's strict erasable TypeScript typecheck (#796).
 - Ship the stable `@a4s/loader` with transactional status/triage activation, pre-import registration/resource/protocol gates, process-exit artifact leases and lossless notification handoff. Embed source-derived resource digests in build identities, pin planning review to its run-cached package and document retiring-reader restart/drain without writing station/service configuration. Verify the manifest's helper API against the shared contract instead of the retired API 1 literal (#795).
