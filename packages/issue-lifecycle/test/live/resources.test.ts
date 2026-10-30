@@ -29,7 +29,8 @@ function fixture() {
   history("feature", []); history("poc", []);
   const worktree = join(primary, ".workspace", "worktrees", "issue-215"), branch = "dagu/issue-215";
   const row = (run: string, status: string, kind = "feature") => ({ name: kind, dagRunId: run, status, params: `PRIMARY=${primary} ISSUE=215 BRANCH=${kind === "feature" ? branch : ""}` });
-  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", POC_BASIS: "", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
+  // Keep socket-backed Bash children from treating their stdin as a remote login and replacing PATH.
+  const env = { ...process.env, SHLVL: "1", A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", POC_BASIS: "", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "215", RUN: "owner", OMP_SESSION_ID: "resource-test-session", BASE_BRANCH: "main", GATE: "true", REQUIRED_CHECK: "validate", DAGU_FEATURE_BUNDLE: "test" };
   return { root, primary, branch, worktree, git, history, row, env };
 }
 function script(definition: string, marker: string) {
@@ -146,6 +147,115 @@ for (const definition of definitions) {
     assert.equal(result.status, 1); assert.match(result.stderr, /belongs to active run replacement/);
     assert.equal(repo.git(repo.primary, "for-each-ref", "--format=%(refname)", "refs/heads/dagu/"), `refs/heads/${repo.branch}`);
     assert.equal(repo.git(repo.primary, "worktree", "list", "--porcelain").match(/worktree /g)?.length, 2);
+  });
+
+  test(`${definition} multi-hop replacement adopts a candidate after an interrupted transfer`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const create = script(definition, "  - id: start_gate");
+    const run = (run: string, extra = {}) => spawnSync("bash", ["-c", create], { env: { ...repo.env, RUN: run, ...extra }, encoding: "utf8" });
+    repo.history("feature", [repo.row("owner", "running")]);
+    let result = run("owner"); assert.equal(result.status, 0, result.stderr);
+    writeFileSync(join(repo.worktree, "value"), "candidate commit\n");
+    repo.git(repo.worktree, "add", "."); repo.git(repo.worktree, "commit", "-qm", "candidate");
+    writeFileSync(join(repo.worktree, "value"), "staged candidate\n"); repo.git(repo.worktree, "add", ".");
+    writeFileSync(join(repo.worktree, "value"), "unstaged candidate\n");
+    writeFileSync(join(repo.worktree, "untracked"), "preserve me\n");
+    const head = repo.git(repo.worktree, "rev-parse", "HEAD"), status = repo.git(repo.worktree, "status", "--porcelain");
+    const common = join(repo.primary, ".git", "dagu-feature"), resources = join(common, "resources");
+    const resource = join(resources, readdirSync(resources)[0]!);
+    const owner = repo.git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner");
+    const retainedResource = readFileSync(resource, "utf8"), retainedIdentity = readFileSync(owner, "utf8");
+    repo.history("feature", [repo.row("owner", "failed"), repo.row("replacement-b", "running")]);
+    result = run("replacement-b", { GATE: "" });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /rule=start_gate.gate/);
+    assert.equal(readFileSync(join(common, "owners", "issue-215"), "utf8"), `replacement-b\t${repo.branch}\n`);
+    assert.equal(readFileSync(join(common, "runs", "replacement-b", "previous-owner"), "utf8"), "owner\n");
+    assert.equal(readFileSync(resource, "utf8"), retainedResource);
+    assert.equal(readFileSync(owner, "utf8"), retainedIdentity);
+    const snapshot = join(repo.root, "predecessor-spec.json");
+    writeFileSync(snapshot, JSON.stringify({ spec: `env:\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n` }));
+    writeFileSync(join(repo.root, "bin", "curl"), `#!/bin/sh\ncat '${snapshot}'\n`, { mode: 0o755 });
+    repo.history("feature", [
+      repo.row("owner", "failed"),
+      { ...repo.row("replacement-b", "aborted"), params: "ISSUE=215 OMP_SESSION_ID=resource-test-session" },
+      repo.row("replacement-c", "running"),
+    ]);
+    result = run("replacement-c"); assert.equal(result.status, 0, result.stderr);
+    const state = join(common, "runs", "replacement-c");
+    assert.equal(readFileSync(join(state, "previous-owner"), "utf8"), "replacement-b\n");
+    assert.equal(readFileSync(join(common, "owners", "issue-215"), "utf8"), `replacement-c\t${repo.branch}\n`);
+    assert.equal(JSON.parse(readFileSync(resource, "utf8")).run, "replacement-c");
+    assert.equal(readFileSync(resource, "utf8"), readFileSync(join(state, "resource.json"), "utf8"));
+    assert.equal(JSON.parse(readFileSync(owner, "utf8")).run, "replacement-c");
+    assert.equal(readFileSync(owner, "utf8"), readFileSync(join(state, "identity"), "utf8"));
+    assert.equal(repo.git(repo.worktree, "rev-parse", "HEAD"), head);
+    assert.equal(repo.git(repo.worktree, "status", "--porcelain"), status);
+    assert.equal(repo.git(repo.worktree, "show", ":value"), "staged candidate");
+    assert.equal(readFileSync(join(repo.worktree, "value"), "utf8"), "unstaged candidate\n");
+    assert.equal(readFileSync(join(repo.worktree, "untracked"), "utf8"), "preserve me\n");
+    // Completed adoption does not depend on older history remaining available.
+    repo.history("feature", [repo.row("replacement-c", "running")]);
+    result = run("replacement-c"); assert.equal(result.status, 0, result.stderr);
+    assert.equal(repo.git(repo.worktree, "rev-parse", "HEAD"), head);
+    assert.equal(repo.git(repo.worktree, "status", "--porcelain"), status);
+  });
+
+  test(`${definition} multi-hop replacement rejects unverified predecessor chains with resource_identity`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const create = script(definition, "  - id: start_gate");
+    const run = (run: string, extra = {}) => spawnSync("bash", ["-c", create], { env: { ...repo.env, RUN: run, ...extra }, encoding: "utf8" });
+    repo.history("feature", [repo.row("owner", "running")]);
+    let result = run("owner"); assert.equal(result.status, 0, result.stderr);
+    writeFileSync(join(repo.worktree, "untracked"), "preserve me\n");
+    const common = join(repo.primary, ".git", "dagu-feature"), resources = join(common, "resources");
+    const resource = join(resources, readdirSync(resources)[0]!);
+    const retainedResource = readFileSync(resource, "utf8");
+    const owner = repo.git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner");
+    const retainedIdentity = readFileSync(owner, "utf8"), head = repo.git(repo.worktree, "rev-parse", "HEAD");
+    const rows = () => [repo.row("owner", "failed"), repo.row("replacement-b", "aborted"), repo.row("replacement-c", "running")];
+    repo.history("feature", rows().filter(row => row.dagRunId !== "replacement-c"));
+    result = run("replacement-b", { GATE: "" }); assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /rule=start_gate.gate/);
+    repo.history("feature", rows());
+    result = spawnSync("bash", ["-c", script(definition, "  - id: admit")], { env: { ...repo.env, RUN: "replacement-c" }, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const previous = join(common, "runs", "replacement-b", "previous-owner");
+    const cases: Array<[string, () => void]> = [
+      ...["owner", "replacement-b"].flatMap(run => ["queued", "running", "waiting"].map(status =>
+        [`${run} ${status}`, () => repo.history("feature", rows().map(row => row.dagRunId === run ? { ...row, status } : row))] as [string, () => void])),
+      ["outside chain", () => {
+        writeFileSync(resource, JSON.stringify({ ...JSON.parse(retainedResource), run: "unrelated" }));
+        repo.history("feature", [...rows(), repo.row("unrelated", "failed")]);
+      }],
+      ["missing predecessor", () => repo.history("feature", rows().filter(row => row.dagRunId !== "owner"))],
+      ["ambiguous predecessor", () => repo.history("feature", [...rows(), repo.row("owner", "failed")])],
+      ["unknown predecessor status", () => repo.history("feature", rows().map(row => row.dagRunId === "owner" ? { ...row, status: "unknown" } : row))],
+      ["cyclic chain", () => writeFileSync(previous, "replacement-b\n")],
+      ["invalid predecessor", () => writeFileSync(previous, "../owner\n")],
+      ["incomplete chain", () => writeFileSync(previous, "\n")],
+      ...["primary", "branch", "worktree"].map(key =>
+        [`resource ${key} mismatch`, () => writeFileSync(resource, JSON.stringify({ ...JSON.parse(retainedResource), [key]: "unrelated" }))] as [string, () => void]),
+      ...[
+        `PRIMARY=${repo.root} ISSUE=215 BRANCH=${repo.branch}`,
+        `PRIMARY=${repo.primary} ISSUE=216 BRANCH=${repo.branch}`,
+        `PRIMARY=${repo.primary} ISSUE=215 BRANCH=dagu/unrelated`,
+        `PRIMARY=${repo.primary} ISSUE=215 BRANCH=${repo.branch} WORKTREE=${repo.root}`,
+      ].map(params => [`predecessor identity ${params}`, () => repo.history("feature", rows().map(row => row.dagRunId === "replacement-b" ? { ...row, params } : row))] as [string, () => void]),
+    ];
+    for (const [name, arrange] of cases) {
+      writeFileSync(resource, retainedResource); writeFileSync(previous, "owner\n"); repo.history("feature", rows());
+      arrange();
+      const before = readFileSync(resource, "utf8");
+      result = run("replacement-c");
+      assert.equal(result.status, 1, `${name}: ${result.stderr}`);
+      assert.match(result.stderr, /rule=start_gate.resource_identity/, name);
+      assert.equal(readFileSync(resource, "utf8"), before, name);
+      assert.equal(readFileSync(owner, "utf8"), retainedIdentity, name);
+      assert.equal(repo.git(repo.worktree, "rev-parse", "HEAD"), head, name);
+      assert.equal(readFileSync(join(repo.worktree, "untracked"), "utf8"), "preserve me\n", name);
+      assert.equal(existsSync(join(common, "owners", "issue-215.lock")), false, name);
+    }
   });
 
   test(`${definition} simultaneous admission selects one owner and same-owner concurrent creation converges`, async t => {

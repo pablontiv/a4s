@@ -740,9 +740,17 @@ a4s enqueue --run-id a4s-issue-808-v2 feature -- \
 ```
 
 Admission durably records the terminal previous owner in the replacement run's
-`previous-owner` state; `start_gate` validates and transfers the worktree owner
-and run identity while preserving HEAD and files. Repeating `start_gate` reuses
-that identity. Ownership refusals print the resource and observed/expected identity.
+`previous-owner` state. If a replacement fails before transferring the candidate,
+`start_gate` follows that recorded chain back to the resource/worktree record's
+owner, verifying every traversed run is terminal in Dagu history and belongs to
+the same canonical PRIMARY, issue, branch and worktree. It then rewrites both
+candidate records to the replacement run while preserving HEAD, staged/unstaged
+changes and untracked files. Active, missing, ambiguous, cyclic or unrelated
+predecessors fail closed; resource refusals report `resource_identity`.
+Repeating a completed `start_gate` reuses its identity without requiring older
+predecessor history. PoC resources are keyed by their own run (`poc/<run>` and
+`poc-<run>`), and discovery uses a per-run detached snapshot; neither shares this
+issue-owner handoff chain.
 
 On initial adoption, `start_gate` records `initial-head` separately from `base`.
 `base` is the merge-base of the accepted worktree HEAD and fetched remote base.

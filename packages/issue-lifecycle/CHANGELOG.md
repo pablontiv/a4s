@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Adopt retained feature candidates through multiple terminal `previous-owner` links when an earlier replacement failed before transferring its resource/worktree records. Verify each traversed predecessor against Dagu history and the same resource identity, reject active or unverified chains with `resource_identity`, and preserve HEAD plus staged, unstaged and untracked files (#812).
 - Make recovery cancellation resume-safe with marked-success predecessors and persisted human-response routing in feature/PoC snapshots. Preserve normal completion and explicit repair/push-back, document historical snapshot limits, and retain isolated Dagu coverage of terminal Failed/77, one predecessor attempt, suppressed successors and onExit plus the unsafe mark-success-only regression (#810).
 - Verify triage role results against `DAG_PUSHBACK_ITERATION` (default `0`), matching the dispatcher after dependency, conflict or escalation rewinds without relying on `dagu status` text; retain stale-iteration rejection and cover rewound/default bindings (#803).
 - Add locked, atomic station state, inventory-seeded persisted-format sets, highest-compatible promotion, stable-launcher rollback/rejections, process-identity leases and fail-closed cache collection. Retiring plugin readers identify the OMP restart barrier; ambiguous process probes never free ownership (#793).
