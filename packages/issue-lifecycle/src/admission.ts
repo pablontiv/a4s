@@ -17,8 +17,9 @@ import { artifactLock, inspectArtifact, type CachedArtifact } from "../../launch
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
 import { withFileLockAsync } from "../../launcher/src/file-lock.ts";
 import { stationReadiness } from "./queue.ts";
-import { stationTransaction, readStationState } from "../../launcher/src/station-state.ts";
+import { stationTransaction, readStationState, readStateLocked } from "../../launcher/src/station-state.ts";
 import { handoff } from "../../launcher/src/select.ts";
+import { createLeaseLocked } from "../../launcher/src/lease.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -43,6 +44,7 @@ export interface AdmissionOptions {
 }
 export interface Receipt {
   schemaVersion: 1 | 2;
+  receiptCreatedAt?: string;
   artifact?: ArtifactReceiptFields["artifact"];
   artifactSupport?: ArtifactReceiptFields["artifactSupport"];
   contracts?: ArtifactReceiptFields["contracts"];
@@ -158,11 +160,12 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     relationships: { templateToArtifact: "verified-cache", protocols: USED_CONTRACTS.protocols },
   };
   const diff = git(primary, "diff", "HEAD", "--binary");
+  const receiptCreatedAt = new Date().toISOString();
   const receipt: Receipt = {
-    schemaVersion: 2, artifact: { version, commit, digest: cached.record.digest }, artifactSupport: cached.identity.support, contracts: USED_CONTRACTS,
+    schemaVersion: 2, receiptCreatedAt, artifact: { version, commit, digest: cached.record.digest }, artifactSupport: cached.identity.support, contracts: USED_CONTRACTS,
     ...(parent ? { parent } : {}), sourceVersion: { version, commit, origin }, deploymentFingerprint: deploymentFingerprint(deployment),
     initial: {
-      admittedAt: new Date().toISOString(), deployment,
+      admittedAt: receiptCreatedAt, deployment,
       runtimeAndModels: { ...fields("omp systemPromptDigest profile roles roleMapHash requestedRole resolvedModel fallback resolvedModelIsFallback crossFamilyDecision", "not exposed at admission; append linked runtime observations"),
         node: { version: process.version, path: realpathSync(process.execPath) }, dagu: { version: daguVersion }, daguHome,
         roleJobStore: join(daguHome, "role-jobs.sqlite"), admissionPid: process.pid, admissionPpid: process.ppid,
@@ -186,18 +189,24 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
   }
   return { path, receipt };
 }
-async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean, use: (admission: { path: string; receipt: Receipt }) => T): Promise<T> {
+async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean, use: (admission: { path: string; receipt: Receipt }) => T | Promise<T>): Promise<T> {
   const context = preflightAdmission(options);
   const home = realpathSync(process.env.DAGU_HOME || join(homedir(), ".dagu"));
   const parent = await selectParent(options, context, home);
   const tuple = options.artifact ? parseArtifact(options.artifact) : parent?.artifact;
   if (!tuple) throw new Error("Admission requires a resolved --artifact handoff or --parent receipt");
   assertExecutingArtifact(tuple);
-  return stationTransaction(home, () => withFileLockAsync(artifactLock(home, tuple), async () => {
+  const selected = await stationTransaction(home, () => withFileLockAsync(artifactLock(home, tuple), async () => {
     const cached = await inspectArtifact(home, tuple);
     if (realpathSync(process.execPath) !== cached.executable) throw new Error(`Admission must execute the cached artifact ${cached.executable}`);
-    return use(createReceipt(options, context, cached, parent, persist));
+    const admission = createReceipt(options, context, cached, parent, persist);
+    createLeaseLocked(home, tuple, readStateLocked(home).generation, "engine", `admission ${options.run}`);
+    return admission;
   }));
+  // Enqueue can block or be ambiguous. Keep the lease through payload exit,
+  // not merely enqueue completion; only GC's dead-or-reused probe frees it.
+  // The receipt/enqueue handoff does not exclude state-locked tick inventory.
+  return await use(selected);
 }
 /** Internal explicit-artifact admission. Root CLI admission always hands off first. */
 export async function admit(options: AdmissionOptions, persist = true): Promise<{ path: string; receipt: Receipt }> {
