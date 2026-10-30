@@ -39,7 +39,7 @@ for (const [field, value] of [
 }
 
 function historical(path: string): boolean {
-  return /(^|\/)(?:package-lock\.json|CHANGELOG\.md)$/.test(path)
+  return /(^|\/)package-lock\.json$/.test(path)
     || path === "docs/operations/retirement-625.json"
     || path === "docs/operations/v1-walkthrough.md";
 }

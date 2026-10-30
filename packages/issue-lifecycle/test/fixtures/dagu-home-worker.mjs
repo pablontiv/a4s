@@ -1,13 +1,12 @@
 import { appendFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parentPort, workerData } from 'node:worker_threads'
-import { register } from 'tsx/esm/api'
+import { tsImport } from 'tsx/esm/api'
 
-// Inherited --import preloads isolate the home, but tsx's source loader is not
-// active in a new worker. Register it before loading the TypeScript fixtures.
-register()
-const { reconcileEnvironment } = await import('../role-job-fixtures.ts')
-const { compiledArtifact } = await import('./admission.ts')
+// Load the fixture graph through tsx explicitly instead of depending on native
+// TypeScript flags or a worker's inherited loader state.
+const { reconcileEnvironment } = await tsImport('../role-job-fixtures.ts', import.meta.url)
+const { compiledArtifact } = await tsImport('./admission.ts', import.meta.url)
 
 const env = reconcileEnvironment({ ...process.env, PRIMARY: workerData.primary, RUN: 'isolation' })
 const empty = reconcileEnvironment({ ...process.env, RUNS: '[]' })

@@ -5,7 +5,7 @@ description: Adopt and operate the repo-owned Dagu issue lifecycle DAG (worktree
 
 # Dagu feature lifecycle
 
-Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository commits `.workspace/dagu/config.json` schema 2 without `uses`. The stable launcher selects admission from station state or a parent receipt; a user-level Dagu service runs the admitted immutable snapshot in the repository queue.
+Carry one GitHub issue from feasibility triage to a merged PR through durable Dagu runs. The repository commits `.workspace/dagu/config.json` schema 2 policy. The stable launcher selects admission from station state or a parent receipt; a user-level Dagu service runs the admitted immutable snapshot in the repository queue.
 
 ```mermaid
 flowchart LR
@@ -52,7 +52,7 @@ flowchart LR
   engine calls use `"$A4S_BIN" <subcommand>`, never checkout code.
 - Install the launcher's one-step `reconcile.yaml` DAG (`a4s tick`) separately.
   First-attempt native Dagu evidence binds its run ID to current; retries retain
-  that tuple. There is no exact reconciler pin or consumer `uses` bump. Only the
+  that tuple. There is no exact reconciler pin. Only the
   operator installs/replaces the launcher and station DAG or restarts services;
   see [launcher and plugin cutover](../../../../docs/operations/deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 - For an existing run, use `a4s run --primary <canonical-primary> --run <id> -- <command>`.
@@ -236,10 +236,10 @@ count. Protected roots stay; reaching the count leaves them in place.
 ## Release identity and compatibility
 
 The [artifact contract](../../../../docs/architecture/artifact-contract.md) is
-normative. Committed `.workspace/dagu/config.json` schema 2 has no `uses`.
-New builds also read schema 1, ignoring its legacy release selection. No `uses`
-bump or consumer commit is needed for payload promotion. Once schema 2 is
-committed, read coverage refuses rollback to builds that only read schema 1.
+normative. New admissions require committed `.workspace/dagu/config.json`
+schema 2. Schema 1 and its legacy selection field remain decode-only historical
+evidence; they cannot admit new runs. Read coverage refuses rollback to builds
+that cannot read the committed schema.
 Queue capacity belongs only to station config, never consumer/run policy.
 
 The separately installed `a4s-launch` is `a4s` on PATH. Under its state lock it
@@ -296,7 +296,7 @@ a4s enqueue --run-id <repo>-issue-<n> feature -- \
 
 Without `--check`, both CLI `admit` and `enqueue` persist receipts and enqueue
 the exact immutable snapshot bytes under the lifecycle name. For read-only
-admissibility (committed policy, `uses` resolution and the `a4s queue` station
+admissibility (committed policy, station current and the `a4s queue` station
 readiness boundary), run from the adopted checkout with its station environment:
 
 ```sh
@@ -307,14 +307,13 @@ a4s admit --check --run-id sprint-admission-check feature -- \
 This returns exit 0 / `admissible=yes` or exit 1 / `admissible=no` with reasons.
 It never publishes cache entries, hands off, creates receipts/runs/comments or
 changes refs/working-tree content. `--artifact` and `--parent` cannot bypass
-committed `uses` resolution in check mode.
+station-current selection in check mode.
 Durable receipts remain under
 `$(git rev-parse --path-format=absolute --git-path dagu-feature/runs/<run>)`.
 Use `a4s observe <run> '<JSON>'` for linked runtime observations.
 Publication is staged: after CI `validate` succeeds for the same pushed `main`
 SHA, full-history first-parent count gives `r<N>` and the workflow creates the
-immutable `a4s-r<N>` release/tag. Do not push manual release tags or bump package
-and lockfile versions for skill changes. Old `v0` publication is removed/frozen.
+immutable `a4s-r<N>` release/tag.
 Publication never automatically queues bootstrap, activates plugins, or writes
 station/service configuration. Consumer policy changes remain explicitly
 adopted and committed; this milestone does not switch the station.
@@ -414,8 +413,7 @@ resources and owner, and continue its existing checkpoint recovery protocol.
 
 The selected cached release materializes repository policy into templates at admission:
 
-Consumer config schema 2 contains policy only, without a `uses` placeholder or
-release bump. Scheduled station reconciliation is the operator-installed
+Consumer config schema 2 contains policy only. Scheduled station reconciliation is the operator-installed
 single-step `a4s tick` DAG; a confirmed first attempt binds its tuple and retries
 never repin. Tick A's actions on run B always dispatch B's receipt artifact.
 
@@ -474,7 +472,7 @@ The steps:
 | Step | Effect |
 |---|---|
 | `detect` | Checks `git`, authenticated `gh`, `jq`, `dagu` and selected `A4S_BIN`, native runtime/agent discovery, canonical independent PRIMARY, lane readiness and current committed policy. No source fetch or checkout identity is needed. |
-| `config` | Policy form including `USES` (blank preserves current; initial `a4s@v0`), `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, code scanning, thresholds and escalation. |
+| `config` | Policy form including `GATE`, `REQUIRED_CHECK`, `TEST_PATHS`, `REBASE_RESOLVER`, optional `VALIDATION`, code scanning, thresholds and escalation. |
 | `worktrees` | Makes git ignore `.workspace/worktrees/`. When nothing ignores it yet, appends `/.workspace/worktrees/` to the clone's `info/exclude`, so the primary stays clean without a commit. |
 | `write_config` | Authors and validates `.workspace/dagu/config.json`; no DAG files are rendered or installed. |
 | `readiness` | Read-only station queue/API/environment checks; no station configuration changes. |
@@ -1480,9 +1478,8 @@ entries are not treated as passes.
 
 A test is classified `always` when it runs Git and reads merge-base, the index
 or untracked files, and `GITHUB_BASE_REF` or the integration base.
-`packages/issue-lifecycle/test/bundle-version.test.ts` is always executed and
-is never stored. Its workspace's other tests remain cacheable. CI does not load
-this preload, so the uncached suite stays the deterministic confirmation.
+Such Git-state checks are never stored; other workspace tests remain cacheable.
+CI does not load this preload, so the uncached suite stays the deterministic confirmation.
 
 `<git-common-dir>/dagu-feature/runs/<RUN>/gate.json` has `schemaVersion: 1`,
 the current `sha`, exact `gate`, latest `result` (`RUNNING|PASS|FAIL`), and
@@ -1634,14 +1631,9 @@ exit `2` means conflicts remain for `implement`; other exits fail the step.
 Git's original diagnostics remain in the step log. A successful normalization
 archives the prior SHA's evidence and refreshes base, candidate and patch before gate.
 
-a4s adopts `node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs`. This repository
-policy three-way merges manifest/workspace-lock metadata and the legacy identity
-literal, and prepends the candidate's release block to unchanged published
-CHANGELOG history. Colliding patch releases receive the next patch on the updated
-base. An explicit major/minor release retains its lane when upstream remains on
-the original lane, or advances its patch when both select the same lane.
-Incompatible lanes, changed history and ambiguous functional hunks retain
-conflicts with a diagnostic. Other paths remain owned by `implement`.
+a4s configures an empty resolver and uses manual conflict recovery. Consumer
+repositories may adopt their own resolver; the generic verified-ref and
+captured-candidate contract above does not prescribe release metadata policy.
 
 ## Run-wide escalation and owner decisions
 

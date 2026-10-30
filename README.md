@@ -70,13 +70,12 @@ content, not extra lifecycle checkpoints. Reports alone do not authorize action.
 Main is the only active lane: independent `a4s` clone, branch `main`, queue `a4s`.
 The temporary v1 lane was retired after release and proof (#435–#438).
 The [operating runbook](docs/operations/deployment.md) separates historical
-station evidence from the release cutover. Consumer config selects `uses`; root
-admission verifies a release into `$DAGU_HOME/cache/a4s/<version>/` and hands off
-to its compiled executable. Successors keep the parent's artifact tuple. a4s
-never writes station config or restarts services. Initial release/plugin
-installation, runtime environment, Dagu queue capacity and pinned reconciler are
-operator work; drain all nonterminal runs/open role jobs before removing old
-installed checkouts and their service PATH entries.
+station evidence from the release cutover. New admission requires schema-2
+consumer policy and selects `state.current`; the launcher verifies its immutable
+release into `$DAGU_HOME/cache/a4s/<version>/` and hands off to the compiled
+executable. Successors keep the parent's artifact tuple. a4s never writes station
+config or restarts services. Initial launcher/plugin installation, runtime
+environment, Dagu queue capacity and the unpinned tick DAG are operator work.
 
 ## Development
 
@@ -93,13 +92,11 @@ The guard names the offending test file. Default suites need neither the
 station heavy slot nor forced serial test-file execution.
 
 Release builds use `r<N>` (the validated source SHA's full-history first-parent
-commit count), not manual package/lockfile version bumps. After CI `validate`
-succeeds for that exact pushed `main` SHA, the release workflow publishes changed
-shipped inputs as immutable `a4s-r<N>` releases; it creates tags itself and rejects
-ID/SHA or rerun-digest conflicts. The old tag-push/`v0` publisher is removed and
-the historical channel is frozen. Historical SemVer tuples remain readable and
-restorable. This is staged delivery only: the station is not switched and a4s
-never writes station/service configuration.
+commit count). After CI `validate` succeeds for that exact pushed `main` SHA,
+the release workflow publishes changed shipped inputs as immutable `a4s-r<N>`
+releases; it creates tags itself and rejects ID/SHA or rerun-digest conflicts.
+Historical SemVer tuples remain readable and restorable. Publication does not
+switch the station or write station/service configuration.
 
 Native CLI, YAML, OS-lock, compiled-artifact and timing scenarios are opt-in:
 

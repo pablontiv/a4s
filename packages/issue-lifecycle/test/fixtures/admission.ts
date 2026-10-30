@@ -8,6 +8,9 @@ import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } fro
 import { archiveName, nativePlatform } from "../../../launcher/src/release.ts";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "./artifact.ts";
 import { checksumDigest, type ArtifactTuple } from "../../../launcher/src/release.ts";
+import { commitStateLocked } from "../../../launcher/src/station-state.ts";
+import type { PersistedFormats } from "../../../launcher/src/station-state.ts";
+import { identity } from "../../src/identity.ts";
 
 let compiledDirectory: string | undefined;
 let installedDirectory: string | undefined;
@@ -90,6 +93,10 @@ export function admissionFixture() {
   git("config", "user.email", "admission@example.test");
   git("remote", "add", "origin", "https://github.com/example/fixture.git");
   writeConfig();
+  const artifact = compiledArtifact(home);
+  commitStateLocked(home, { schema: 1, generation: 0, current: artifact, previous: artifact, rejected: [],
+    formats: Object.fromEntries(Object.entries(identity.support).map(([name, format]) => [name, [format.write]])) as PersistedFormats });
+  writeFileSync(join(home, "cache/a4s/.state.lock"), "");
   const dag = join(packageDir, ".workspace", "dagu", "dags", "feature.yaml");
   const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
   const command = (subcommand: string, run: string, env: NodeJS.ProcessEnv = {}, params: string[] = [], dagArg = dag, owner = "owner-session") => {
@@ -98,7 +105,7 @@ export function admissionFixture() {
     const version = manifest.version as string;
     const archive = archiveName(version);
     const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: packageDirectory, encoding: "utf8" }).trim();
-    writeReleaseDirectory(releases, { repository, moving: { v0: commit }, releases: [{ tag_name: `v${version}`, commit }] });
+    writeReleaseDirectory(releases, { repository, moving: {}, releases: [{ tag_name: `v${version}`, commit }] });
     for (const file of [archive, `${archive}.sha256`]) cpSync(join(directory, file), join(releases, file));
     return spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, subcommand, "--run-id", run, dagArg, "--", "ISSUE=277", ...(params.some(param => param.startsWith("OMP_SESSION_ID=")) || !owner ? [] : [`OMP_SESSION_ID=${owner}`]), ...params], { cwd: packageDir,
       env: { ...process.env, DAGU_HOME: home, A4S_PRIMARY: packageDir, ...env, PATH: `${githubBin}:${env.PATH ?? process.env.PATH ?? ""}`, A4S_FIXTURE_RELEASES: releases }, encoding: "utf8", timeout: 30000 });

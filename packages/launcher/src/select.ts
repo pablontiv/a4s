@@ -23,7 +23,7 @@ export async function restoreArtifact(home: string, tuple: ArtifactTuple): Promi
   try { lstatSync(cachePath(home, tuple)); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    const release = resolveRelease(`a4s@${tuple.version.startsWith("r") ? tuple.version : `v${tuple.version}`}`);
+    const release = resolveRelease(tuple.version);
     if (!sameArtifact(release, tuple)) throw new Error(`Immutable release differs from selected tuple ${artifactToken(tuple)}`);
     return ensureArtifact(home, release);
   }
@@ -94,7 +94,11 @@ export async function selectPayload(home: string, args: string[], dependencies: 
       const receipt = readJsonFile(receiptPath);
       if (!isRecord(receipt) || !sameArtifact(receiptTuple(receiptPath), tuple) || !isDeepStrictEqual(receipt.artifactSupport, cached.identity.support) || !isRecord(receipt.contracts)) throw new Error("Receipt/cache declarations differ");
       const support = formatSupport(cached.identity.support);
-      for (const name of SHARED_FORMATS) if (!support[name].read.includes(Number(receipt.contracts[name]))) throw new Error(`Unsupported receipt ${name} contract`);
+      const legacy = isRecord(receipt.artifactSupport) && "receiptSchemas" in receipt.artifactSupport;
+      for (const name of SHARED_FORMATS) {
+        const version = receipt.contracts[name] ?? (legacy && ["roleJobPayload", "runState", "prCheckpoint"].includes(name) ? 1 : undefined);
+        if (!support[name].read.includes(Number(version))) throw new Error(`Unsupported receipt ${name} contract`);
+      }
     }
     if ((admission && !args.includes("--check") || args[0] === "run") && !explicit) selectedArgs = [args[0]!, "--artifact", artifactToken(tuple), ...args.slice(1)];
     const lease = createLeaseLocked(home, tuple, state.generation, "launcher", args[0]!);

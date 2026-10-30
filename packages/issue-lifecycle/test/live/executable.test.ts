@@ -16,6 +16,8 @@ import type { Receipt } from "../../src/admission.ts";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
 import { gitBuildIdentity } from "../../../../scripts/release-identity.mjs";
 import { roleRuntimeFixture } from "../fixtures/role-runtime.ts";
+import { installGithubFixture, makeArchive, writeReleaseDirectory } from "../fixtures/artifact.ts";
+import { selectPayload } from "../../../launcher/src/select.ts";
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const cli = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
@@ -225,6 +227,44 @@ test("release archives and the compiled engine work from an extracted root", {
       const result = await slot;
       assert.match(result.stderr, /gate: acquired lock=/);
     } finally { slotHolder.kill(); }
+    // Preserve the pre-launcher declaration and receipt bytes. The tiny
+    // shell-identity artifact models the historical executable, not a new build.
+    const historical = { version: "0.7.8", commit: "7".repeat(40), support: {
+      dispatch: "a4s-run/1", configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 },
+      roleJobStores: [1], protocols: identity.protocols,
+    } };
+    const oldRelease = makeArchive(releases, historical.version, historical.commit);
+    const oldStage = join(temporary, "historical"); mkdirSync(oldStage);
+    const oldArchive = join(releases, oldRelease.archive);
+    execFileSync("tar", ["-xzf", oldArchive, "-C", oldStage]);
+    writeFileSync(join(oldStage, "identity.json"), JSON.stringify(historical));
+    writeFileSync(join(oldStage, "a4s"), `#!/bin/sh\n[ "$1" = version ] || exit 91\nprintf '%s\\n' '${JSON.stringify(historical)}'\n`);
+    execFileSync("tar", ["--format=ustar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "-czf", oldArchive, "-C", oldStage, ...readdirSync(oldStage).sort()]);
+    const oldTuple = { version: historical.version, commit: historical.commit, digest: createHash("sha256").update(readFileSync(oldArchive)).digest("hex") };
+    writeFileSync(`${oldArchive}.sha256`, `${oldTuple.digest}  ${oldRelease.archive}\n`);
+    writeReleaseDirectory(releases, { repository: oldRelease.repository, moving: {}, releases: [{ tag_name: "v0.7.8", commit: historical.commit }] });
+    const oldState = join(primary, ".git/dagu-feature/runs/historical798"); mkdirSync(oldState);
+    const oldReceipt = { ...receipt, artifact: oldTuple, artifactSupport: historical.support,
+      contracts: { dispatch: historical.support.dispatch, config: 1, receipt: 2, roleJobStore: 1, protocols: identity.protocols },
+      sourceVersion: { ...receipt.sourceVersion, version: historical.version, commit: historical.commit },
+      initial: { ...receipt.initial, deployment: { config: { schemaVersion: 1, uses: "a4s@v0.7.8", commit: historical.commit, digest: "c".repeat(64) } } },
+      runReceipt: { ...receipt.runReceipt, run: "historical798" } };
+    const receiptBytes = JSON.stringify(oldReceipt, null, 2) + "\n", oldPath = join(oldState, "receipt.json");
+    writeFileSync(oldPath, receiptBytes);
+    const historicalEnv = { ...env, PATH: `${installGithubFixture(join(temporary, "github"))}:${env.PATH}`, A4S_FIXTURE_RELEASES: releases };
+    const revived = run(["run", "--primary", primary, "--run", "historical798", "--", "codeql", "--help"], historicalEnv);
+    assert.equal(revived.status, 91, revived.stderr); // The exact old shell artifact receives the handoff.
+    const oldCache = cachePath(home, oldTuple);
+    assert.deepEqual(JSON.parse(readFileSync(join(oldCache, "identity.json"), "utf8")), historical);
+    assert.equal(createHash("sha256").update(readFileSync(join(oldCache, "verified-archive.tar.gz"))).digest("hex"), oldTuple.digest);
+    assert.equal(readFileSync(oldPath, "utf8"), receiptBytes);
+    // The stable selector also accepts old contract IDs without migrating them.
+    writeFileSync(join(home, "cache/a4s/state.json"), JSON.stringify({ schema: 1, generation: 0, current: artifact, previous: artifact, rejected: [],
+      formats: { receipt: [2], config: [1, 2], roleJobStore: [1], roleJobPayload: [1], runState: [1], prCheckpoint: [1] } }));
+    const selected = await selectPayload(home, ["run", "--primary", primary, "--run", "historical798", "--", "codeql", "--help"], { env: {} });
+    assert.equal(selected.cached.record.digest, oldTuple.digest);
+    rmSync(join(home, "cache/a4s/leases", `${selected.lease.id}.json`));
+    assert.equal(readFileSync(oldPath, "utf8"), receiptBytes);
     assert.equal(existsSync(pythonCalled), false, "the released engine must not invoke Python");
     assert.equal(readdirSync(join(extracted, "src")).sort().join(","), "status,triage");
     assert.equal(basename(executable), "a4s");

@@ -10,9 +10,9 @@ See [private installation](../operations/private-install.md),
 
 The [versioned artifact contract](artifact-contract.md) defines release → verified
 `$DAGU_HOME/cache/a4s/<version>/` → explicit tuple handoff to the compiled `a4s`.
-Committed `.workspace/dagu/config.json` selects `uses: a4s@v<major>` or an exact
-`a4s@v<x.y.z>`. Successors retain the parent receipt's artifact rather than
-resolving the moving alias again. Release roots carry both OMP entries, agents
+Committed `.workspace/dagu/config.json` supplies schema-2 consumer policy;
+station `state.current` selects the root admission's artifact. Successors retain
+the parent receipt's artifact rather than selecting the station build again. Release roots carry both OMP entries, agents
 and seven skills; installed source checkouts are not engine execution paths.
 This does not assert that the operator's drained station cutover has occurred.
 Queue capacity, service configuration and activation remain operator-owned:

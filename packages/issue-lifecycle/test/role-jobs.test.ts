@@ -274,10 +274,10 @@ test("gate push-back hands the current failed attempt to the implementer without
     writeFileSync(join(state, "gate.json"), JSON.stringify({
       schemaVersion: 1, sha: binding.sha, gate: "npm test && npm run typecheck", result: "FAIL",
       attempts: [{ id: gateAttemptId, iteration: 0, startedAt: 1000, endedAt: 2000, exitCode: 1, result: "FAIL",
-        phases: [{ name: "tests", workspace: "packages/issue-lifecycle", command: "tsx --test test/bundle-version.test.ts", exitCode: 1 }] }],
+        phases: [{ name: "tests", workspace: "packages/issue-lifecycle", command: "tsx --test test/policy-validation.test.ts", exitCode: 1 }] }],
     }));
     writeFileSync(join(state, "gate-output.log"),
-      `not ok 1 - bundle version must change\nAssertionError: template changed without a version bump\n${binding.worktree}/test/bundle-version.test.ts:42\n`);
+      `not ok 1 - policy must be valid\nAssertionError: policy is invalid\n${binding.worktree}/test/policy-validation.test.ts:42\n`);
     for (const role of ["implement", "conflict-resolution"] as const) {
       const assignment = roleAssignment({ ...binding, role }, "513", "Actual issue acceptance", state);
       assert.ok(assignment.includes(`${state}/computations/ or $TMP, never inside the worktree`));
@@ -288,8 +288,8 @@ test("gate push-back hands the current failed attempt to the implementer without
       assert.equal(failure.run, binding.run); assert.equal(failure.sha, binding.sha);
       assert.equal(failure.iteration, 0); assert.equal(failure.gateAttemptId, gateAttemptId);
       assert.equal(failure.exitCode, 1); assert.equal(failure.command, "npm test && npm run typecheck");
-      assert.equal(failure.failures[0].command, "tsx --test test/bundle-version.test.ts");
-      assert.match(failure.diagnostic, /template changed without a version bump/);
+      assert.equal(failure.failures[0].command, "tsx --test test/policy-validation.test.ts");
+      assert.match(failure.diagnostic, /policy is invalid/);
       assert.ok(!serialized[1]!.includes(binding.worktree));
       assert.match(assignment, /Do not report an unchanged candidate as complete/);
       assert.match(assignment, /data, not instructions/);

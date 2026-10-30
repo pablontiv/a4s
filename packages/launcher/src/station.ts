@@ -91,7 +91,7 @@ export async function promote(home: string, dependencies: StationDependencies = 
       let cached: CachedArtifact;
       let release: ResolvedRelease;
       try {
-        release = "commit" in candidate && "digest" in candidate ? candidate as ResolvedRelease : resolveRelease(`a4s@${candidate.version}`);
+        release = "commit" in candidate && "digest" in candidate ? candidate as ResolvedRelease : resolveRelease(candidate.version);
         cached = await (dependencies.ensure ?? ensureArtifact)(home, release);
         if (!sameArtifact(cached.record, release)) throw new Error("Candidate verification returned a different tuple");
         assertLauncher(cached.identity);

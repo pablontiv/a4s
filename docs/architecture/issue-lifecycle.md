@@ -12,17 +12,17 @@ Spike #692 compared Harness² with these loops and discarded adoption; see
 
 ## Delivery and provenance
 
-The [artifact contract](artifact-contract.md) is normative. Tag releases publish
-one compiled `a4s` executable per platform with identity, real Node gate preload
-files, extension closure, agents and skills. The release engine never executes
-an installed source checkout.
+The [artifact contract](artifact-contract.md) is normative. Immutable build releases
+publish one compiled `a4s` executable per platform with identity, real Node gate
+preload files, extension closure, agents and skills. The release engine never
+executes an installed source checkout.
 
-The consumer commits `.workspace/dagu/config.json` with `schemaVersion: 1` and
-required `uses: "a4s@v0"` (moving major) or `"a4s@v0.6.1"` (exact example).
-Admission reads config bytes at consumer HEAD; unknown fields, uncommitted policy,
-branches, paths, URLs and ranges are rejected. Queue capacity is not consumer policy.
+The consumer commits `.workspace/dagu/config.json` with `schemaVersion: 2`.
+Admission reads config bytes at consumer HEAD; unknown fields and uncommitted
+policy are rejected. Schema 1 remains readable only as historical evidence, not
+as new-admission policy. Queue capacity is not consumer policy.
 
-A root admission resolves `uses` once to `(version, commit, archive digest)`,
+A root admission selects station `state.current` as `(version, commit, archive digest)`,
 verifies the archive before extraction, validates its identity/assets and
 atomically publishes `$DAGU_HOME/cache/a4s/<version>/`. Existing entries must pass
 integrity validation and cannot be overwritten or silently repaired. Admission
@@ -32,14 +32,14 @@ the tuple without another resolution/handoff, materializes its own templates
 and binds `A4S_BIN` to the cached absolute executable in the immutable snapshot.
 
 Feature → PoC, PoC → feature and discovery → planning verify and inherit the
-parent receipt's tuple. A changed child `uses` does not upgrade the successor.
+parent receipt's tuple. Changed child policy does not upgrade the successor.
 Each child independently validates committed policy; missing/invalid parent
 artifacts fail closed rather than falling back to a checkout or another release.
-Cache entries remain retained for all nonterminal/recoverable runs and open role
-jobs; the pinned station reconciler also retains its entry.
+Cache retention protects station pointers, process leases, nonterminal/recoverable
+runs and open role jobs.
 
 Bootstrap checks the independent canonical PRIMARY, tools, native role discovery
-and station readiness, then authors consumer config (default `uses: a4s@v0`).
+and station readiness, then authors schema-2 consumer policy.
 Its authorized GitHub step may change merge settings and branch protection.
 It neither renders/installs DAGs nor installs an engine or shared reconciler.
 The operator separately provisions the stable launcher, tick DAG and station settings.

@@ -135,7 +135,7 @@ steps:
         TEST_PATHS: Bash ERE matching this repository's test paths
         (current: ${steps.detect.outputs.CURRENT_TEST_PATHS}; for a4s: (^|/)(test|tests)/|\.test\.(ts|cjs)$).
         REBASE_RESOLVER: repository command run in the conflicted worktree, or empty
-        (current: ${steps.detect.outputs.CURRENT_REBASE_RESOLVER}; for a4s: node packages/issue-lifecycle/bin/dagu-bundle-rebase.mjs).
+        (current: ${steps.detect.outputs.CURRENT_REBASE_RESOLVER}; empty selects manual resolution).
         VALIDATION: optional repository procedure after the gate and before push;
         empty means skip (current JSON: ${steps.detect.outputs.CURRENT_VALIDATION}).
         Adoption fixes this value; feature enqueue overrides are rejected.
