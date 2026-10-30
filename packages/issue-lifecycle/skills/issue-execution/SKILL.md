@@ -65,7 +65,7 @@ flowchart LR
   `reconcile-failure run=<id> status=1 cause=<diagnostic>` and continues other
   compatible runs. Missing exact tuples are restored from immutable releases.
   Native `retry`, `human-task` and `stop` mutations preflight the invoking
-  process's PATH for `bash`, `git`, `gh`, `jq`, `curl`, `node`, `bun`, `omp` and
+  process's PATH for `bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and
   `dagu` before calling Dagu: synchronous retries and terminal handlers do not
   inherit the service's toolchain. Missing commands fail without starting any
   step or changing the run. Supply the station toolchain's full PATH as a literal
@@ -79,24 +79,21 @@ flowchart LR
 - Node for the real filesystem gate preload. Kernel advisory locks are native
   in the compiled release; Python `fcntl` is a source-development fallback only.
 - The tools the repository's gate command needs.
-- Bun on the service's PATH for the operator-supplied native OMP runtime.
-  Set `DAGU_OMP_ROLE_RUNTIME` in the Dagu service environment to the absolute
-  installed `@oh-my-pi/pi-coding-agent` package root (the directory containing
-  `package.json` and `src/task/executor.ts`, not the `omp` executable). Use the
-  same variable when running bootstrap from a shell. Dagu 2.24.0 filters
-  `OMP_ROLE_RUNTIME` out of steps but preserves `DAGU_*`; the old variable and
-  PATH-based runtime discovery are not supported. A compiled `omp` binary on
-  `PATH` therefore does not select or obscure a package runtime.
-- Both `triage-reviewer` and `task` must be discoverable by that runtime from
-  PRIMARY and the candidate worktree under the Dagu service user. Persistently
-  link the whole lifecycle package with `omp plugin link <package-directory>`
-  under separate operator authority; loading it only in the coordinating
-  session is insufficient for headless role jobs. Bootstrap runs
-  `a4s role-jobs detect` to check the runtime and both agents before adoption.
-  It reports the selected root and native agent sources without launching a role.
-  Missing runtime/agent errors identify the attempted root or missing agent and
-  the corrective setting/link. Service environment changes and activation are
-  operator-owned; bootstrap does not write or restart the station/service.
+- The intended station `omp` must resolve on the service and bootstrap PATH.
+  a4s launches that binary headlessly with `-p --no-session -e` and the executing
+  release's pinned `role-runner.ts`. Bun and an OMP source package are not runtime
+  requirements. Before the host starts, a4s removes Dagu output/log/step variables
+  from its child environment; only the stage retains its private output sink.
+- Triage uses `agents/triage-reviewer.md` from the run's verified release, not an
+  ambient agent registry entry. Implementation/conflict resolution uses shared
+  `task` from the host's native discovery. The coordinator's plugin link does not
+  choose the role runner or triage definition. Bootstrap runs `a4s role-jobs detect`
+  to check both agents and the five required OMP host modules; jobs repeat this
+  validation. Detect reports the binary realpath as `root` and agent sources.
+  It starts a headless host but no role session or model turn of its own.
+  Missing binaries/modules/agents fail closed and identify the operator remedy.
+  Service PATH selection, environment changes and activation remain operator-owned;
+  bootstrap does not write or restart the station/service.
 
 This skill does not install Dagu and contains no repository-specific service logic. Bootstrap authors consumer policy; runtime parameters carry operational issue inputs.
 
@@ -107,8 +104,8 @@ the template's command stages. It authorizes against the immutable admission
 receipt/snapshot, current native running stage and ready dependencies, canonical
 worktree ownership, candidate SHA and iteration. Release-version equality is not
 required; supported declared contracts are. `validation` remains an operator `human.task`.
-The registry maps `triage` to `triage-reviewer`, implementation/conflict resolution
-to `task`. Native `discoverAgents`,
+Triage loads the pinned release definition `triage-reviewer`; native discovery
+selects shared `task` for implementation/conflict resolution. The OMP host's
 `Settings.loadReadOnly`, `resolveAgentModelSelection` and `runSubprocess` preserve
 the entire configured model array, pre-expansion named role, strict structured
 yield and session-scoped retry/fallback chain.
@@ -133,8 +130,9 @@ attempt produces a distinct id and native session.
 When available, `native` contains `session`, canonical `transcript`, inspected
 `bytes`, prefix SHA-256 `digest`, emitting assistant `event`, actual `provider`
 and `model`, assistant `attempts`, model-change `fallbacks` with
-`resolvedModelIsFallback`, and `routing` (runtime version/executor digest,
-registered agent source/models, current overrides, resolved full patterns/role).
+`resolvedModelIsFallback`, and `routing` (`runtime: {binary, version, digest}` for
+the OMP realpath, `omp --version` and binary SHA-256; pinned/discovered agent
+source/models, current overrides, resolved full patterns/role).
 `routing.json`, `assignment.json`, `native-result.json` and the native
 `<id>.jsonl` remain alongside it. Command `IMPLEMENTER` and triage `REVIEW` outputs
 carry these ids and retain the native session and emitting structured result.
@@ -187,7 +185,7 @@ The station operator owns Dagu installation, `$DAGU_HOME/config.yaml`,
 restarts the service. The operator supplies Dagu 2.23.0 or newer, an
 unauthenticated loopback API, enabled queues/coordinator and the named global
 lane queue with operator-selected capacity. The scheduler's own PATH must
-resolve `bash`, `git`, `gh`, `jq`, `node`, `bun`, `omp`, `dagu` and initial `a4s`;
+resolve `bash`, `git`, `gh`, `jq`, `node`, `omp`, `dagu` and initial `a4s`;
 an interactive shell's PATH does not establish service readiness.
 
 Before adoption, inspect without changing the station:
@@ -210,8 +208,8 @@ readiness never creates files, enqueues probes or activates services.
 
 Before the operator's hard cutover, close admission and establish **zero
 nonterminal runs and zero open role jobs**. Install a verified release executable
-for initial admission and its complete OMP plugin root, retain
-`DAGU_OMP_ROLE_RUNTIME`, configure queue capacity in Dagu, and separately pin the
+for initial admission and its complete OMP plugin root, select the intended
+compiled `omp` on the service PATH, configure queue capacity in Dagu, and separately pin the
 station reconciler to a verified cache entry. Once references are cleared,
 remove obsolete installed checkouts, launchers/plugin links and service PATH
 entries. Do not retain aliases. Local role jobs do not authorize station changes.
@@ -870,7 +868,7 @@ Every emitted report contains all four sections; a section with no entries says 
 
 ## Triage
 
-`triage` automatically runs the registered, tool-less `triage-reviewer`. The
+`triage` automatically runs the release-pinned, tool-less `triage-reviewer`. The
 dispatcher fetches `gh issue view <issue> --json title,body,comments` and embeds
 the complete JSON in `assignment.json`: title, body and every returned comment.
 Coordinators must not compose reviewer assignments or substitute commands, file

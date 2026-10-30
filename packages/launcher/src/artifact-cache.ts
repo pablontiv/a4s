@@ -135,6 +135,8 @@ function layout(directory: string, files: Set<string>, tuple: ArtifactTuple, dep
     ? dependencies.executableIdentity(join(directory, "a4s"))
     : JSON.parse(execFileSync(join(directory, "a4s"), ["version"], { encoding: "utf8", timeout: 30000 }));
   if (!isDeepStrictEqual(declared, executable) || !isRecord(declared) || declared.version !== tuple.version || declared.commit !== tuple.commit || !isRecord(declared.support) || "digest" in declared) throw new Error(`Artifact embedded identity mismatch: expected ${artifactToken(tuple)}`);
+  if (declared.layout !== undefined && declared.layout !== "omp-role-runner/1") throw new Error(`Unsupported artifact layout: ${JSON.stringify(declared.layout)}`);
+  if (declared.layout === "omp-role-runner/1" && !files.has("role-runner.ts")) throw new Error("Incomplete a4s artifact: missing role-runner.ts");
   const manifest = json(join(directory, "package.json"));
   if (!isRecord(manifest) || manifest.name !== "@a4s/issue-lifecycle" || manifest.version !== tuple.version) throw new Error("Artifact package manifest identity mismatch");
   if (!isRecord(manifest.omp) || !Array.isArray(manifest.omp.extensions) ||

@@ -27,8 +27,7 @@ async function run(argv: string[], io: RoleJobIO, deps: RoleJobDependencies): Pr
     try { io.log(JSON.stringify(await detectRoleRuntime(realpathSync(process.env.PRIMARY || process.cwd())))); }
     catch (error) { throw new Error(`bootstrap detect: ${error instanceof Error ? error.message : String(error)}`); }
   } else if (command === "stage" && stage) {
-    // Native execution removes step-scoped environment before the agent starts.
-    // Keep the stage's own sink out of the environment inherited by agent tools.
+    // Only a4s owns the step sink; the spawned host and its tools never inherit it.
     const outputFile = process.env.DAGU_OUTPUT_FILE;
     await deps.dispatchStage(stage, (name, value) => {
       const line = `${name}=${value.replace(/[\r\n]+/g, " ")}\n`;
@@ -66,9 +65,8 @@ export async function main(argv: string[],
   deps: RoleJobDependencies = { execFileSync, dispatchStage }): Promise<void> {
 try {
   await run(argv, io, deps);
-  // The in-process native session can leave its Python tool bridge listening on
-  // 127.0.0.1. Setting exitCode does not finish the Dagu step while that handle
-  // is open, on BLOCKED, on success, or on any other terminal path.
+  // Always terminate this command at a terminal outcome. Native host/tool bridges
+  // are isolated in the child and must also exit without keeping a step alive.
   io.exit(0);
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

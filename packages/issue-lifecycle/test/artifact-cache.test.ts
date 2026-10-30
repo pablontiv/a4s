@@ -144,3 +144,36 @@ test("new identities reject missing manifest/protocol and malformed formats with
     } finally { f.dispose(); }
   }
 });
+
+test("pre-runner archives without a layout declaration still inspect and restore unchanged", async () => {
+  const f = fixture();
+  try {
+    const entries = artifactEntries("0.7.8").filter(entry => entry.name !== "role-runner.ts");
+    for (const name of ["a4s", "identity.json"]) {
+      const entry = entries.find(entry => entry.name === name)!;
+      const declared = JSON.parse(String(entry.content));
+      delete declared.layout;
+      entry.content = JSON.stringify(declared);
+    }
+    const release = writeInProcessArchive(f.releases, entries, "0.7.8");
+    const first = await ensureArtifact(f.home, release, f.dependencies);
+    assert.equal(first.identity.layout, undefined);
+    assert.equal(existsSync(join(first.directory, "role-runner.ts")), false);
+    assert.equal((await inspectArtifact(f.home, release, f.dependencies)).record.digest, release.digest);
+    rmSync(first.directory, { recursive: true });
+    const restored = await ensureArtifact(f.home, release, f.dependencies);
+    assert.equal(restored.record.digest, release.digest);
+    assert.equal(restored.identity.layout, undefined);
+    assert.equal((await inspectArtifact(f.home, release, f.dependencies)).record.digest, release.digest);
+  } finally { f.dispose(); }
+});
+
+test("archives declaring the runner layout fail publication and inspection without the runner", async () => {
+  const f = fixture();
+  try {
+    const entries = artifactEntries(f.release.version, f.release.commit).filter(entry => entry.name !== "role-runner.ts");
+    const release = writeInProcessArchive(f.releases, entries, f.release.version, f.release.commit);
+    await assert.rejects(ensureArtifact(f.home, release, f.dependencies), /missing role-runner.ts/);
+    assert.equal(existsSync(cachePath(f.home, release)), false);
+  } finally { f.dispose(); }
+});

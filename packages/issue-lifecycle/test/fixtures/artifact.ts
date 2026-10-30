@@ -28,6 +28,7 @@ export function makeArchive(directory: string, version = "0.6.0", commit = "a".r
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, "export {};\n");
     }
+    writeFileSync(join(stage, "role-runner.ts"), "export {};\n");
     const archive = archiveName(version);
     const path = join(directory, archive);
     execFileSync("tar", ["--format=ustar", "--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "-czf", path, "-C", stage, ...readdirSync(stage).sort()]);
