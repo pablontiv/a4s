@@ -10,7 +10,7 @@ import { selectStationBuild } from "../../launcher/src/lease.ts";
 import { probeProcess } from "../../launcher/src/process-identity.ts";
 import { stationRoot } from "../../launcher/src/station-state.ts";
 import { listStationRuns, type StationRun } from "../../launcher/src/station-inventory.ts";
-import { gcFixture, GC_NOW, DAY } from "./fixtures/cache-gc.ts";
+import { gcFixture, GC_NOW } from "./fixtures/cache-gc.ts";
 
 for (const source of ["current", "previous", "keep-10"] as const) {
   test(`GC retains ${source} independently of run references`, async t => {
@@ -90,11 +90,12 @@ test("an active binding omitted by the inventory snapshot is resolved through it
 });
 
 for (const incident of [false, true]) {
-  test(`pending ${incident ? "incident/ambiguous" : "unlisted"} admission retains seven days and leaves its receipt intact`, async t => {
-    const f = await gcFixture(t), path = f.receipt("pending", f.builds[0]!, 6, "feature", incident);
+  test(`pending ${incident ? "incident/ambiguous" : "unlisted"} admission expires at five minutes and leaves its receipt intact`, async t => {
+    const f = await gcFixture(t), path = f.receipt("pending", f.builds[0]!, 0, "feature", incident);
     const bytes = readFileSync(path, "utf8");
-    assert.match((await gc(f.home, f.dependencies)).retained.find(entry => entry.version === "r1")!.holders.join(), /pending admission/);
-    assert.ok((await gc(f.home, { ...f.dependencies, now: () => GC_NOW + DAY })).removed.includes("r1"));
+    const expiry = GC_NOW + 5 * 60 * 1000;
+    assert.match((await gc(f.home, { ...f.dependencies, now: () => expiry - 1 })).retained.find(entry => entry.version === "r1")!.holders.join(), /pending admission/);
+    assert.ok((await gc(f.home, { ...f.dependencies, now: () => expiry })).removed.includes("r1"));
     assert.equal(readFileSync(path, "utf8"), bytes);
   });
 }

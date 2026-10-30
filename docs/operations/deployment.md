@@ -173,10 +173,28 @@ end-of-history signal. Malformed pages, repeated cursors, unavailable receipts,
 role-job databases or process probes abort collection before any deletion.
 An admission holds a process lease across receipt publication and enqueue until
 payload exit; GC frees it only after the process is dead or its PID is reused.
-Unlisted receipts, including an ambiguous `incident` enqueue, retain their
-build for seven days from `receiptCreatedAt` (historical receipts use
-`initial.admittedAt`). After that cache-policy boundary, the unchanged receipt
-still restores its exact immutable release; it never repins to current.
+Unlisted artifact-bound receipts, including an ambiguous `incident` enqueue,
+retain their build as a pending admission for **five minutes** from
+`receiptCreatedAt` (historical receipts use `initial.admittedAt`). At exactly
+five minutes they stop being pending readers if Dagu still has no matching
+`(dag, run)`. Artifact-less schema-1 receipts predate the launcher cache and
+are never pending cache readers. This does not exempt nonterminal/recoverable
+runs, open role jobs or live process leases: those retain their builds regardless
+of receipt age. Persisted receipt/config formats still participate in compatibility
+checks even after the pending reference expires.
+
+**Abandoned admission disposition:** inspect Dagu history and open role jobs for
+the exact run, and let any admission process exit (or stop it under operator
+authority). If its Dagu record is absent, wait until the five-minute bound above
+and retry `a4s station promote`; use `a4s station gc` to report retained builds
+and collect eligible cache entries. A still-blocking reader names its run, job or
+lease holder; resolve that holder rather than relocating its receipt directory.
+Artifact-less legacy probes need no wait. No manual receipt edits, directory
+relocation or new abandonment command is required: the disposition is automatic
+and leaves receipts, snapshots and observations unchanged. Expiry is a cache
+reference decision, not proof that a run completed or permission to retry its
+work. The unchanged artifact-bound receipt still restores its exact immutable
+release; it never repins to current.
 
 Tick bindings are durable run identity, not cache entries. Terminal history
 retains its binding even when its payload is pruned. A binding is removed only

@@ -149,11 +149,12 @@ test("native GC preserves admissions, exact replay, cursor history and bindings 
     const ambiguous = await admission("ambiguous-admission", true), original = readFileSync(ambiguous, "utf8");
     assert.equal(JSON.parse(original).runReceipt.observations.at(-1).kind, "incident");
     assert.ok((await gc(home)).retained.find(row => row.version === a.version)!.holders.some(holder => holder.includes("pending admission")));
-    assert.ok((await gc(home, { now: () => Date.now() + 8 * 86400000 })).removed.includes(a.version));
+    const pendingExpiry = Date.parse(JSON.parse(original).receiptCreatedAt) + 5 * 60 * 1000;
+    assert.ok((await gc(home, { now: () => pendingExpiry })).removed.includes(a.version));
     const restored = await selectPayload(home, ["run", "--primary", primary, "--run", "ambiguous-admission", "--", "version"], { env: {} });
     assert.deepEqual({ version: restored.cached.record.version, commit: restored.cached.record.commit, digest: restored.cached.record.digest }, a); unlease(restored.lease.id);
     assert.equal(readFileSync(ambiguous, "utf8"), original);
-    t.diagnostic("receipt-to-enqueue pause preserves canonical executable; ambiguous receipt retains seven days, then exact immutable restore without receipt mutation");
+    t.diagnostic("receipt-to-enqueue pause preserves canonical executable; ambiguous receipt expires at five minutes, then exact immutable restore without receipt mutation");
 
     writeFileSync(join(home, "dags/aged.yaml"), "hist_retention_days: 90\nsteps:\n  - id: noop\n    run: 'true'\n");
     assert.equal(await exit(native("aged", "aged-run")), 0);
