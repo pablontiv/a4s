@@ -1,9 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { accessSync, constants, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, delimiter, join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseDocument } from "yaml";
 import { isRecord } from "../../launcher/src/type-guard.ts";
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 
 export interface ReadinessReport { ready: boolean; checks: string[] }
 
@@ -44,53 +43,14 @@ export function queueReadiness(home: string, lane: string): string {
   }
 }
 
-const serviceTools = ["bash", "git", "gh", "jq", "node", "omp", "dagu"];
-function missingTools(path: string): string[] {
-  const directories = path.split(delimiter);
-  return serviceTools.filter(tool => !directories.some(directory => {
-    if (!directory) return false;
-    try { accessSync(join(directory, tool), constants.X_OK); return true; } catch { return false; }
-  }));
-}
-
-/** Read the scheduler's environment, not the interactive shell's PATH. */
-export function serviceEnvironmentReadiness(home: string): string {
-  try {
-    let environment: Record<string, string> | undefined;
-    if (process.platform === "linux") {
-      for (const pid of readdirSync("/proc").filter(name => /^\d+$/.test(name))) {
-        let args: string[];
-        try { args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0"); } catch { continue; }
-        if (basename(args[0] ?? "") !== "dagu" || !args.some(arg => arg === "start-all" || arg === "scheduler")) continue;
-        const candidate = Object.fromEntries(readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").filter(Boolean).map(entry => {
-          const index = entry.indexOf("=");
-          return [entry.slice(0, index), entry.slice(index + 1)];
-        }));
-        if (resolve(candidate.DAGU_HOME || join(homedir(), ".dagu")) === resolve(home)) { environment = candidate; break; }
-      }
-    } else if (process.platform === "darwin") {
-      const service = execFileSync("launchctl", ["print", `gui/${process.getuid!()}/local.dagu.server`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-      const path = /^\s*path = (.+)$/m.exec(service)?.[1];
-      if (!path || !/^\s*state = running$/m.test(service)) throw new Error("local.dagu.server is not running");
-      const plist: unknown = JSON.parse(execFileSync("plutil", ["-convert", "json", "-o", "-", path], { encoding: "utf8" }));
-      if (isRecord(plist) && isRecord(plist.EnvironmentVariables)) {
-        environment = Object.fromEntries(Object.entries(plist.EnvironmentVariables).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-        if (resolve(environment.DAGU_HOME || join(homedir(), ".dagu")) !== resolve(home)) throw new Error("service DAGU_HOME does not match");
-      }
-    } else throw new Error(`service environment inspection is unavailable on ${process.platform}`);
-    if (!environment) throw new Error(`no readable running Dagu scheduler environment for DAGU_HOME=${resolve(home)}`);
-    const missing = missingTools(environment.PATH || "");
-    if (missing.length) throw new Error(`scheduler PATH is missing ${missing.join(", ")}`);
-    return "service-environment ready=yes";
-  } catch (error) {
-    return `service-environment ready=no cause=${JSON.stringify(String(error))} action=ask-station-operator`;
-  }
-}
 
 /** GET-only diagnostics: never run Dagu CLI initialization, install files or restart a service. */
-export async function stationReadiness(home: string, lane: string): Promise<ReadinessReport> {
-  const checks = [stationConfigReadiness(home), queueReadiness(home, lane), serviceEnvironmentReadiness(home)];
-  const endpoint = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+export async function stationReadiness(home: string | undefined, lane: string, env: NodeJS.ProcessEnv = process.env): Promise<ReadinessReport> {
+  let service;
+  try { service = readServiceEnvironment({ ...env, ...(home === undefined ? {} : { DAGU_HOME: home }) }); }
+  catch (error) { return { ready: false, checks: [error instanceof Error ? error.message : String(error)] }; }
+  const checks = [stationConfigReadiness(service.DAGU_HOME), queueReadiness(service.DAGU_HOME, lane), "service-environment ready=yes"];
+  const endpoint = service.DAGU_URL;
   for (const resource of ["queues", "services/scheduler"]) {
     try {
       const response = await fetch(`${endpoint}/api/v1/${resource}`, { signal: AbortSignal.timeout(5000), redirect: "error" });

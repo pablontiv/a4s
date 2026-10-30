@@ -7,11 +7,14 @@ import { initializeStation, rollback } from "./station.ts";
 import { parseArtifact } from "./release.ts";
 import { readStationState } from "./station-state.ts";
 import { LAUNCHER_PROTOCOL, STATE_SCHEMAS } from "./contracts.ts";
+import { readServiceEnvironment, serviceEnvironmentCommand } from "./service-environment.ts";
 
 declare const A4S_COMPILED: boolean;
 /** Operator-installed program, compiled independently of payload identity. */
 export async function main(args: string[]): Promise<void> {
-  const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
+  if (args[0] === "service-environment") return serviceEnvironmentCommand(args.slice(1));
+  const home = args[0] === "queue" ? readServiceEnvironment().DAGU_HOME
+    : process.env.DAGU_HOME || join(homedir(), ".dagu");
   if (args[0] === "launcher-version" && args.length === 1) {
     console.log(JSON.stringify({ launcherProtocol: LAUNCHER_PROTOCOL, stateSchemas: STATE_SCHEMAS }));
     return;

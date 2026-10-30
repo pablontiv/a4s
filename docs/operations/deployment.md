@@ -388,31 +388,112 @@ upgrade it.
 ## Operator-owned station configuration and readiness
 
 The station operator owns Dagu's configuration, capacity, service unit and
-activation. a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml`, launchd or
-systemd units, and never restarts Dagu.
+activation. a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml`, service
+declarations, launchd or systemd units. It never installs, activates, reloads or
+restarts Dagu. No service installer, unit generator or activation hook is shipped.
 
-Provide an unauthenticated loopback API, queues/coordinator enabled, and the
-consumer lane's named global queue in station config. Its `max_concurrency` is
-chosen by the operator, not committed consumer config. Ensure the service's own
-PATH resolves `bash`, `git`, `gh`, `jq`, `node`, `omp`, and `dagu`. Engine helpers
-use the snapshot's absolute `A4S_BIN`; Bun and Python are not release runtime dependencies.
-Use the service's actual home and endpoint for read-only diagnostics:
+### Declare the station service environment
+
+The operator creates one station-local UTF-8 JSON object, selected explicitly by
+the **absolute** `A4S_SERVICE_ENV` filename in both the service and a4s environment.
+It is not consumer workflow policy and must not be committed in a consumer's
+`.workspace/dagu/config.json`. Example declaration (replace `/opt/station` with
+the station's actual absolute paths):
+
+```json
+{
+  "DAGU_URL": "http://127.0.0.1:8097",
+  "DAGU_HOME": "/opt/station/dagu",
+  "PATH": "/opt/station/bin:/usr/local/bin:/usr/bin:/bin"
+}
+```
+
+All three fields are required nonempty strings without NUL or line breaks.
+`DAGU_URL` is an unauthenticated HTTP loopback origin (`127.0.0.1`, `localhost`
+or `[::1]`), without credentials, path, query or fragment. `DAGU_HOME` must name
+an existing readable absolute directory. Every colon-separated PATH entry must
+be absolute; empty PATH entries are invalid.
+Values are literal: no shell expansion, user-home, port or caller-PATH fallback.
+The declared PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
+`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`.
+If the invoking environment selects `DAGU_HOME` or `DAGU_URL`, it must agree with
+the declaration. The caller's PATH is not used to judge scheduler tools.
+
+Supply these exact values to the Dagu service. One operator-owned wrapper can
+read the same JSON for either manager; this is documentation, not an a4s-installed
+script. For example, `/opt/station/bin/run-dagu` (use the actual absolute jq and
+Dagu executable locations):
 
 ```sh
+#!/bin/sh
+set -eu
+: "${A4S_SERVICE_ENV:?operator must select the declaration}"
+DAGU_URL=$(/opt/station/bin/jq -er '.DAGU_URL' "$A4S_SERVICE_ENV")
+DAGU_HOME=$(/opt/station/bin/jq -er '.DAGU_HOME' "$A4S_SERVICE_ENV")
+PATH=$(/opt/station/bin/jq -er '.PATH' "$A4S_SERVICE_ENV")
+export DAGU_URL DAGU_HOME PATH
+exec /opt/station/bin/dagu start-all
+```
+
+Operator-owned systemd service example (the existing unit's other settings,
+including API bind/port settings matching `DAGU_URL`, remain operator policy):
+
+```ini
+[Service]
+Environment=A4S_SERVICE_ENV=/opt/station/service-environment.json
+ExecStart=/opt/station/bin/run-dagu
+```
+
+Operator-owned launchd configuration example, using the identical wrapper and
+declaration (not a generated or installed plist):
+
+```xml
+<plist version="1.0"><dict>
+  <key>Label</key><string>operator.dagu</string>
+  <key>ProgramArguments</key><array><string>/opt/station/bin/run-dagu</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>A4S_SERVICE_ENV</key><string>/opt/station/service-environment.json</string>
+  </dict>
+</dict></plist>
+```
+
+Ensure Dagu's own configuration binds the declared loopback endpoint (for this
+example, `host: 127.0.0.1` and `port: 8097`). Also provide `auth.mode: none`,
+`coordinator.enabled: true`, enabled queues, and the consumer lane's named
+global queue. Its positive `max_concurrency` is chosen by the operator, not
+committed consumer config. Engine helpers use the snapshot's absolute `A4S_BIN`;
+Bun and Python are not release runtime dependencies.
+
+Select the same declaration for a4s diagnostics and bootstrap. The shared
+launcher-layer reader is available through both the stable launcher and the
+release-bound executable; it only reads and validates, never repairs the file:
+
+```sh
+export A4S_SERVICE_ENV=/opt/station/service-environment.json
+a4s service-environment # validated JSON: DAGU_URL, DAGU_HOME, PATH
 a4s queue "$PRIMARY/.workspace/dagu/config.json"
 # Before initial adoption:
 a4s queue --lane a4s
 ```
 
-Exit 1 reports missing/invalid lane queues in config or the running API,
-endpoint/auth errors, inactive scheduler or unreadable/incomplete service
-environment. Linux reads the running scheduler's `/proc` environment; macOS
-reads the running launchd service's configured environment. The check performs
-only reads and HTTP GETs, creates no home or probe DAGs, and does not enqueue
-or activate anything. Bootstrap invokes it before adoption and confirmation.
-When readiness fails, request station-operator correction; bootstrap cannot
-repair or reload station configuration. Operator-led service changes must
-preserve active/waiting runs and follow that station's safe activation policy.
+Readiness uses the declaration's home and endpoint, station file reads and
+bounded unauthenticated HTTP GETs. It never inspects process tables or service
+managers, creates a home/probe DAG, enqueues a run or changes station bytes.
+Bootstrap obtains its probe endpoint/home only through its release-bound
+`"$A4S_BIN" service-environment`; it does not parse the declaration itself.
+Other endpoint/home clients and templates are a separate cutover: continue
+supplying the same explicit environment values to those clients.
+
+Exit 1 identifies missing/unreadable/malformed declarations, the invalid or
+inconsistent field, missing declared tools, config leaves/queues, API/auth errors
+or inactive schedulers, with an operator action. Recovery is operator-owned:
+correct the selected declaration, ensure the service receives the same values,
+merge missing station config leaves while preserving unrelated settings, and
+follow the station's safe activation policy before retrying diagnostics and
+bootstrap. a4s cannot create the declaration or repair/reload the service.
+Do not change active/waiting runs, unrelated queues or service definitions to
+make a probe pass. No live-station change or restart window is required to
+implement or test this feature; service activation is a separate operator decision.
 
 History retention is operator policy in `$DAGU_HOME/base.yaml`; the retained
 source example uses `hist_retention_days: 30`. The launcher tick DAG declares

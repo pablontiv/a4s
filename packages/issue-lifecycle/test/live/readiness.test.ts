@@ -10,6 +10,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import test from "node:test";
 import { liveDagu } from "../fixtures/live-dagu.ts";
+import { declareService } from "../fixtures/service-environment.ts";
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 
 const exec = promisify(execFile);
 const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
@@ -26,7 +28,7 @@ async function freePort(): Promise<number> {
 }
 
 test("readiness observes an operator-configured queue and the live scheduler without changing config", {
-  ...liveDagu, skip: liveDagu.skip || process.platform !== "linux", timeout: 90_000,
+  ...liveDagu, timeout: 90_000,
 }, async () => {
   const home = mkdtempSync(join(tmpdir(), "a4s-live-readiness-"));
   const port = await freePort();
@@ -38,12 +40,21 @@ test("readiness observes an operator-configured queue and the live scheduler wit
   writeFileSync(path, config);
   writeFileSync(join(home, "dags", "readiness-lane.yaml"), "queue: readiness-lane\nsteps:\n  - run: true\n");
   const modified = statSync(path).mtimeMs;
-  const env = { ...process.env, DAGU_HOME: home, DAGU_URL: `http://127.0.0.1:${port}`, DAGU_COORDINATOR_ENABLED: "true", DAGU_COORDINATOR_PORT: String(coordinatorPort), DAGU_PARAMS_JSON: "{}" };
+  const selection = declareService(home, `http://127.0.0.1:${port}`, process.env.PATH);
+  const declaration = readServiceEnvironment(selection);
+  const env = { ...process.env, ...declaration, ...selection, DAGU_COORDINATOR_ENABLED: "true", DAGU_COORDINATOR_PORT: String(coordinatorPort), DAGU_PARAMS_JSON: "{}" };
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
   service.stdout.on("data", value => { log += value; });
   service.stderr.on("data", value => { log += value; });
   try {
+    await assert.rejects(exec(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "readiness", "--lane", "readiness-lane"], {
+      env: { ...env, A4S_SERVICE_ENV: "" },
+    }), (error: unknown) => {
+      assert.ok(error && typeof error === "object" && "stdout" in error);
+      assert.match(String(error.stdout), /service-environment ready=no field=A4S_SERVICE_ENV/);
+      return true;
+    });
     const deadline = Date.now() + 60_000;
     let output = "";
     for (;;) {
