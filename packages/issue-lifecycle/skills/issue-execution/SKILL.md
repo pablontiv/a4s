@@ -728,7 +728,17 @@ The durable checkpoint remains available to fetch for candidate recovery before
 reenqueuing with a suffixed run ID; merged close removes its matching candidate
 ref with an exact-SHA lease after integration and ownership checks.
 
-Reenqueue a retained candidate with the same ISSUE, BRANCH and OMP_SESSION_ID.
+Reenqueue a retained candidate with the same `ISSUE` and `OMP_SESSION_ID`
+and a suffixed run ID. The branch is derived from `ISSUE` as `dagu/issue-<N>`;
+do not pass `BRANCH`, which admission rejects. Preserve `POC_BASIS` and
+`PR_NUMBER` when applicable. For example, to replace `a4s-issue-808` with
+`a4s-issue-808-v2`, using the same issue and owning session:
+
+```sh
+a4s enqueue --run-id a4s-issue-808-v2 feature -- \
+  ISSUE=808 OMP_SESSION_ID="<same-persistent-owner-session>"
+```
+
 Admission durably records the terminal previous owner in the replacement run's
 `previous-owner` state; `start_gate` validates and transfers the worktree owner
 and run identity while preserving HEAD and files. Repeating `start_gate` reuses
