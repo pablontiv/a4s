@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFil
 import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
-import { initializeStation, promote, rollback, gc } from "../src/station.ts";
-import { selectStationBuild } from "../src/lease.ts";
-import { readStationState, stationRoot, validateState } from "../src/station-state.ts";
-import { inventoryStation, listStationRuns } from "../src/station-inventory.ts";
+import { initializeStation, promote, rollback, gc } from "../../launcher/src/station.ts";
+import { selectStationBuild } from "../../launcher/src/lease.ts";
+import { readStationState, stationRoot, validateState } from "../../launcher/src/station-state.ts";
+import { inventoryStation, listStationRuns } from "../../launcher/src/station-inventory.ts";
 import { stationFixture } from "./fixtures/station.ts";
 
 for (const point of ["before-rename", "after-rename"] as const) {
@@ -50,7 +50,8 @@ test("cutover inventories legacy and current receipts, committed configs, SQL/pa
   const { inventory: _, ...dependencies } = f.dependencies;
   const state = await initializeStation(f.home, current, { ...dependencies, primaries: () => [primary], gitPath: () => directory, configVersion: () => 1 });
   assert.deepEqual(state.formats.receipt, [1, 2]);
-  for (const name of ["roleJobStore", "roleJobPayload", "config", "runState", "prCheckpoint"] as const) assert.deepEqual(state.formats[name], [1]);
+  assert.deepEqual(state.formats.config, [1, 2]);
+  for (const name of ["roleJobStore", "roleJobPayload", "runState", "prCheckpoint"] as const) assert.deepEqual(state.formats[name], [1]);
   assert.equal(JSON.parse(readFileSync(join(run, "receipt.json"), "utf8")).schemaVersion, 1);
 });
 
@@ -105,9 +106,9 @@ test("pending receipts include incident enqueue, expire at seven days; open jobs
 test("tick binding files survive every listed status and API errors, only definitive unknown permits cleanup", async t => {
   const f = stationFixture(t), artifact = await f.release("r1");
   await initializeStation(f.home, artifact, f.dependencies);
-  const directory = join(stationRoot(f.home), "tick-bindings"); mkdirSync(directory);
+  const directory = join(stationRoot(f.home), "ticks"); mkdirSync(directory);
   const path = join(directory, "tick.json");
-  writeFileSync(path, JSON.stringify({ schema: 1, dag: "reconcile", dagRunId: "tick", generation: 0, artifact }));
+  writeFileSync(path, JSON.stringify({ dagRunId: "tick", tuple: artifact, createdAt: new Date().toISOString() }));
   const { inventory: _, ...dependencies } = f.dependencies;
   const base = { ...dependencies, primaries: () => [], listRuns: async () => [{ name: "reconcile", dagRunId: "tick", statusLabel: "succeeded" }] };
   await gc(f.home, { ...base, bindingKnown: async () => { throw new Error("should not query listed binding"); } });

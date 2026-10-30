@@ -55,7 +55,7 @@ test("classification rechecks receipts before writes without blocking independen
   } finally { f.dispose(); }
 });
 
-test("foreign artifacts dispatch through their verified context instead of station implementations", async () => {
+test("foreign artifacts dispatch by primary and run instead of station implementations", async () => {
   const f = classifyFixture([{ RUN: "foreign", PRIMARY: "/primary", ISSUE: "7", REPO: "example/repo" }]);
   const calls: string[][] = [];
   f.dependencies.scope!.locally = async () => ({ local: false });
@@ -64,7 +64,7 @@ test("foreign artifacts dispatch through their verified context instead of stati
   f.dependencies.requestIssues = () => ({ status: 0, stdout: '[{"number":7,"state":"closed"}]' });
   f.dependencies.invoke = async (primary, run, args, options) => {
     assert.equal(primary, "/primary"); assert.equal(run, "foreign");
-    assert.equal(options?.context?.cached.record.version, "0.6.1"); assert.equal(options?.capture, true);
+    assert.equal(options?.capture, true);
     calls.push(args);
     return { status: 0, stderr: "", stdout: args[1] === "inspect" ? JSON.stringify(routed({ RUN: run, PRIMARY: primary, ISSUE: "7" })) : "ORPHAN example/repo#7 foreign implement issue=CLOSED" };
   };

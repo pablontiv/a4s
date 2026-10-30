@@ -2,41 +2,15 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { inspectArtifact, ensureArtifact } from "./artifact-cache.ts";
-import { artifactToken, parseArtifact, resolveRelease } from "./release.ts";
-import { exampleConfig } from "./config.ts";
-import { materializeDag } from "./materialize.ts";
 import { inspectRun, finishRun, executeStep } from "./reconcile-run.ts";
-import { acquireLock, openLock } from "./file-lock.ts";
+import { acquireLock, openLock } from "../../launcher/src/file-lock.ts";
 import { recordNoProgress } from "./ci-no-progress.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { observeRequiredCheckPolicy } from "./required-check-policy.ts";
 import { observeRequiredChecks } from "./required-check-results.ts";
 
-export function requireExactRelease(release: string): void {
-  if (!/^a4s@(?:r(0|[1-9]\d*)|v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.test(release)) throw new Error("Pinned reconciliation requires an exact release a4s@vX.Y.Z, never a moving ref");
-}
-
 export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
-  if (mode === "cache" && args.length === 2 && args[0] === "--release") {
-    requireExactRelease(args[1]!);
-    const release = resolveRelease(args[1]!);
-    const cached = await ensureArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), release);
-    console.log(artifactToken(cached.record));
-    return;
-  }
-  if (mode === "render" && args.length === 2 && args[0] === "--artifact") {
-    const tuple = parseArtifact(args[1]);
-    const cached = await inspectArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), tuple);
-    const dag = materializeDag(cached.directory, "reconcile.yaml", exampleConfig(), {
-      version: tuple.version, source: artifactToken(tuple), executable: cached.executable,
-    }).replace(/^env:\n/gm, `env:\n  - A4S_ARTIFACT: ${JSON.stringify(artifactToken(tuple))}\n`);
-    process.stdout.write(dag);
-    return;
-  }
   if (mode === "classify" && args.length === 1) { await classifyRuns(args[0]!); return; }
   if (mode === "inspect" && args.length === 1) { console.log(JSON.stringify(inspectRun(JSON.parse(args[0]!)))); return; }
   if (mode === "finish" && args.length === 2) { const result = finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); if (result) console.log(result); return; }
@@ -87,5 +61,5 @@ export async function main(argv: string[]): Promise<void> {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile cache --release a4s@r<N>|a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }

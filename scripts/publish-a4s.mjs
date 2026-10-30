@@ -49,8 +49,7 @@ async function digest(path) {
 export async function publishArchives(plan, directory, { gh = defaultGithub, cwd = process.cwd() } = {}) {
   if (!plan.publish) return;
   const assets = [];
-  for (const platform of ["linux-x64", "darwin-arm64"]) {
-    const archive = `a4s-${plan.version}-${platform}.tar.gz`;
+  for (const archive of ["linux-x64", "darwin-arm64"].flatMap(platform => [`a4s-${plan.version}-${platform}.tar.gz`, `a4s-launch-${platform}.tar.gz`])) {
     const path = join(directory, archive);
     const expected = `${await digest(path)}  ${archive}\n`;
     if (readFileSync(`${path}.sha256`, "utf8") !== expected) throw new Error(`Invalid rebuilt checksum ${archive}`);

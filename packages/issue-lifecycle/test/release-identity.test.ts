@@ -4,8 +4,9 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { identity } from "../src/identity.ts";
-import { assertReadCoverage, formatSupport } from "../src/artifact-support.ts";
-import { canonicalJson, registrationHash, registrationManifest } from "../src/registration.ts";
+import { assertReadCoverage, formatSupport } from "../../launcher/src/artifact-support.ts";
+import { canonicalJson, registrationHash } from "../../launcher/src/contracts.ts";
+import { registrationManifest } from "../src/registration.ts";
 import status from "../src/status/index.ts";
 
 const sha = "a".repeat(40);
@@ -60,6 +61,6 @@ test("release workflow consumes only same-repository validated main runs with fu
   const checkout = job.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
   assert.equal(checkout.with["fetch-depth"], 0);
   assert.equal(checkout.with.ref, "${{ github.event.workflow_run.head_sha }}");
-  assert.deepEqual(JSON.parse(workflow.env.A4S_SHIPPED_INPUTS), ["packages/issue-lifecycle/**", "packages/hot-reload/**", "packages/loader/**", "packages/launcher/**", "scripts/build-a4s.mjs", "package.json", "package-lock.json"]);
+  assert.deepEqual(JSON.parse(workflow.env.A4S_SHIPPED_INPUTS), ["packages/issue-lifecycle/**", "packages/hot-reload/**", "packages/loader/**", "packages/launcher/**", "scripts/build-a4s.mjs", "scripts/build-launcher.mjs", "package.json", "package-lock.json"]);
   for (const step of job.steps.filter((step: { run?: string }) => /build:a4s|publish-a4s.mjs publish/.test(step.run ?? ""))) assert.equal(step.if, "steps.publication.outputs.publish == 'true'");
 });

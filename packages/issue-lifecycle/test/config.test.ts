@@ -13,15 +13,15 @@ import {
   parseUses,
   readCommittedConfig,
   serializeConfig,
-} from "../src/config.ts";
+} from "../../launcher/src/config.ts";
 
 test("config schema rejects unknown fields, bad versions and non-integers", () => {
   const valid = exampleConfig({ lane: "a4s" });
   assert.equal(valid.schemaVersion, CONFIG_SCHEMA_VERSION);
   assert.throws(() => parseConfig({ ...valid, bootstrap: "run" }), /unknown field bootstrap/);
   assert.throws(() => parseConfig({ ...valid, escalation: { ...valid.escalation, extra: 1 } }), /config escalation rejected unknown field/);
-  assert.throws(() => parseConfig({ ...valid, schemaVersion: 2 }), /schemaVersion=2 expected 1/);
-  assert.throws(() => parseConfig({ ...valid, schemaVersion: "1" }), /schemaVersion="1" expected 1/);
+  assert.throws(() => parseConfig({ ...valid, schemaVersion: 3 }), /schemaVersion=3 expected 1 or 2/);
+  assert.throws(() => parseConfig({ ...valid, schemaVersion: "1" }), /schemaVersion="1" expected 1 or 2/);
   assert.throws(() => parseConfig({ ...valid, queueConcurrency: 8 }), /unknown field queueConcurrency/);
   assert.throws(() => parseConfig({ ...valid, escalation: { ...valid.escalation, pushbacks: 0 } }), /positive integer/);
   assert.throws(() => parseConfig({ ...valid, blockerReporting: "sometimes" }), /blockerReporting="sometimes"/);
@@ -30,16 +30,23 @@ test("config schema rejects unknown fields, bad versions and non-integers", () =
   assert.deepEqual(parseConfig(JSON.parse(serializeConfig(valid))), valid);
 });
 
-test("uses accepts only qualified moving majors and exact release tags", () => {
-  for (const value of ["a4s@v0", "a4s@v123", "a4s@v0.6.0", "a4s@v10.20.30"]) {
-    assert.equal(parseUses(value), value);
-    assert.equal(parseConfig({ ...exampleConfig(), uses: value }).uses, value);
+test("schema 2 omits uses, schema 1 remains readable without using its release selection", () => {
+  const current = exampleConfig();
+  assert.equal(current.schemaVersion, 2);
+  assert.equal(Object.hasOwn(current, "uses"), false);
+  assert.throws(() => parseConfig({ ...current, uses: "a4s@v0" }), /unknown field uses/);
+  for (const uses of ["a4s@v0", "a4s@v0.7.8", "retired-selection"]) {
+    const legacy = parseConfig({ ...current, schemaVersion: 1, uses });
+    assert.equal(legacy.schemaVersion, 1);
+    assert.equal(legacy.uses, uses);
+    assert.deepEqual(parseConfig(JSON.parse(serializeConfig(legacy))), legacy);
   }
-  for (const value of [undefined, "", "v0", "0.6.0", "a4s@0.6.0", "a4s@main", "a4s@v0.6", "a4s@v01", "a4s@v1.02.3", "a4s@v1.2.3-beta", "a4s@^v1.2.3", "./a4s@v0", "https://example.test/a4s@v0", "a4s@v0 "]) {
-    assert.throws(() => parseConfig({ ...exampleConfig(), uses: value }), /uses.*invalid/);
-  }
-  const { uses: _uses, ...missing } = exampleConfig();
-  assert.throws(() => parseConfig(missing), /missing.*uses/);
+  assert.throws(() => parseConfig({ ...current, schemaVersion: 1 }), /missing uses/);
+});
+
+test("release references accept immutable IDs and qualified historical tags", () => {
+  for (const value of ["a4s@r10", "a4s@v0", "a4s@v123", "a4s@v0.6.0", "a4s@v10.20.30"]) assert.equal(parseUses(value), value);
+  for (const value of [undefined, "", "v0", "a4s@main", "a4s@v01", "a4s@v1.02.3", "a4s@v1.2.3-beta"]) assert.throws(() => parseUses(value), /uses.*invalid/);
 });
 
 test("bootstrap environment becomes the strict config document", () => {

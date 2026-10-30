@@ -36,6 +36,7 @@ workspaces, not public npm publication.
 | Source | Responsibility |
 | --- | --- |
 | [`packages/issue-lifecycle`](packages/issue-lifecycle/) | Dagu issue lifecycle, status, admission/resource guards, seven skills and specialized agents |
+| [`packages/launcher`](packages/launcher/) | Separate stable `a4s-launch` binary, argv-routed exact payload selection, leases/state and operator-installed `a4s tick` DAG |
 | [`packages/review-routing`](packages/review-routing/) | Strict native OMP cross-family model selection |
 | [`packages/hot-reload`](packages/hot-reload/) | Shared reloadable-shim generation/lifecycle helper |
 | [`packages/orca-integration`](packages/orca-integration/) | Bound Orca worker lifecycle and explicit model routes |
@@ -129,7 +130,7 @@ declared once in root `devDependencies` and resolved by workspace scripts.
 The lifecycle's `test/version-pins.test.ts` rejects copied Dagu, Node and shared
 development-tool versions in tracked source; manifests own compatibility ranges,
 and protected historical evidence remains unchanged.
-Root and CI run all eight workspace test suites and seven declared typechecks;
+Root and CI run all nine workspace test suites and eight declared typechecks;
 the optional-host tool-row workspace is test-only because its renderer types
 belong to the consumer's Pion host. See
 [development prerequisites](docs/operations/private-install.md#prerequisites-and-development)

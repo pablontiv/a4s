@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { probeProcess, processMatches, processStart } from "../src/process-identity.ts";
+import { probeProcess, processMatches, processStart } from "../../launcher/src/process-identity.ts";
 import { executorAlive, executorIdentity, RoleJobStore, type JobBinding } from "../src/role-jobs.ts";
 import { stopWorker, workerAlive } from "../src/long-computation.ts";
 

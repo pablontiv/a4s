@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { inspectArtifact } from "../../src/artifact-cache.ts";
+import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
 import { receiptArtifact } from "../../src/artifact-receipt.ts";
 import { main } from "../../src/commands/role-jobs.ts";
 import { dispatchStage } from "../../src/role-dispatch.ts";

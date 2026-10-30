@@ -42,7 +42,7 @@ Bootstrap checks the independent canonical PRIMARY, tools, native role discovery
 and station readiness, then authors consumer config (default `uses: a4s@v0`).
 Its authorized GitHub step may change merge settings and branch protection.
 It neither renders/installs DAGs nor installs an engine or shared reconciler.
-The operator separately provisions the pinned reconciler and station settings.
+The operator separately provisions the stable launcher, tick DAG and station settings.
 a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml` or service units and never
 restarts Dagu. `a4s queue <config>` performs only reads and HTTP GETs.
 
@@ -53,14 +53,15 @@ role-job-store versions are declared by both the executable and `identity.json`.
 requires supported contracts, not a SemVer-distance guess. Status version-distance
 labels remain presentation only, not authorization.
 
-The scheduled reconciler has an independent exact artifact pin. Its read-only
-`reconcile render --artifact '<version>@<commit>#<digest>'` interface verifies
-the cache exactly as admission does and prints that artifact's DAG with absolute
-`A4S_BIN` and tuple binding. `reconcile cache --release a4s@vX.Y.Z` populates a
-missing exact release using the normal verification path. Neither installs DAGs
-or changes station configuration; installation/scheduling are operator actions.
+The operator installs a separate compiled `a4s-launch` as `a4s` on PATH and its
+one-step scheduled DAG (`a4s tick`). Under the state lock the launcher selects
+current for fresh admissions, the parent's tuple for successors, and the target
+receipt for existing-run actions. Tick first-attempt evidence binds its run ID
+durably; retries never repin, even if current changes. Exact missing tuples are
+restored and verified before leasing and exec. Unknown state schemas/protocols
+fail closed without loading current. Installation/scheduling stay operator-owned.
 
-Station-wide listing and scheduling use the pinned binary. Stale recovery,
+Station-wide listing and scheduling use the tick's bound binary. Stale recovery,
 per-run classification/CI observations/no-progress tracking, transition shell
 logic, escalation, integration protection, successors and semantic role jobs
 execute through `a4s run --primary <primary> --run <id> -- <action>`. That boundary

@@ -12,7 +12,7 @@ import { test } from "node:test";
 import { parse, stringify } from "yaml";
 import { Transitions } from "../../src/status/progress.ts";
 import type { RunDetails } from "../../src/status/progress.ts";
-import { readConfigFile } from "../../src/config.ts";
+import { readConfigFile } from "../../../launcher/src/config.ts";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
 import { materializeDag } from "../../src/materialize.ts";
 import { stubHistory, withResourceGuard } from "../resource-fixtures.ts";

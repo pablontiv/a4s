@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { gc, initializeStation, promote } from "../station.ts";
-import { readStationState } from "../station-state.ts";
-import { parseArtifact } from "../release.ts";
+import { gc, initializeStation, promote } from "../../../launcher/src/station.ts";
+import { readStationState } from "../../../launcher/src/station-state.ts";
+import { parseArtifact } from "../../../launcher/src/release.ts";
 
 export async function main(args: string[]): Promise<void> {
   const home = process.env.DAGU_HOME || join(homedir(), ".dagu");

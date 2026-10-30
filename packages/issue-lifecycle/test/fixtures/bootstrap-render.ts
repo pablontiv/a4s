@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { exampleConfig } from "../../src/config.ts";
+import { exampleConfig } from "../../../launcher/src/config.ts";
 import { materializeDag, type LifecycleDag } from "../../src/materialize.ts";
 import { a4sBin } from "./a4s.ts";
 

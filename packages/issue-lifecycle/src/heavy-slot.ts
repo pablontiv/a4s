@@ -3,7 +3,7 @@ import { constants, homedir } from "node:os";
 import { appendFileSync, closeSync, ftruncateSync, readSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { acquireLock, openLock, releaseLock } from "./file-lock.ts";
+import { acquireLock, openLock, releaseLock } from "../../launcher/src/file-lock.ts";
 
 function acquired(gate: boolean): void {
   if (gate && process.env.A4S_GATE_JOURNAL) appendFileSync(process.env.A4S_GATE_JOURNAL,

@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { writeAtomicJson } from "./atomic-json.ts";
-import { withFileLockAsync } from "./file-lock.ts";
+import { withFileLockAsync } from "../../launcher/src/file-lock.ts";
 import { receiptArtifact } from "./artifact-receipt.ts";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 
 interface Finding {
   event: string; kind: string; iteration: number; fingerprint: string; text: string; evidence: string; at: string;

@@ -7,7 +7,7 @@ import test from "node:test";
 import { admissionFixture, compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
 import { makeArchive } from "../fixtures/artifact.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
-import { artifactToken, type ArtifactTuple } from "../../src/release.ts";
+import { artifactToken, type ArtifactTuple } from "../../../launcher/src/release.ts";
 import { runMutationDecision } from "../../src/triage/run-guard.ts";
 import { receiptCompatibility, recordRunObservation } from "../../src/status/receipt.ts";
 import { renderWidget, type RunDetails } from "../../src/status/progress.ts";

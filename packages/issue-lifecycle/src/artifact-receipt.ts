@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 import { identity, type ArtifactIdentity } from "./identity.ts";
-import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "./release.ts";
+import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "../../launcher/src/release.ts";
 import { assertReceiptVersion } from "./receipt-version.ts";
-import { inspectArtifact, type CachedArtifact } from "./artifact-cache.ts";
-import { formatSupport, assertProtocols, SHARED_FORMATS } from "./artifact-support.ts";
+import { type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
+import { restoreArtifact } from "../../launcher/src/select.ts";
+import { formatSupport, assertProtocols } from "../../launcher/src/artifact-support.ts";
+import { SHARED_FORMATS } from "../../launcher/src/contracts.ts";
 
 export interface UsedContracts { dispatch: string; config: number; receipt: number; roleJobStore: number; roleJobPayload?: number; runState?: number; prCheckpoint?: number; protocols: typeof identity.protocols }
 export const USED_CONTRACTS: UsedContracts = { dispatch: identity.dispatch, config: identity.support.config.write, receipt: identity.support.receipt.write, roleJobStore: identity.support.roleJobStore.write, roleJobPayload: identity.support.roleJobPayload.write, runState: identity.support.runState.write, prCheckpoint: identity.support.prCheckpoint.write, protocols: identity.protocols };
@@ -38,7 +40,7 @@ export function assertArtifactReceipt(value: unknown, path: string): asserts val
 export function assertExecutingArtifact(tuple: ArtifactTuple): void {
   if (identity.version !== tuple.version || identity.commit !== tuple.commit) throw new Error(`Handoff identity mismatch: requested ${artifactToken(tuple)}, executable ${identity.version}@${identity.commit}`);
 }
-export async function receiptArtifact(home: string, path: string, inspect = inspectArtifact): Promise<{ receipt: Record<string, unknown> & ArtifactReceiptFields; cached: CachedArtifact }> {
+export async function receiptArtifact(home: string, path: string, inspect = restoreArtifact): Promise<{ receipt: Record<string, unknown> & ArtifactReceiptFields; cached: CachedArtifact }> {
   const receipt: unknown = JSON.parse(readFileSync(path, "utf8"));
   assertArtifactReceipt(receipt, path);
   const cached = await inspect(home, receipt.artifact);

@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Receipt } from "../../src/admission.ts";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
-import type { CachedArtifact } from "../../src/artifact-cache.ts";
+import type { CachedArtifact } from "../../../launcher/src/artifact-cache.ts";
 import { identity } from "../../src/identity.ts";
 import type { ClassifyDependencies } from "../../src/reconcile-classify.ts";
 import type { Routed } from "../../src/reconcile-run.ts";
-import type { ArtifactTuple } from "../../src/release.ts";
+import type { ArtifactTuple } from "../../../launcher/src/release.ts";
 import type { VerifiedRun } from "../../src/run-artifact.ts";
 
 export const tuple: ArtifactTuple = { version: "0.6.1", commit: "a".repeat(40), digest: "b".repeat(64) };

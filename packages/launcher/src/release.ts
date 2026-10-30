@@ -1,8 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { parseUses } from "./config.ts";
-import { packageRoot } from "./executable.ts";
+import { RELEASE_REPOSITORY } from "./contracts.ts";
 import { isRecord } from "./type-guard.ts";
 
 export interface ArtifactTuple { version: string; commit: string; digest: string }
@@ -16,14 +14,7 @@ export function parseArtifact(value: unknown): ArtifactTuple {
 }
 export function artifactToken(tuple: ArtifactTuple): string { return `${tuple.version}@${tuple.commit}#${tuple.digest}`; }
 export function sameArtifact(left: ArtifactTuple, right: ArtifactTuple): boolean { return artifactToken(left) === artifactToken(right); }
-export function releaseRepository(): string {
-  const manifest: unknown = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-  const repository = isRecord(manifest) ? manifest.repository : undefined;
-  const url = typeof repository === "string" ? repository : isRecord(repository) ? repository.url : undefined;
-  const match = typeof url === "string" ? /^(?:git\+)?https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/.exec(url) : undefined;
-  if (!match || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(match[1]!)) throw new Error("a4s release repository must be declared by package.json repository as a GitHub owner/repository");
-  return match[1]!;
-}
+export function releaseRepository(): string { return RELEASE_REPOSITORY; }
 export function nativePlatform(platform = process.platform, arch = process.arch): string {
   const name = `${platform}-${arch}`;
   if (name !== "linux-x64" && name !== "darwin-arm64") throw new Error(`a4s release unavailable for platform ${name}`);

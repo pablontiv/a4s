@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { processStart, probeProcess, type ProcessProbe } from "./process-identity.ts";
+import { leaseProcessStart, probeProcess, type ProcessProbe } from "./process-identity.ts";
 import { readJsonFile, readStateLocked, realDirectory, stationRoot, stationTransaction, tupleFromJson, writeJsonDurable, assertLauncher, type StateDependencies } from "./station-state.ts";
 import type { ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
@@ -32,7 +32,7 @@ export function readLeasesLocked(home: string, dependencies: LeaseDependencies =
   return { live, dead };
 }
 export function createLeaseLocked(home: string, artifact: ArtifactTuple, generation: number, kind: BuildLease["kind"], holder: string): BuildLease {
-  const processStartedAt = processStart(process.pid);
+  const processStartedAt = leaseProcessStart(process.pid);
   if (!processStartedAt) throw new Error("Cannot lease build: process identity unknown");
   const lease: BuildLease = { schema: 1, id: randomUUID(), artifact, host: hostname(), pid: process.pid, processStartedAt, generation, kind, holder };
   const directory = join(stationRoot(home), "leases"); realDirectory(directory);

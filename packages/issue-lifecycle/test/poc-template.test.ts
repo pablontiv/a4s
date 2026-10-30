@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { approvedPocScope, assessPocScope, decidePocScope, inconclusiveCause, pocScopeRejection, PocScopeRejection, recordPocScopeRejection, requirePocScope, type PocScopeInput } from "../src/poc-scope.ts";
-import { exampleConfig, serializeConfig } from "../src/config.ts";
+import { exampleConfig, serializeConfig } from "../../launcher/src/config.ts";
 import { preflightAdmission } from "../src/admission.ts";
 import { parseReview } from "../src/triage/schema.ts";
 

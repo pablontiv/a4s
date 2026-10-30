@@ -3,7 +3,7 @@ import { accessSync, constants, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, join, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import { isRecord } from "./type-guard.ts";
+import { isRecord } from "../../launcher/src/type-guard.ts";
 
 export interface ReadinessReport { ready: boolean; checks: string[] }
 

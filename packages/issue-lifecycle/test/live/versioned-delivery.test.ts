@@ -4,9 +4,9 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { archiveName, artifactToken, type ArtifactTuple } from "../../src/release.ts";
-import { CONFIG_PATH, exampleConfig, serializeConfig } from "../../src/config.ts";
-import { cachePath } from "../../src/artifact-cache.ts";
+import { archiveName, artifactToken, type ArtifactTuple } from "../../../launcher/src/release.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
+import { cachePath } from "../../../launcher/src/artifact-cache.ts";
 import { sha256 } from "../../src/admission.ts";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "../fixtures/artifact.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { LifecycleConfig } from "./config.ts";
+import type { LifecycleConfig } from "../../launcher/src/config.ts";
 
 export const LIFECYCLE_DAGS = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"] as const;
 export type LifecycleDag = (typeof LIFECYCLE_DAGS)[number];

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { parseAllDocuments } from "yaml";
 import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
 import { reconcileEnvironment } from "../role-job-fixtures.ts";
-import { artifactToken } from "../../src/release.ts";
+import { artifactToken } from "../../../launcher/src/release.ts";
 
 const a4sBin = compiledA4sBin();
 

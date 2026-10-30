@@ -1,0 +1,12 @@
+description: Promote, reconcile receipt-bound runs, and collect the a4s cache.
+labels:
+  - a4s-launcher-protocol=1
+schedule: "* * * * *"
+catchup_window: ""
+overlap_policy: skip
+hist_retention_runs: 1440
+type: graph
+shell: bash
+steps:
+  - id: tick
+    run: a4s tick

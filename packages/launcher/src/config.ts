@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { isRecord } from "./type-guard.ts";
 
 /** Independent of the package version. Unknown fields are rejected. */
-export const CONFIG_SCHEMA_VERSION = 1;
+export const CONFIG_SCHEMA_VERSION = 2;
 export const CONFIG_PATH = ".workspace/dagu/config.json";
 
 const LANE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -29,8 +29,8 @@ export interface EscalationBudgets {
 }
 
 export interface LifecycleConfig {
-  schemaVersion: 1;
-  uses: string;
+  schemaVersion: 1 | 2;
+  uses?: string;
   lane: string;
   baseBranch: string;
   gate: string;
@@ -115,13 +115,15 @@ export function parseUses(value: unknown): string {
 export function parseConfig(value: unknown): LifecycleConfig {
   const source = record(value, "config file");
   const schemaVersion = take(source, "schemaVersion", "config file");
-  if (schemaVersion !== CONFIG_SCHEMA_VERSION) {
-    fail(`config schemaVersion=${JSON.stringify(schemaVersion)} expected ${CONFIG_SCHEMA_VERSION}; the config schema is independent of the package version`);
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    fail(`config schemaVersion=${JSON.stringify(schemaVersion)} expected 1 or 2; the config schema is independent of the package version`);
   }
+  // Legacy selection is intentionally ignored: the launcher owns build choice.
+  const legacyUses = schemaVersion === 1 ? text(take(source, "uses", "config file"), "config uses") : undefined;
   const escalationSource = record(take(source, "escalation", "config file"), "config escalation");
   const config: LifecycleConfig = {
-    schemaVersion: CONFIG_SCHEMA_VERSION,
-    uses: parseUses(take(source, "uses", "config file")),
+    schemaVersion,
+    ...(legacyUses === undefined ? {} : { uses: legacyUses }),
     lane: text(take(source, "lane", "config file"), "config lane", LANE),
     baseBranch: text(take(source, "baseBranch", "config file"), "config baseBranch", BRANCH),
     gate: text(take(source, "gate", "config file"), "config gate"),
@@ -152,8 +154,8 @@ export function serializeConfig(config: LifecycleConfig): string {
 
 export function exampleConfig(overrides: Partial<LifecycleConfig> = {}): LifecycleConfig {
   return parseConfig({
-    schemaVersion: CONFIG_SCHEMA_VERSION,
-    uses: overrides.uses ?? "a4s@v0",
+    schemaVersion: overrides.schemaVersion ?? (overrides.uses === undefined ? CONFIG_SCHEMA_VERSION : 1),
+    ...((overrides.schemaVersion === 1 || overrides.uses !== undefined) ? { uses: overrides.uses ?? "a4s@v0" } : {}),
     lane: overrides.lane ?? "fixture",
     baseBranch: overrides.baseBranch ?? "main",
     gate: overrides.gate ?? "true",
@@ -191,7 +193,6 @@ export function configFromEnvironment(env: NodeJS.ProcessEnv): LifecycleConfig {
   };
   return parseConfig({
     schemaVersion: CONFIG_SCHEMA_VERSION,
-    uses: env.USES ?? "a4s@v0",
     lane: required("REPO"),
     baseBranch: required("BASE_BRANCH"),
     gate: required("GATE"),

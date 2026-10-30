@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../src/config.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../../launcher/src/config.ts";
 
 /** Genuine committed consumer policy, without binary builds or PATH fixtures. */
 export function inProcessAdmissionFixture() {

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after } from "node:test";
-import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../src/config.ts";
-import { archiveName, nativePlatform } from "../../src/release.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../../launcher/src/config.ts";
+import { archiveName, nativePlatform } from "../../../launcher/src/release.ts";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "./artifact.ts";
-import { checksumDigest, type ArtifactTuple } from "../../src/release.ts";
+import { checksumDigest, type ArtifactTuple } from "../../../launcher/src/release.ts";
 
 let compiledDirectory: string | undefined;
 let installedDirectory: string | undefined;

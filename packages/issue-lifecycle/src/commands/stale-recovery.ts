@@ -7,9 +7,9 @@ import {
   type RecoveryLedger,
 } from "../stale-recovery.ts";
 import { invokeRun, executingRunArtifact } from "../run-artifact.ts";
-import { primaryFromSpec } from "../primary.ts";
+import { primaryFromSpec } from "../../../launcher/src/primary.ts";
 import { STALE_PROCESS_ERROR } from "../stale-recovery.ts";
-import { withFileLock } from "../file-lock.ts";
+import { withFileLock } from "../../../launcher/src/file-lock.ts";
 
 function stationHome(): string {
   return process.env.DAGU_HOME || join(homedir(), ".dagu");

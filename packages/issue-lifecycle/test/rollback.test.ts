@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { initializeStation, promote, rollback } from "../src/station.ts";
+import { initializeStation, promote, rollback } from "../../launcher/src/station.ts";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("stable rollback works with a broken current, rejects bad ID, and does not bounce back", async t => {
@@ -29,7 +29,7 @@ test("rollback rejects a target reading the highest version but missing a retain
 });
 
 test("rollback remains refused after formats advance, even with zero newer-writer runs", async t => {
-  const f = stationFixture(t), old = await f.release("r1"), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
+  const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, old, f.dependencies);
   await promote(f.home, { ...f.dependencies, releases: async () => [bridge, writer] });
   await promote(f.home, { ...f.dependencies, releases: async () => [writer] });

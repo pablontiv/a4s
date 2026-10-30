@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { withResourceGuard } from "../resource-fixtures.ts";
-import { exampleConfig, serializeConfig } from "../../src/config.ts";
+import { exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
 import { preflightAdmission } from "../../src/admission.ts";
 import { a4sBin } from "../fixtures/a4s.ts";
 

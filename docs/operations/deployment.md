@@ -38,25 +38,25 @@ are recorded below.
 ### Release controller versus candidate
 
 The [artifact contract](../architecture/artifact-contract.md) is normative.
-Only immutable tagged releases supply the engine. Each platform archive contains
-one compiled `a4s`, identity, gate preload files and complete OMP assets. A
-consumer commits `.workspace/dagu/config.json` with required `uses`:
-`a4s@v0` follows a published moving major; `a4s@v0.6.1` pins an exact release
-(example, not an availability claim). Branches, paths, URLs and ranges are rejected.
+Only immutable releases supply the engine. Each payload platform archive contains
+one compiled `a4s`, identity, gate preload files and complete OMP assets; the
+separate launcher archive contains the operator-installed stable selector.
+A consumer commits `.workspace/dagu/config.json` schema 2 without `uses`.
+New builds still read schema 1 but ignore its legacy release selection.
 
-Root admission resolves that selection once, verifies the exact archive's SHA-256
-before extraction and atomically publishes `$DAGU_HOME/cache/a4s/<version>/`.
-The cached executable receives
-`admit --artifact '<version>@<commit>#<digest>'`, checks its embedded identity
-and verified cache metadata, and does not resolve `uses` or hand off again.
+Root admission selects `state.current` under the launcher state lock, restores
+the exact immutable archive if missing, and verifies its SHA-256 and structure.
+The launcher acquires a process lease and execs the cached executable with
+`admit --artifact '<version>@<commit>#<digest>'`. The payload checks its embedded
+identity and verified cache metadata without selecting a different build.
 Snapshots use only their absolute cached `A4S_BIN` for every engine command.
 Candidate worktrees never supply controller code.
 
 Feature → PoC, PoC → feature and discovery → planning retain and verify the
-parent receipt's artifact tuple even when child policy selects a newer release.
-Missing, corrupt or unsupported parent artifacts fail closed. Child policy is
-still independently read from consumer HEAD. Retain cache entries referenced by
-any nonterminal/recoverable run, open role job or pinned station reconciler.
+parent receipt's artifact tuple even if state.current has advanced. Missing
+tuples are restored exactly; corrupt or unsupported parent artifacts fail closed.
+Child policy is independently read from consumer HEAD. Retain cache entries
+referenced by nonterminal/recoverable runs, open role jobs and live tick leases.
 Incomplete reference discovery prevents removal; age alone never authorizes it.
 Cache population is runtime state, not installation or station configuration.
 
@@ -68,8 +68,8 @@ root for the service user so native discovery finds `triage-reviewer` and `task`
 From PRIMARY with that environment, `a4s role-jobs detect` checks discovery
 without launching a role. Changing service environment is an operator action.
 
-For lane work, use the initial installed release executable, actual Dagu home
-and persistent owner; it selects and hands off to the configured cached release:
+For lane work, use the stable launcher on PATH, actual Dagu home and persistent
+owner; it selects current for a new root or the parent's tuple for a successor:
 
 ```sh
 cd "$PRIMARY"
@@ -134,10 +134,10 @@ removed; historical `v0` remains frozen. Published assets are immutable and neve
 deleted by a4s, so exact historical tuples remain restorable.
 
 **Milestone: staged, station not switched.** Publication does not activate the
-stable launcher, plugin link, reconciler pin, admission policy, model or service.
-The archive now includes the separately compiled `a4s-launch` and locked station
-state/promote/rollback/GC primitives. Their installation and tick/loader adoption
-remain operator-owned. a4s never writes station/service configuration; station
+stable launcher, plugin link, tick DAG, admission policy, model or service.
+The separate launcher archive and locked state/promote/rollback/GC primitives
+are available for operator installation; tick/loader adoption remains
+operator-owned. a4s never writes station/service configuration; station
 runtime writes stay inside `$DAGU_HOME/cache/a4s`, alongside already-owned run/job
 state. At the authorized drained cutover, ensure the exact initial artifact then
 run `a4s station init --artifact '<id>@<sha>#<digest>'`. This inventories persisted
@@ -189,16 +189,14 @@ lease and restore probe access, never manually assume the process is dead.
    used to resolve feature admission snapshots. This needs no prior feature run.
    If the check fails, the station operator merges the required leaves while
    preserving unrelated config, then restarts Dagu and retries bootstrap.
-4. **Author and commit consumer policy.** Bootstrap retains its historical
-   `a4s@v0` default; that channel is frozen. An exact `a4s@r<N>` selects a staged
-   build; historical exact `a4s@v<semver>` selections still work. Preserve an
-   existing selection on blank input; adoption remains operator-authorized.
-   Review `.workspace/dagu/config.json`, remove retired `queueConcurrency`, and
-   commit changed policy before feature admission. Reader and config migrate
-   together: old schema-1 readers reject the new `uses` field.
-5. **Pin reconciliation.** Follow [the exact-release procedure below](#pin-the-station-reconciler-and-release-plugin).
-   Bootstrap and `reconcile render` never write `$DAGU_HOME/dags/`. Retain the
-   pinned cache entry until the operator deliberately replaces that pin.
+4. **Author and commit consumer policy.** Bootstrap writes schema 2 without
+   `uses`; station state selects the build. Review `.workspace/dagu/config.json`,
+   remove retired `queueConcurrency` and legacy `uses`, and commit changed policy
+   before feature admission. New readers accept schemas 1 and 2. Once schema 2
+   is committed, the coverage gate refuses rollback to schema-1-only readers.
+5. **Install stable selection and tick.** Follow [the launcher procedure below](#install-the-stable-launcher-tick-dag-and-release-plugin).
+   Bootstrap and a4s never write `$DAGU_HOME/dags/`. The operator installs the
+   one-step `a4s tick` DAG, with no exact payload pin.
 6. **Remove obsolete deployment bindings.** Once no references remain, remove
    old installed source checkouts, executor launchers/plugin links and checkout
    entries in the service PATH. Preserve unrelated operator files and development
@@ -238,56 +236,52 @@ supported/used contract versions, and enqueues exact immutable snapshot bytes.
 A later release needs no consumer commit when moving-major policy stays the same;
 already admitted runs and their successors stay on their original artifact.
 
-### Pin the station reconciler and release plugin
+### Install the stable launcher, tick DAG and release plugin
 
-These steps are the separately authorized operator cutover (#714), **not** a4s
-side effects. Use the drained station policy above, its canonical `DAGU_HOME`,
-the selected platform's verified extracted release root, and an exact published
-`VERSION` (for example `r462`, or `0.7.8` for a historical release).
-Never use `v0`, a checkout path or PATH as the scheduled executable selection.
-
-The minimum dispatchable release is v0.7.0, which ships #713. Its capability is
-identified by `a4s version` declaring `support.dispatch: "a4s-run/1"` (not by
-a SemVer comparison). v0.6.0 predates that boundary and cannot dispatch runs after this
-cutover. Confirm zero nonterminal pre-#713 runs and zero open role jobs before
-installing either consumer. Historical receipts remain read-only; a missing
-dispatch declaration is reported as unsupported, never repaired or substituted.
+These are separately authorized operator actions, never engine side effects.
+Use the canonical `DAGU_HOME`, reviewed platform launcher archive/checksum and
+trusted initial payload tuple from its immutable release. Follow the drained
+station policy above for initial/model-changing cutover; ordinary compatible
+payload promotion does not reinstall the launcher or repin a DAG.
 
 ```sh
 export DAGU_HOME="<canonical-station-home>"
+LAUNCHER_ROOT="<verified-extracted-a4s-launch-platform-archive>"
+TUPLE="<version>@<commit>#<archive-sha256>"
 RELEASE_ROOT="<absolute-verified-extracted-release-root>"
-VERSION="<exact-published-rN>"
 
-# Cache only: verifies the tagged platform archive and embedded identity.
-ARTIFACT="$("$RELEASE_ROOT/a4s" reconcile cache --release "a4s@$VERSION")"
-"$DAGU_HOME/cache/a4s/$VERSION/a4s" version
+# Install once on the service user's PATH, with a4s selecting this launcher.
+install -m 0755 "$LAUNCHER_ROOT/a4s-launch" "$HOME/.local/bin/a4s-launch"
+ln -s a4s-launch "$HOME/.local/bin/a4s"
+a4s-launch launcher-version
+# Runtime cache/state only: restore and verify this exact release, seed inventory.
+a4s station init --artifact "$TUPLE"
+a4s state
 
-# Read-only rendering: output goes to an operator-owned staging file.
-STAGED="$(mktemp)"
-"$RELEASE_ROOT/a4s" reconcile render --artifact "$ARTIFACT" > "$STAGED"
-dagu validate "$STAGED"
-# Review both A4S_BIN/A4S_ARTIFACT bindings and the minute schedule.
-# Only the operator installs the reviewed bytes:
-install -m 0644 "$STAGED" "$DAGU_HOME/dags/reconcile.yaml"
-rm "$STAGED"
-
-# Link the entire verified release, not packages/issue-lifecycle in PRIMARY.
+# Review/validate the single `a4s tick` step and minute schedule before installing.
+dagu validate "$LAUNCHER_ROOT/reconcile.yaml"
+install -m 0644 "$LAUNCHER_ROOT/reconcile.yaml" "$DAGU_HOME/dags/reconcile.yaml"
 omp plugin link "$RELEASE_ROOT"
 ```
 
-Historical SemVer releases use `VERSION="X.Y.Z"` and `--release "a4s@v$VERSION"`;
-build-ID releases use `VERSION="r<N>"` and `--release "a4s@$VERSION"`.
+Preserve/resolve existing operator-owned binaries, links and DAGs before those
+commands; plain `ln` intentionally refuses an existing destination. Obtain
+`a4s-launch-<platform>.tar.gz` and its SHA-256 from the selected immutable
+release, verify the checksum before extraction, and record protocol/state-schema
+output. Launcher changes require operator reinstall. Payloads requiring a newer
+protocol fail closed with `reinstall a4s-launch`; promotion skips them.
 
-Before installing, preserve/resolve an existing operator DAG under station
-policy. `reconcile cache` writes only the artifact cache, refuses nonexact refs,
-and never repairs a conflicting final entry. `render` requires the verified
-entry, rechecks retained archive, all extracted payloads and embedded identity,
-and prints YAML only; it does not create `$DAGU_HOME/dags/`. The emitted schedule
-is once per minute with overlap skipped. The operator confirms the existing
-scheduler is enabled, or activates it under the drained service policy; a4s
-does not activate/restart the service. An initial manual `dagu start` of the
-installed file plus scheduled history demonstrates activation separately from
-successful rendering.
+The service PATH must resolve `a4s` to this stable executable. There is no
+scheduled release pin. Tick binds the confirmed first attempt's `DAG_RUN_ID`
+under the state lock, then promotes, reconciles each run through its own receipt
+artifact, and runs GC. A retry without a binding fails closed; a fresh tick needs
+readable native Dagu 2.24 attempt evidence. A tick running A remains A after
+promoting B; the next new tick runs B. Keep binding files while Dagu can replay
+their IDs even if GC removes their build directories: exact replay restores the
+immutable tuple or reports that it is unavailable, never substitutes current.
+Retain both scheduled-history and explicit retry evidence. a4s never installs
+these DAG bytes or changes Dagu configuration, capacity, service units or service
+activation; the operator owns those operations.
 
 For the service user's persistent OMP installation, replace the existing
 `@a4s/issue-lifecycle` registration rather than registering a second copy. The
@@ -306,9 +300,9 @@ receipt-bound cache for mutations.
 
 Admission can reopen only after read-only readiness, manual/scheduled tick
 history and plugin-load evidence agree with the selected station tuple.
-Retain cache entries for all referenced runs/open role jobs and the reconciler.
-A mixed-version station is supported when declared receipt/protocol/store
-contracts agree: the reconciler's pin is never substituted for a run's tuple.
+Retain cache entries for referenced runs/open jobs and live leases. The tick's
+binding is never substituted for another run's tuple. Compatible mixed-version
+stations remain supported through declared receipt/protocol/store contracts.
 An unavailable/unsupported run logs
 `reconcile-failure run=<id> status=1 cause=<diagnostic>`, is left untouched, and
 does not prevent compatible runs from proceeding. Restore its exact verified
@@ -347,11 +341,11 @@ repair or reload station configuration. Operator-led service changes must
 preserve active/waiting runs and follow that station's safe activation policy.
 
 History retention is operator policy in `$DAGU_HOME/base.yaml`; the retained
-source example uses `hist_retention_days: 30`. The release's reconcile root
-declares `hist_retention_runs: 1440`, about one day at one tick per minute.
-The operator installs its pinned snapshot; bootstrap does not. The first tick
-applies that count while retaining active/non-final roots. Retain durable
-acceptance evidence outside both cleanup windows. Record first-tick duration,
+source example uses `hist_retention_days: 30`. The launcher tick DAG declares
+`hist_retention_runs: 1440`, about one day at one tick per minute.
+The operator installs that DAG; bootstrap does not. Bindings remain durable
+while native Dagu can replay their run, independently of cache GC. Retain durable
+acceptance evidence outside cleanup windows. Record first-tick duration,
 skipped ticks and history bytes when accepting the operator's new reconciler.
 
 ## Active runs and recovery

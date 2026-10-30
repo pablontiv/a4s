@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { processMatches, processStart } from "./process-identity.ts";
+import { processMatches, processStart } from "../../launcher/src/process-identity.ts";
 
 export type Role = "triage" | "implement" | "conflict-resolution";
 export interface JobBinding {
