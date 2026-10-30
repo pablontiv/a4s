@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { processMatches, processStart } from "../src/process-identity.ts";
+import { probeProcess, processMatches, processStart } from "../src/process-identity.ts";
 import { executorAlive, executorIdentity, RoleJobStore, type JobBinding } from "../src/role-jobs.ts";
 import { stopWorker, workerAlive } from "../src/long-computation.ts";
 
@@ -25,6 +25,10 @@ function fixture(t: TestContext) {
   const reused = new Set<number>();
   const probes: Array<{ command: string; locale: string | undefined }> = [];
   let discoverable = true;
+  t.mock.method(process, "kill", (pid: number) => {
+    if (dead.has(pid)) throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+    return true;
+  });
   const saved = { ...process.env };
   const probe = t.mock.method(childProcess, "execFileSync", (command: string, args: string[], options: ExecFileSyncOptions) => {
     const locale = options.env?.LC_ALL || options.env?.LC_TIME || options.env?.LANG;
@@ -143,7 +147,13 @@ test("legacy locale discovery failure preserves ownership instead of interruptin
 test("worker liveness and stop use the same fixed and legacy identity comparison", t => {
   const f = fixture(t);
   const signals: Array<{ pid: number; signal: NodeJS.Signals | number | undefined }> = [];
-  t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => { signals.push({ pid, signal }); return true; });
+  t.mock.method(process, "kill", (pid: number, signal?: NodeJS.Signals | number) => {
+    if (signal === 0) {
+      if (f.dead.has(pid)) throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+      return true;
+    }
+    signals.push({ pid, signal }); return true;
+  });
   operatorLocale();
   for (const recorded of [processStart(process.pid)!, starts["es_MX.UTF-8"]!]) {
     const worker = { schemaVersion: 1, pid: 4321, processStartedAt: recorded };
@@ -171,4 +181,23 @@ test("missing processes cannot record identities and foreign-host ownership stay
   f.probes.length = 0;
   assert.equal(executorAlive({ host: `${hostname()}-foreign`, pid: process.pid, processStartedAt: starts.C! }), true);
   assert.deepEqual(f.probes, []);
+});
+
+test("ps failure is unknown, never evidence that an existing process is dead", t => {
+  fixture(t);
+  t.mock.method(childProcess, "execFileSync", () => { throw new Error("ps permission denied"); });
+  syncBuiltinESMExports();
+  assert.equal(probeProcess(process.pid, `ps-c:${starts.C}`), "unknown");
+  assert.throws(() => processMatches(process.pid, `ps-c:${starts.C}`), /unknown.*ps permission denied/);
+  t.mock.method(process, "kill", () => { throw Object.assign(new Error("not permitted"), { code: "EPERM" }); });
+  assert.equal(probeProcess(process.pid, `ps-c:${starts.C}`), "unknown");
+});
+
+test("tri-state probe distinguishes alive, missing and PID reuse", t => {
+  const f = fixture(t), pid = 4321, start = `ps-c:${starts.C}`;
+  assert.equal(probeProcess(pid, start), "alive");
+  f.reused.add(pid);
+  assert.equal(probeProcess(pid, start), "dead-or-reused");
+  f.reused.delete(pid); f.dead.add(pid);
+  assert.equal(probeProcess(pid, start), "dead-or-reused");
 });

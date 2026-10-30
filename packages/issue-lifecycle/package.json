@@ -21,7 +21,8 @@
     "./triage": "./src/triage/native.ts"
   },
   "bin": {
-    "a4s": "./src/cli.ts"
+    "a4s": "./src/cli.ts",
+    "a4s-launch": "./src/launcher.ts"
   },
   "omp": {
     "extensions": [

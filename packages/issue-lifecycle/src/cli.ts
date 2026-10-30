@@ -4,10 +4,10 @@ import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|observe|escalation|stale-recovery|prioritize|reconcile|run|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|observe|escalation|stale-recovery|prioritize|reconcile|station|run|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
-// package's filesystem closure at import time. `version` must remain an embedded
-// identity query without opening SQLite, role runtimes or release asset files.
+// package's filesystem closure and station imports SQLite at import time.
+// Static command imports would make `version` depend on those runtime assets.
 
 export async function main(argv: string[]): Promise<void> {
   const [command, ...args] = argv;
@@ -42,6 +42,7 @@ export async function main(argv: string[]): Promise<void> {
     case "stale-recovery": return (await import("./commands/stale-recovery.ts")).main(args);
     case "prioritize": return (await import("./commands/prioritize.ts")).main(args);
     case "reconcile": return (await import("./reconcile.ts")).main(args);
+    case "station": return (await import("./commands/station.ts")).main(args);
     case "heavy-slot": return (await import("./heavy-slot.ts")).main(args);
     case "planning":
       if (args[0] !== "validate-planning-units" && args[0] !== "planning-reviewer-identity") {

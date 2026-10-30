@@ -113,7 +113,7 @@ async function archiveFiles(archive: string, directory: string, extract: boolean
           }
         });
       } finally { if (fd !== undefined) closeSync(fd); }
-      if (extract) chmodSync(path, name === "a4s" ? 0o755 : 0o644);
+      if (extract) chmodSync(path, name === "a4s" || name === "a4s-launch" ? 0o755 : 0o644);
       const digest = expected?.digest("hex");
       if (!extract && await fileDigest(path) !== digest) throw new Error(`Modified artifact payload ${name}`);
       if (name === "a4s") executableDigest = digest!;

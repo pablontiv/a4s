@@ -242,13 +242,55 @@ metadata to bless changed contents is forbidden. Abandoned staging directories
 are never cache entries. The engine MUST NOT silently repair/re-seal a bad final
 entry or fall back to an installed checkout.
 
-Entries MUST be retained while referenced by any nonterminal run, including
-queued, waiting or recoverable runs, and while an associated role job is open.
-The pinned station reconciler also requires its entry to remain present.
-Retention and publication MUST be coordinated with admission so that an entry
-cannot disappear between selection and recording a run reference. Incomplete
-reference discovery MUST prevent pruning. Removing an otherwise unreferenced
-entry is operator-owned; cache population is runtime state, not service setup.
+`state.json` is the one authoritative station selector, inside this cache root
+only. Schema 1 is `{schema:1, generation, current, previous, rejected:[], formats}`,
+where both selections are complete immutable tuples and each of the six format
+keys maps to a nonempty set of persisted positive versions. Initial `previous`
+equals `current`. There are no selector symlinks. The launcher, plugin loader,
+promotion, rollback, admission handoff and GC share `.state.lock`; selection and
+lease publication occur in the same transaction. State replacement writes a
+unique temporary regular file, fsyncs it, renames it to `state.json`, then fsyncs
+the containing directory. **Rename is the only commit point**: interruption
+before it leaves old state, after it leaves new state. A downloaded, verified but
+unselected directory is inert. Neither state nor leases write station/service
+configuration, DAG definitions or historical receipts.
+
+The separately compiled `a4s-launch` embeds launcher protocol 1 and readable state
+schemas `[1]`; payload `identity.json.requiredLauncherProtocol` is mandatory.
+Unknown state schemas and unsupported payload protocols fail closed with
+`reinstall a4s-launch`. Installing/replacing that stable binary is an operator
+action, not promotion. `a4s station init --artifact <tuple>` performs the one-time,
+inventory-seeded cutover; `state`, `promote` and `gc` expose the locked operations.
+The later tick/loader adoption wires these primitives into station execution.
+
+`promote` lists immutable release IDs above current and above every rejected ID,
+walks them descending, and commits the highest that downloads, structurally
+verifies and passes the compatibility and installed-launcher gates. This is not a
+functional health test. A skipped newest release does not hide an eligible bridge;
+launcher skew reports `launcher reinstall required`. Commit sets
+`previous=old current`, `current=candidate`, and increments generation. Lower IDs
+arriving late cannot move selection backward. A precommit failure changes no
+state; an error after rename never falls through to another candidate.
+
+GC holds the same global lock and keeps current, previous, the ten highest build
+IDs, all process leases, all nonterminal/retryable/waiting tick bindings, every
+nonterminal run in **every DAG of every registered primary**, and every open role
+job resolved through its repository/run receipt. All Dagu history pages are
+required; repeated cursors, unknown status, unreadable sources or an unresolved
+job abort before any deletion. A receipt not yet listed by Dagu is a pending
+admission, even when enqueue recorded an incident/ambiguous outcome; its build is
+kept for seven days after receipt creation (legacy `initial.admittedAt`). Thereafter
+the exact tuple remains restorable. Tick binding files remain for every listed
+status and are deleted only after a definitive unknown response, never an API
+error. Run identity remains in receipts/bindings even after build pruning.
+
+Leases record build, PID, host, process start identity, generation and holder.
+Loaded **and retiring** plugin generations keep their leases until OMP exits.
+Process probes are `alive`, `dead-or-reused`, or `unknown`: only definite absence
+or a different start identity frees a lease. `ps` failure, permission failure,
+foreign-host identity or ambiguous output is unknown and aborts GC, not “dead”.
+Reports name retained builds and holders. Keep-ten is a cache policy, **not a disk
+bound** while processes/runs hold builds (about 116 MB each).
 
 ## One-time resolution and engine handoff
 
@@ -415,8 +457,14 @@ jobs, loaded and retiring plugin generations, and the post-promotion previous
 Dropping persisted read support requires a migration (out of scope).
 A format change therefore requires a bridge build reading old+new while writing
 old, then a build writing new. Completed jobs/history are not silently migrated.
-Promotion, leases and activation-state machinery belong to the later adoption
-units; U1 only stages payloads and declares their contracts.
+The persisted set is an inventory, not just a maximum: reading the newest version
+does not excuse missing a retained lower decoder. Failed promotions and rollbacks
+leave it unchanged; successful activation unions in every declared writer. A
+retired pre-bridge plugin remains a live reader until OMP exits, so idle reload
+cannot unblock a new-format writer. The blocking report names its lease holder
+PID and generation and the remedy **restart OMP**. After bridge N is active and
+old readers have drained, writer N+1 can activate even if displaced previous is
+pre-N: no third bridge is required.
 
 Current admissions write receipt `schemaVersion: 2` in
 `packages/issue-lifecycle/src/admission.ts`. Observation readers accept versions 1
@@ -574,8 +622,16 @@ be treated as proof of complete history or permission to create a binding.
   validation, migrate the shared store or add a legacy alias.
 - **Station not ready:** report the missing readiness/configuration prerequisite.
   The operator fixes it; a4s MUST NOT repair station configuration or restart it.
-- **Bad published release:** supersede it with a new exact version and advance
-  `v0` only for future root admissions. Existing runs MUST retain the original
-  tuple, or be explicitly terminated by their authorized owner before replacement
-  runs are admitted. Tags, assets, checksums, receipts and cached artifacts MUST
-  NOT be rewritten to disguise an in-place upgrade.
+- **Bad published release:** the stable launcher owns `a4s-launch rollback`, so
+  recovery does not start the broken current payload. It selects previous only
+  when that target reads every persisted format version plus its own writer,
+  appends the bad current ID to `rejected`, and increments generation atomically.
+  The target remains previous too; rollback cannot bounce into the rejected build.
+  It may be refused even after every newer writer's run finishes, because
+  persisted history does not disappear. Future promotion requires an ID greater
+  than every rejected ID; publish a revert merge with a new ID rather than moving
+  tags or rewriting assets/checksums/receipts. Existing runs retain their tuples.
+- **Unknown process identity, unreadable inventory or launcher skew:** preserve
+  state, leases, bindings and builds. Restore read access/API availability or
+  reinstall a compatible stable launcher under operator authority. Do not delete
+  leases on `ps` failure or replace persisted-format sets with observed maxima.

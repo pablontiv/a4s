@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Verify triage role results against `DAG_PUSHBACK_ITERATION` (default `0`), matching the dispatcher after dependency, conflict or escalation rewinds without relying on `dagu status` text; retain stale-iteration rejection and cover rewound/default bindings (#803).
+- Add locked, atomic station state, inventory-seeded persisted-format sets, highest-compatible promotion, stable-launcher rollback/rejections, process-identity leases and fail-closed cache collection. Retiring plugin readers identify the OMP restart barrier; ambiguous process probes never free ownership (#793).
 - Stage immutable `r<N>` build identities from full-history first-parent counts after same-SHA CI validation; retire tag-triggered/`v0` publication and manual skill SemVer-bump/rebase automation. Preserve exact historical SemVer parsing and artifact restoration, declare uniform format support, canonical host-registration metadata and required launcher protocol without switching station configuration (#792).
 - Compare the selected plugin registration's validated version and commit with the loaded extension generation, including older releases and same-version relinks. Unknown identities do not trigger restart warnings; the warning names the verified native OMP restart remedy and explains why `/reload-plugins` cannot switch package bindings (#745).
 

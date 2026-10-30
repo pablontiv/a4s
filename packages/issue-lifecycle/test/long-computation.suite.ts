@@ -34,9 +34,13 @@ const phrases = [
 function workerFixture(t: TestContext, directory: string) {
   const worker = { alive: true, onProbe: undefined as (() => void) | undefined };
   const started = "Thu Oct 29 05:49:57 2026";
+  t.mock.method(process, "kill", () => {
+    worker.onProbe?.();
+    if (!worker.alive) throw Object.assign(new Error("No such process"), { code: "ESRCH" });
+    return true;
+  });
   const probe = t.mock.method(childProcess, "execFileSync", (command: string) => {
     assert.equal(command, "ps");
-    worker.onProbe?.();
     if (!worker.alive) throw new Error("No such process");
     return `${started}\n`;
   });
