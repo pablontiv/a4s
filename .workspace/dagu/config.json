@@ -1,6 +1,5 @@
 {
-  "schemaVersion": 1,
-  "uses": "a4s@v0",
+  "schemaVersion": 2,
   "lane": "a4s",
   "baseBranch": "main",
   "gate": "npm test && npm run typecheck",
