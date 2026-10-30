@@ -538,14 +538,16 @@ export default function daguStatus(pi: ExtensionAPI, scope?: GenerationScope): v
     queues.set(session, queue);
     // A failed candidate must not consume transition deduplication while dropping
     // its UI notification. Queue both message kinds in switch-owned plain state.
-    // Define, never assign: the host may expose `ui` as a getter-only property.
-    const observerContext: Context = Object.create(ctx, { ui: { value: Object.assign(Object.create(ctx.ui), {
-      notify(message: string, type: "info" | "warning" | "error") {
-        if (activeController.signal.aborted) return;
-        queue.alerts.push({ message, type });
-        pump();
-      },
-    }), enumerable: true, writable: true, configurable: true } });
+    // Define, never assign: hosts expose `ui` (and its members) as readonly properties.
+    const notify = (message: string, type: "info" | "warning" | "error") => {
+      if (activeController.signal.aborted) return;
+      queue.alerts.push({ message, type });
+      pump();
+    };
+    const observerContext: Context = Object.create(ctx, { ui: {
+      value: Object.create(ctx.ui, { notify: { value: notify, enumerable: true, writable: true, configurable: true } }),
+      enumerable: true, writable: true, configurable: true,
+    } });
     void observe(observerContext, activeController.signal, message => {
       if (activeController.signal.aborted || activeContext !== ctx
         || ctx.sessionManager.getSessionId() !== session) return;

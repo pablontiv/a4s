@@ -222,22 +222,23 @@ test("event indices stay stable as generations add and remove handlers", async (
   assert.equal(host.handlers.get("tool_call")?.length, 3);
 });
 
-test("handlers receive the host context when its ui is a getter-only accessor", async () => {
-  const host = new FakeHost();
+test("handlers receive host contexts whose ui is non-writable or getter-only", async () => {
   const notices: string[] = [];
-  class GetterContext implements FakeContext {
-    isIdle() { return true; }
-    get ui() { return { notify: (message: string) => { notices.push(message); } }; }
+  const ui = { notify: (message: string) => { notices.push(message); } };
+  // OMP subagent contexts define `ui` as a non-writable value on an Object.create() wrapper.
+  const readonlyValue = Object.defineProperty(Object.create({ isIdle: () => true }), "ui", { value: ui });
+  const getterOnly = Object.defineProperty({ isIdle: () => true }, "ui", { get: () => ui });
+  for (const ctx of [readonlyValue, getterOnly] as FakeContext[]) {
+    const host = new FakeHost();
+    await hotReload(host, pi => {
+      pi.on("tool_call", (_event: Event, handlerContext: FakeContext) => {
+        handlerContext.ui.notify("allowed", "warning");
+        return handlerContext.isIdle();
+      });
+    }, implementation, { importModule: async () => ({ default: () => {} }) });
+    assert.deepEqual(await host.emit("tool_call", {}, ctx), [true]);
   }
-  const ctx = new GetterContext();
-  await hotReload(host, pi => {
-    pi.on("tool_call", (_event: Event, handlerContext: FakeContext) => {
-      handlerContext.ui.notify("allowed", "warning");
-      return handlerContext.isIdle();
-    });
-  }, implementation, { importModule: async () => ({ default: () => {} }) });
-  assert.deepEqual(await host.emit("tool_call", {}, ctx), [true]);
-  assert.deepEqual(notices, ["allowed"]);
+  assert.deepEqual(notices, ["allowed", "allowed"]);
 });
 
 test("factories inherit the real API and can register late within the active generation", async () => {
