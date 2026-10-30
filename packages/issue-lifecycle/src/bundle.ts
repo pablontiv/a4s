@@ -14,7 +14,8 @@ export type LifecycleProtocols = Record<LifecycleCheckpoint, string>;
 const manifest = readPackageManifest();
 
 export const BUNDLE_NAME = manifest.name;
-export const BUNDLE_VERSION = manifest.version;
+declare const A4S_BUILD_VERSION: string;
+export const BUNDLE_VERSION = typeof A4S_BUILD_VERSION === "undefined" ? manifest.version : A4S_BUILD_VERSION;
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const CHECKPOINTS = Object.keys(LIFECYCLE_PROTOCOLS) as LifecycleCheckpoint[];
@@ -24,6 +25,9 @@ export function parseVersion(version: string): readonly [number, number, number]
   if (!match) return undefined;
   return [Number(match[1]), Number(match[2]), Number(match[3])];
 }
+export function isReleaseVersion(version: string): boolean {
+  return /^r(0|[1-9]\d*)$/.test(version) || parseVersion(version) !== undefined;
+}
 
 /** Notice-only version distance for observation. Never authorizes execution. */
 export function classifyCompatibility(
@@ -31,6 +35,10 @@ export function classifyCompatibility(
   extensionVersion = BUNDLE_VERSION,
 ): Compatibility {
   if (bundleVersion === undefined || bundleVersion === "") return "unstamped";
+  if (/^r(0|[1-9]\d*)$/.test(bundleVersion) || /^r(0|[1-9]\d*)$/.test(extensionVersion)) {
+    if (!isReleaseVersion(bundleVersion) || !isReleaseVersion(extensionVersion)) return "incompatible";
+    return bundleVersion === extensionVersion ? "ok" : "stale";
+  }
   const bundle = parseVersion(bundleVersion);
   const extension = parseVersion(extensionVersion);
   if (!bundle || !extension || bundle[0] !== extension[0]) return "incompatible";

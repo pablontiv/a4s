@@ -7,7 +7,7 @@ import { isRecord } from "./type-guard.ts";
 
 export interface ArtifactTuple { version: string; commit: string; digest: string }
 export interface ResolvedRelease extends ArtifactTuple { repository: string; archive: string }
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const VERSION = /^(?:r(0|[1-9]\d*)|(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/;
 export function parseArtifact(value: unknown): ArtifactTuple {
   if (typeof value !== "string") throw new Error("Artifact requires <version>@<commit>#<digest>");
   const match = /^([^@]+)@([a-f0-9]{40})#([a-f0-9]{64})$/.exec(value);
@@ -29,7 +29,11 @@ export function nativePlatform(platform = process.platform, arch = process.arch)
   if (name !== "linux-x64" && name !== "darwin-arm64") throw new Error(`a4s release unavailable for platform ${name}`);
   return name;
 }
-export function archiveName(version: string, platform = nativePlatform()): string { return `a4s-v${version}-${platform}.tar.gz`; }
+export function releaseTag(version: string): string {
+  if (!VERSION.test(version)) throw new Error(`Invalid artifact ID ${JSON.stringify(version)}`);
+  return version.startsWith("r") ? `a4s-${version}` : `v${version}`;
+}
+export function archiveName(version: string, platform = nativePlatform()): string { return `a4s-${version.startsWith("r") ? version : `v${version}`}-${platform}.tar.gz`; }
 export type Github = (args: string[]) => string;
 export const github: Github = args => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 function api(gh: Github, path: string): unknown { return JSON.parse(gh(["api", path])); }
@@ -59,7 +63,7 @@ export function resolveRelease(uses: string, options: { gh?: Github; repository?
   const gh = options.gh ?? github;
   const repository = options.repository ?? releaseRepository();
   const platform = options.platform ?? nativePlatform();
-  let tag = ref;
+  let tag = ref.startsWith("r") ? `a4s-${ref}` : ref;
   let commit: string;
   if (/^v\d+$/.test(ref)) {
     commit = tagCommit(repository, ref, gh);
@@ -73,7 +77,7 @@ export function resolveRelease(uses: string, options: { gh?: Github; repository?
     exactRelease(api(gh, `repos/${repository}/releases/tags/${tag}`), tag);
     commit = tagCommit(repository, tag, gh);
   }
-  const version = tag.slice(1);
+  const version = tag.startsWith("a4s-") ? tag.slice(4) : tag.slice(1);
   const archive = archiveName(version, platform);
   const digest = checksumDigest(gh(["release", "download", tag, "--repo", repository, "--pattern", `${archive}.sha256`, "--output", "-"]), archive);
   return { version, commit, digest, repository, archive };

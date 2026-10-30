@@ -236,6 +236,13 @@ test("bundle compatibility remains visible in targeted notices", () => {
   assert.ok(new Transitions("session-a").observe(candidate).wakeMessage?.includes("compat=incompatible"));
 });
 
+test("build IDs remain visible and distance is only a stale notice", () => {
+  for (const version of ["r0", "r792", "r9007199254740993"]) {
+    assert.equal(runBundleState({ ...run, labels: [`dagu-feature-bundle=${version}`] }).compat, "stale");
+    assert.match(new Transitions("session-a").observe({ ...waitingAt("feature", "implement"), labels: [`dagu-feature-bundle=${version}`] }).wakeMessage!, new RegExp(version));
+  }
+});
+
 test("notices distinguish release pending from restart pending and refresh the installed plugin link", () => {
   const primary = mkdtempSync(join(tmpdir(), "omp-dagu-main-"));
   const manifest = join(primary, "packages/issue-lifecycle/package.json");

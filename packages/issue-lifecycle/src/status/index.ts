@@ -13,6 +13,7 @@ import { readCiDiagnostic, readEscalationDiagnostic, readStallNotices, resolveRe
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
+import { SESSION_ID_TOOL, WORKFLOWS_COMMAND } from "../registration.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const exec = promisify(execFile);
@@ -430,9 +431,9 @@ export default function daguStatus(pi: ExtensionAPI): void {
     hide: view => { view.hidden = true; },
   };
   pi.registerCommand(TOGGLE_COMMAND, {
-    description: "Toggle the Workflows widget fold, or pass expand / collapse / show / hide",
+    description: WORKFLOWS_COMMAND.description,
     getArgumentCompletions(prefix) {
-      const items = Object.keys(modes).filter(mode => mode && mode.startsWith(prefix.trim().toLowerCase()))
+      const items = WORKFLOWS_COMMAND.completions.filter(mode => mode.startsWith(prefix.trim().toLowerCase()))
         .map(mode => ({ label: mode, value: mode }));
       return items.length ? items : null;
     },
@@ -466,11 +467,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
     }
   };
   pi.registerTool({
-    name: "dagu_session_id",
-    label: "Dagu session ID",
-    description: "Return the persistent OMP session ID to pass as OMP_SESSION_ID when enqueueing a Dagu run.",
-    loadMode: "essential",
-    parameters: { type: "object", properties: {}, additionalProperties: false },
+    ...SESSION_ID_TOOL,
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       if (ctx.agent.kind !== "main") {
         throw new Error(`dagu_session_id rejected: agent.kind=${ctx.agent.kind}`);

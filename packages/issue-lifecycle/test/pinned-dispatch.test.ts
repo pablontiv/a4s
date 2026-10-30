@@ -91,7 +91,7 @@ test("tick scope shares artifact evidence but rereads every receipt and expires 
     assert.equal(first.cached, second.cached); assert.equal(inspections, 1); assert.equal(scope.artifactVerifications, 1);
     const changed = JSON.parse(readFileSync(secondPath, "utf8")); changed.contracts.roleJobStore = 999;
     writeFileSync(secondPath, JSON.stringify(changed));
-    await assert.rejects(scope.verify(primary, "second"), /Unsupported receipt.*job-store/);
+    await assert.rejects(scope.verify(primary, "second"), /Unsupported receipt roleJobStore contract: /);
     assert.equal(inspections, 1); assert.equal((await scope.verify(primary, "first")).cached, first.cached);
     modified = true;
     await assert.rejects(new RunArtifactScope(inspect).verify(primary, "first"), /Modified artifact payload/);

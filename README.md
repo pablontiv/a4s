@@ -90,6 +90,15 @@ spawn only direct `git`/`tar`, not CLIs, shells, Dagu, GitHub or compiled builds
 The guard names the offending test file. Default suites need neither the
 station heavy slot nor forced serial test-file execution.
 
+Release builds use `r<N>` (the validated source SHA's full-history first-parent
+commit count), not manual package/lockfile version bumps. After CI `validate`
+succeeds for that exact pushed `main` SHA, the release workflow publishes changed
+shipped inputs as immutable `a4s-r<N>` releases; it creates tags itself and rejects
+ID/SHA or rerun-digest conflicts. The old tag-push/`v0` publisher is removed and
+the historical channel is frozen. Historical SemVer tuples remain readable and
+restorable. This is staged delivery only: the station is not switched and a4s
+never writes station/service configuration.
+
 Native CLI, YAML, OS-lock, compiled-artifact and timing scenarios are opt-in:
 
 ```sh

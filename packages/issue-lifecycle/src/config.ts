@@ -9,7 +9,7 @@ export const CONFIG_PATH = ".workspace/dagu/config.json";
 
 const LANE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
-const USES = /^a4s@v(0|[1-9]\d*)(?:\.(0|[1-9]\d*)\.(0|[1-9]\d*))?$/;
+const USES = /^a4s@(?:r(?:0|[1-9]\d*)|v(0|[1-9]\d*)(?:\.(0|[1-9]\d*)\.(0|[1-9]\d*))?)$/;
 const BLOCKER = ["ask", "auto"] as const;
 const SCANNING = ["required", "off"] as const;
 const SECURITY = ["none", "critical", "high_or_higher", "medium_or_higher", "all"] as const;
@@ -109,7 +109,7 @@ function choice<T extends string>(value: unknown, label: string, allowed: readon
 }
 
 export function parseUses(value: unknown): string {
-  return text(value, "config uses (expected a4s@v<major> or a4s@v<major>.<minor>.<patch>)", USES);
+  return text(value, "config uses (expected a4s@r<N>, a4s@v<major> or a4s@v<major>.<minor>.<patch>)", USES);
 }
 
 export function parseConfig(value: unknown): LifecycleConfig {

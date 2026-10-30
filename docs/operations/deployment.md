@@ -125,12 +125,31 @@ Source delivery is not station activation. Operator authority must identify the
 target PRIMARY/lane, release version/commit/archive digest, Dagu home/endpoint,
 plugin links, queue configuration, reconciler and repository settings.
 
+Publication now stages `a4s-r<N>` automatically after CI's `validate` succeeds for
+the same pushed `main` SHA, using a full-history checkout and first-parent commit
+count. Only changed shipped inputs publish. Operators do not bump package/lockfile
+versions or push release tags; the workflow owns tags, ancestry/ID conflicts and
+same-SHA digest checks. The old `v<semver>` trigger and moving-`v0` publisher are
+removed; historical `v0` remains frozen. Published assets are immutable and never
+deleted by a4s, so exact historical tuples remain restorable.
+
+**Milestone: staged, station not switched.** No launcher, plugin link, reconciler
+pin, admission policy, model or service is activated by publication. a4s never
+writes station/service configuration; its runtime writes stay in the cache
+directory and already-owned run/job state. Later launcher adoption must reject
+unknown state schemas or unsupported payload protocols with “reinstall
+a4s-launch”. Compatibility promotion/rollback inventories persisted writer
+versions and every live reader; a retiring pre-bridge plugin generation blocks a
+new writer until that OMP process exits. The remedy is **restart OMP**, not an
+idle `/reload-plugins`; reports must name the lease holder PID/generation.
+
 1. **Close admission and drain.** Inventory all runs, including queued, waiting
    and recoverable runs, and role jobs. Cutover requires **zero nonterminal runs
    and zero open role jobs**. Never rewrite legacy receipts/snapshots or silently
    substitute a new engine for them. Resolve uncertain references before cutover.
 2. **Install an initial release.** Obtain the exact platform
-   `a4s-v<version>-<os>-<arch>.tar.gz` and matching `.sha256` from the tagged
+   `a4s-r<N>-<os>-<arch>.tar.gz` (or the original historical
+   `a4s-v<semver>-<os>-<arch>.tar.gz`) and matching `.sha256` from its immutable
    GitHub release, verify SHA-256 before extraction, then install the extracted
    root at an operator-owned stable location. Put that release's `a4s` on PATH
    for initial admission and load/link its whole root as the OMP plugin. Do not
@@ -148,8 +167,10 @@ plugin links, queue configuration, reconciler and repository settings.
    used to resolve feature admission snapshots. This needs no prior feature run.
    If the check fails, the station operator merges the required leaves while
    preserving unrelated config, then restarts Dagu and retries bootstrap.
-4. **Author and commit consumer policy.** Bootstrap defaults `uses` to `a4s@v0`,
-   preserves an existing selection on blank input, and accepts an exact release.
+4. **Author and commit consumer policy.** Bootstrap retains its historical
+   `a4s@v0` default; that channel is frozen. An exact `a4s@r<N>` selects a staged
+   build; historical exact `a4s@v<semver>` selections still work. Preserve an
+   existing selection on blank input; adoption remains operator-authorized.
    Review `.workspace/dagu/config.json`, remove retired `queueConcurrency`, and
    commit changed policy before feature admission. Reader and config migrate
    together: old schema-1 readers reject the new `uses` field.

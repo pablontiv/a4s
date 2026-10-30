@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
+import { gitBuildIdentity } from "./release-identity.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const source = join(root, "packages", "issue-lifecycle");
@@ -13,20 +14,22 @@ const manifest = JSON.parse(await readFile(join(source, "package.json"), "utf8")
 const supported = new Map([["bun-linux-x64", "linux-x64"], ["bun-darwin-arm64", "darwin-arm64"]]);
 const targets = [];
 let outdir = join(root, "dist");
-let version = manifest.version;
+let testVersion;
 let testCommit;
 for (let index = 2; index < process.argv.length; index++) {
   const flag = process.argv[index];
   if (flag === "--target" && process.argv[index + 1]) targets.push(process.argv[++index]);
   else if (flag === "--outdir" && process.argv[index + 1]) outdir = resolve(process.argv[++index]);
-  else if (flag === "--test-version" && process.env.A4S_LIVE_DAGU === "1" && process.argv[index + 1]) version = process.argv[++index];
+  else if (flag === "--test-version" && process.env.A4S_LIVE_DAGU === "1" && process.argv[index + 1]) testVersion = process.argv[++index];
   else if (flag === "--test-commit" && process.env.A4S_LIVE_DAGU === "1" && process.argv[index + 1]) testCommit = process.argv[++index];
   else throw new Error("Usage: node scripts/build-a4s.mjs [--target bun-linux-x64|bun-darwin-arm64] [--outdir <directory>]");
 }
 if (!targets.length) targets.push(...supported.keys());
 for (const target of targets) if (!supported.has(target)) throw new Error(`Unsupported a4s target: ${target}`);
-if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("Invalid a4s build version");
-const commit = testCommit ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+const build = gitBuildIdentity(root);
+const version = testVersion ?? build.version;
+if (!/^(?:r(0|[1-9]\d*)|(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.test(version)) throw new Error("Invalid a4s build ID");
+const commit = testCommit ?? build.commit;
 if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error("The release build requires a full Git commit SHA");
 const bun = join(root, "node_modules", ".bin", "bun");
 const identity = JSON.parse(execFileSync(process.execPath, ["--import", "tsx", join(source, "src", "cli.ts"), "version"], { cwd: root, encoding: "utf8" }));
@@ -74,7 +77,7 @@ for (const target of new Set(targets)) {
       }
     }
     await modes(stage);
-    const archive = `a4s-v${version}-${supported.get(target)}.tar.gz`;
+    const archive = `a4s-${version.startsWith("r") ? version : `v${version}`}-${supported.get(target)}.tar.gz`;
     const archivePath = join(outdir, archive);
     const tar = spawn("tar", ["--sort=name", "--mtime=@0", "--owner=0", "--group=0", "--numeric-owner", "--format=ustar", "-cf", "-", ...(await readdir(stage)).sort()], {
       cwd: stage, env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, stdio: ["ignore", "pipe", "inherit"],
