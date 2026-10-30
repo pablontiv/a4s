@@ -40,6 +40,25 @@ for (const [name, definition] of definitions) {
     assert.match(extractStep(source, "await_merge"), /rewind_to: rebase/);
     assert.match(extractStep(source, "await_ci"), /rewind_to: implement/);
   });
+  test(`${name} signalled gates require positive completion before publication`, () => {
+    const source = readFileSync(definition, "utf8");
+    const gate = extractStep(source, "gate");
+    assert.match(gate, /gate_status=1/);
+    for (const [signal, status] of [["TERM", 143], ["INT", 130], ["HUP", 129]]) {
+      assert.ok(gate.includes(`trap 'gate_status=${status}; exit "$gate_status"' ${signal}`));
+    }
+    assert.ok(gate.indexOf("gate_status=0") > gate.indexOf("gate end post_checks 0"));
+    const recovery = extractStep(source, "recover_gate");
+    const pattern = /expected: "re:([^"]+)"/.exec(recovery)![1]!;
+    for (const code of ["", "1", "143", "-1", "unknown", "00"]) assert.match(code, new RegExp(pattern));
+    assert.doesNotMatch("0", new RegExp(pattern));
+    const push = extractStep(source, "push");
+    const publication = push.indexOf('push "--force-with-lease=$remote_ref:$expected"');
+    for (const proof of ['.result == "PASS"', 'test -s "$STATE/tested-sha"', 'equal tested_sha "$sha" "$(cat "$STATE/tested-sha")"']) {
+      assert.ok(push.includes(proof), proof);
+      assert.ok(push.indexOf(proof) < publication, proof);
+    }
+  });
   test(`${name} scope rejects rewind only correctable decisions and guard admission`, () => {
     const source = readFileSync(definition, "utf8");
     assert.match(extractStep(source, "poc_scope_resolve"), /exit_code: \[23\]/);

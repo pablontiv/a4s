@@ -7,6 +7,23 @@ import type { CiDiagnostic } from "./progress.ts";
 
 const exec = promisify(execFile);
 
+async function git(cwd: string, args: string[], signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted();
+  // Node 22/24 can turn aborting a failed spawn with no pid into kill(0).
+  // Own cancellation so a missing cwd never signals the caller's process group.
+  const pending = exec("git", args, { cwd, timeout: 5000 });
+  const abort = (): void => {
+    if (pending.child.pid !== undefined && pending.child.pid > 0) pending.child.kill();
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  try {
+    return (await pending).stdout.trim();
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
 export function repositoryName(remote: string, commonDir: string): string {
   const path = remote.trim().replace(/[?#].*$/, "").replace(/\/+$/, "");
   const last = path.split(/[/:]/).at(-1)?.replace(/\.git$/, "");
@@ -14,12 +31,10 @@ export function repositoryName(remote: string, commonDir: string): string {
 }
 
 export async function resolveRepository(cwd: string, signal: AbortSignal): Promise<string | undefined> {
-  const git = async (args: string[]): Promise<string> =>
-    (await exec("git", args, { cwd, signal, timeout: 5000 })).stdout.trim();
   try {
-    const commonDir = await git(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const commonDir = await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"], signal);
     let remote = "";
-    try { remote = await git(["remote", "get-url", "origin"]); } catch { /* Local repository. */ }
+    try { remote = await git(cwd, ["remote", "get-url", "origin"], signal); } catch { /* Local repository. */ }
     return repositoryName(remote, commonDir);
   } catch {
     return undefined;
@@ -30,10 +45,9 @@ export async function resolveRepository(cwd: string, signal: AbortSignal): Promi
 export async function readCiDiagnostic(primary: string | undefined, run: string, returned: boolean, signal: AbortSignal): Promise<CiDiagnostic | undefined> {
   if (!primary || !/^[A-Za-z0-9_-]+$/.test(run)) return undefined;
   try {
-    const { stdout } = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path",
-      `dagu-feature/runs/${run}/${returned ? "ci-return" : "ci-observation"}.json`],
-    { cwd: primary, signal, timeout: 5000 });
-    const value: unknown = JSON.parse(await readFile(stdout.trim(), "utf8"));
+    const file = await git(primary, ["rev-parse", "--path-format=absolute", "--git-path",
+      `dagu-feature/runs/${run}/${returned ? "ci-return" : "ci-observation"}.json`], signal);
+    const value: unknown = JSON.parse(await readFile(file, "utf8"));
     if (!value || typeof value !== "object") return undefined;
     const data = value as Record<string, unknown>;
     if (data.run !== run || !Number.isSafeInteger(data.iteration)
@@ -53,9 +67,7 @@ export async function readCiDiagnostic(primary: string | undefined, run: string,
 export async function readStallNotices(primary: string | undefined, run: string, signal: AbortSignal): Promise<StallNotice[]> {
   if (!primary || !run || run.length > 200 || /[\s\0/\\]/.test(run)) return [];
   try {
-    const { stdout } = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { cwd: primary, signal, timeout: 5000 });
-    const root = stdout.trim();
+    const root = await git(primary, ["rev-parse", "--path-format=absolute", "--git-common-dir"], signal);
     const notices: StallNotice[] = [];
     for (const relative of [`dagu-feature/runs/${run}/stall-notices.jsonl`, `poc/runs/${run}/stall-notices.jsonl`]) {
       try {
@@ -79,9 +91,8 @@ export async function readStallNotices(primary: string | undefined, run: string,
 export async function readEscalationDiagnostic(primary: string | undefined, run: string, signal: AbortSignal): Promise<string | undefined> {
   if (!primary || !/^[A-Za-z0-9_-]+$/.test(run)) return undefined;
   try {
-    const { stdout } = await exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-      { cwd: primary, signal, timeout: 5000 });
-    const value = JSON.parse(await readFile(`${stdout.trim()}/dagu-feature/runs/${run}/escalation.json`, "utf8"));
+    const root = await git(primary, ["rev-parse", "--path-format=absolute", "--git-common-dir"], signal);
+    const value = JSON.parse(await readFile(`${root}/dagu-feature/runs/${run}/escalation.json`, "utf8"));
     if (value?.schemaVersion !== 1 || value.run !== run || !value.trigger
       || typeof value.trigger.id !== "string" || !Array.isArray(value.trigger.reasons)
       || !value.trigger.reasons.every((reason: unknown) => typeof reason === "string")

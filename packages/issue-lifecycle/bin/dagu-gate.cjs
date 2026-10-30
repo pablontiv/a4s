@@ -124,7 +124,7 @@ if (require.main !== module && journal && npmCli) {
   } else if (command === 'end') {
     end(value, Number(process.argv[4]));
   } else if (command === 'finish') {
-    const code = Number(value);
+    const code = /^\d+$/.test(value ?? '') ? Number(value) : 1;
     const state = path.dirname(path.dirname(journal));
     const file = path.join(state, 'gate.json');
     const evidence = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -136,13 +136,16 @@ if (require.main !== module && journal && npmCli) {
       const event = JSON.parse(line);
       records.set(event.id, { ...records.get(event.id), ...event });
     }
-    const all = [...records.values()].map(record => ({ ...record, endedAt: record.endedAt ?? endedAt, exitCode: record.exitCode ?? code }));
+    const all = [...records.values()].map(record => ({
+      ...record, endedAt: record.endedAt ?? endedAt,
+      exitCode: Number.isFinite(record.endedAt) && Number.isInteger(record.exitCode) ? record.exitCode : code || 1,
+    }));
     // Aggregate npm lifecycle shells and the complete GATE contain their leaf
     // workspace phases. Keep leaves; account for dispatcher time as overhead.
     const leaves = all.filter(record => !['command', 'tests', 'typecheck'].includes(record.name) || !all.some(other =>
       other.id !== record.id && ['install', 'tests', 'typecheck'].includes(other.name) &&
       other.startedAt > record.startedAt && other.endedAt < record.endedAt));
-    const commandRecord = records.get('command');
+    const commandRecord = all.find(record => record.id === 'command');
     if (commandRecord?.exitCode && !leaves.some(record => record.exitCode !== 0)) {
       leaves.push({ id: 'command_failure', name: 'command', startedAt: commandRecord.endedAt, endedAt: commandRecord.endedAt, exitCode: commandRecord.exitCode });
     }
@@ -155,11 +158,15 @@ if (require.main !== module && journal && npmCli) {
       cursor = Math.max(cursor, record.endedAt);
     }
     if (endedAt > cursor) phases.push({ name: 'overhead', startedAt: cursor, endedAt, exitCode: 0, durationMs: endedAt - cursor });
-    Object.assign(attempt, { endedAt, exitCode: code, result: code === 0 ? 'PASS' : 'FAIL', durationMs: endedAt - attempt.startedAt, phases });
+    const completed = name => Number.isFinite(records.get(name)?.endedAt) && records.get(name)?.exitCode === 0;
+    const passed = code === 0 && completed('command') && completed('post_checks') && leaves.every(record => record.exitCode === 0);
+    const exitCode = passed ? 0 : code || leaves.find(record => record.exitCode !== 0)?.exitCode || 1;
+    Object.assign(attempt, { endedAt, exitCode, result: passed ? 'PASS' : 'FAIL', durationMs: endedAt - attempt.startedAt, phases });
     evidence.result = attempt.result;
     const temporary = file + '.' + id;
     fs.writeFileSync(temporary, JSON.stringify(evidence) + '\n');
     fs.renameSync(temporary, file);
+    process.exitCode = exitCode;
   } else {
     throw new Error('Expected path, begin, start, end or finish');
   }

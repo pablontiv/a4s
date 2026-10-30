@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { Dispatcher, Generation, switchGeneration, type Factory, type Host, type ReloadContext } from "@a4s/hot-reload";
@@ -6,14 +9,16 @@ import status from "../../issue-lifecycle/src/status/index.ts";
 
 type Queue = { messages: string[]; claimed: boolean; alerts: { message: string; type: "info" | "warning" | "error" }[] };
 for (const outcome of ["success", "reject", "timeout"] as const) {
-  test(`production status hands messages, UI notifications and deduplication state through ${outcome}`, async () => {
+  test(`production status hands messages, UI notifications and deduplication state through ${outcome}`, async t => {
+    const cwd = await mkdtemp(join(tmpdir(), "a4s-status-handoff-"));
+    t.after(() => rm(cwd, { recursive: true, force: true }));
     const messages: string[] = [], alerts: string[] = [];
     const host: Host & { sendMessage(message: { content: string }): void } = {
       on() {}, registerCommand() {}, registerTool() {},
       sendMessage(message) { messages.push(message.content); },
     };
     const ctx = {
-      cwd: "/nonexistent-a4s-queue-fixture", hasUI: false, isIdle: () => false, agent: { kind: "main" },
+      cwd, hasUI: false, isIdle: () => false, agent: { kind: "main" },
       sessionManager: { getSessionId: () => "owner" },
       ui: { notify(message: string) { alerts.push(message); }, setWidget() {} },
     } as ReloadContext;

@@ -685,6 +685,13 @@ inspects the recorded owner and process before recovering that lock.
 `recover_start_gate`, `recover_gate` and `recover_push`. Healthy commands skip
 their checkpoint.
 
+A gate passes only after its command, every recorded leaf phase and post-checks
+have completed with exit code zero. TERM/INT/HUP are failures, including a native
+step with an empty exit code; `recover_gate` handles every value other than `0`.
+Before publishing, `push` independently requires `gate.json` result `PASS` bound
+to the candidate SHA and gate command, plus `tested-sha` matching that candidate.
+An interrupted or incomplete gate cannot authorize publication.
+
 When `recover_gate` waits, the wait handler automatically reads the run-wide
 push-back iteration (default `0` when absent) and pushes it back through
 `implement_budget` to the native `implement` role in the existing worktree.
