@@ -213,6 +213,123 @@ execution/results; missing owners become `interrupted`, retaining evidence.
 Retry the same native step after inspecting effects; its new `startedAt`
 identifies a new attempt.
 
+## Role runtime on the station omp binary — D16
+
+The [retained PASS for #789][d16-pass] establishes the headless entrypoint for
+[UR / #791](https://github.com/pablontiv/a4s/issues/791). This section records the
+verified mechanism and its limits; #791 owns the runtime, packaging and operator
+documentation cutover. It does not change the package-root runtime described
+above or authorize station/service changes.
+
+The final [runner][d16-runner] is an **awaited async extension factory**. While
+the host loader awaits that factory, it loads the assignment, resolves routing,
+awaits `runSubprocess` with caller-supplied strict structured output and persisted
+artifacts, and retains the success/error exit status. After the factory returns
+and the loader restores its `process.exit` guard, the owning **main** session's
+`session_start` handler exits immediately with that status, before a hosting
+model turn. Child-session extension rebinds neither repeat the work nor exit.
+Calling `process.exit` inside the guarded factory fails; putting the native work
+inside `session_start` encounters that handler's 30-second timeout. Neither the
+import-only probe nor the earlier timed-handler runner is the final proof.
+
+The exact runtime host-module imports are:
+
+```text
+@oh-my-pi/pi-coding-agent/task/discovery
+@oh-my-pi/pi-coding-agent/task/executor
+@oh-my-pi/pi-coding-agent/task/settings
+@oh-my-pi/pi-coding-agent/config/settings
+@oh-my-pi/pi-coding-agent/config/model-resolver
+```
+
+These modules come from the compiled omp host, not an installed source tree or a
+second bundled runtime. The canonical
+`packages/issue-lifecycle/agents/triage-reviewer.md` definition and its schema
+were loaded **from the file**, not chosen from discovery. Its retained SHA-256 is
+`5f3b2358e156e382ba10bfdc12e6b80f564f9c205ccd491e1d4841d7f666d210`;
+its `@slow` role resolved to `anthropic/claude-fable-5-1`. The shared bundled
+`task` agent remained discoverable. A plugin agent with the same triage name was
+only a discovery probe, not the selected definition. D16 pins the triage file to
+the executing release; it does not require a service-user registry link for it.
+
+Both compiled candidates ran with `env -i`, isolated HOME/config/data directories,
+Bun absent from PATH and no runtime-root override. The final exercised omp argv
+was:
+
+```sh
+omp -p --no-session --model poc-unroutable/hosting-model \
+  --no-extensions -e "$SCRATCH/plugin" -e "$EVIDENCE/runner.ts" "$JOB"
+```
+
+Here `$SCRATCH/plugin` is the explicit-plugin probe, not a production dependency;
+`$JOB` is the candidate's scratch assignment/binding directory. The deliberately
+unreachable hosting route and event guards exposed any hosting provider request.
+On both versions, **`--no-extensions` suppresses ambient discovery, not explicit
+`-e`**: the runner and explicitly loaded plugin still executed and the latter
+still supplied an agent; a plugin configured only through ambient discovery
+disappeared. These flag observations do not require discovering the pinned
+triage definition.
+
+The [binary metadata][d16-binaries], per-case launcher receipts and each job's
+`detect.json` bind the invoked path, actual executable **realpath**, `omp --version`
+and binary **SHA-256**, rather than a source executor digest:
+
+| Candidate | Executable identity | Version | Binary SHA-256 |
+| --- | --- | --- | --- |
+| tern | `~/.local/share/tern/omp/bin/omp` → `~/.local/share/tern/omp/versions/18.14.0` | `omp/18.14.0` | `e7dd2b606c4ebe9d1a7bcfad1b8820db968cd6b05409fed1c6bc8db0b6a95a8f` |
+| system profile | `<system-profile>/bin/omp` → exact immutable-store realpath retained in metadata | `omp/18.13.3` | `42d39fa8996fed9f999e26306e60e2fdbea0c0de0d0b2d68feba275f44c41d04` |
+
+All six completed observations retained valid strict output, assignment-bound
+JSONL transcripts and matching successful `yield` results with final assistant
+provenance `anthropic/claude-fable-5-1`. Each completed job made one native provider
+request and **zero hosting-session provider-request or agent-start events**.
+The final factory-based pair additionally held the factory open for 31 seconds
+after native completion: total omp lifetimes were 49.765 s and 47.582 s, both exit
+0 without a hosting turn. This exercises waiting beyond the handler's 30-second
+limit, not unlimited duration or compatibility with every omp version.
+
+### Retained final artifacts and cancellation
+
+`$EVIDENCE` denotes
+`<git-dir>/poc/runs/poc-a4s-issue-789/computations/role-runner/`.
+The local artifact links below resolve from the canonical primary checkout;
+in a worktree, substitute `git rev-parse --path-format=absolute --git-common-dir`
+for that checkout's `.git`. These untracked runtime artifacts are not published
+in the source tree; the [PASS comment][d16-pass] is the public evidence index.
+[observations.json][d16-observations] records the six completed jobs, artifact
+hashes, routing, strict-yield equivalence, flag matrix and cancellations.
+
+| Final candidate | Completed native artifacts | Host receipt | Cancellation receipt |
+| --- | --- | --- | --- |
+| tern | [native-result.json][d16-tern-result], [825c7312…jsonl transcript][d16-tern-transcript], [job directory][d16-tern-job] | [tern-factory-live.receipt.json][d16-tern-live] | [tern-factory-cancel.cancellation.json][d16-tern-cancel] |
+| system profile | [native-result.json][d16-system-result], [181c2cd2…jsonl transcript][d16-system-transcript], [job directory][d16-system-job] | [system-factory-live.receipt.json][d16-system-live] | [system-factory-cancel.cancellation.json][d16-system-cancel] |
+
+Each final job directory also retains `assignment.json`, `binding.json`,
+`routing.json`, `detect.json` and `host-events.jsonl`. The final cancellation
+receipts record SIGTERM sent **only to the harness parent**, which explicitly
+forwards SIGTERM to its omp child. Both parent and child disappeared from `ps`;
+the child normalized SIGTERM to **exit status 143**, not an OS-signal result,
+in 37 ms (tern) and 105 ms (system), without SIGKILL escalation. The accompanying
+`<case>.launcher-events.jsonl` and `<case>.ps-{before,after}.txt` retain forwarding
+and process evidence. D16 must preserve this explicit parent-to-omp forwarding
+and status-143 mapping; arbitrary parent death does not automatically kill the
+child. The native role here executes in-process inside that omp child.
+
+[d16-pass]: https://github.com/pablontiv/a4s/issues/789#issuecomment-6515111305
+[d16-runner]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/runner.ts
+[d16-binaries]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/binary-metadata.json
+[d16-observations]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/observations.json
+[d16-tern-result]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/tern-factory-job/native-result.json
+[d16-tern-transcript]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/tern-factory-job/825c7312a9a748eb9a40b9f2ff2c702a9fe5d8860ee62fd5f2dd1b967f8cd780.jsonl
+[d16-tern-job]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/tern-factory-job/
+[d16-tern-live]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/tern-factory-live.receipt.json
+[d16-tern-cancel]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/tern-factory-cancel.cancellation.json
+[d16-system-result]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/system-factory-job/native-result.json
+[d16-system-transcript]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/system-factory-job/181c2cd26cd6eb3eba8f2790488309c1591dc6180229e355b931c1ef246726e6.jsonl
+[d16-system-job]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/system-factory-job/
+[d16-system-live]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/system-factory-live.receipt.json
+[d16-system-cancel]: ../../.git/poc/runs/poc-a4s-issue-789/computations/role-runner/system-factory-cancel.cancellation.json
+
 ## Observation, notifications and boundaries
 
 The status extension resolves the repository from origin (including worktrees),
