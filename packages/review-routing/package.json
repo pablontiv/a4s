@@ -26,7 +26,7 @@
     ]
   },
   "scripts": {
-    "test": "bun --preload ../../scripts/test-no-spawn.mjs test test/*.test.ts",
+    "test": "bun test --preload ../../scripts/test-no-spawn.mjs test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

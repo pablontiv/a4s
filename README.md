@@ -37,6 +37,7 @@ workspaces, not public npm publication.
 | --- | --- |
 | [`packages/issue-lifecycle`](packages/issue-lifecycle/) | Dagu issue lifecycle, status, admission/resource guards, seven skills and specialized agents |
 | [`packages/launcher`](packages/launcher/) | Separate stable `a4s-launch` binary, argv-routed exact payload selection, leases/state and operator-installed `a4s tick` DAG |
+| [`packages/loader`](packages/loader/) | Operator-linked stable OMP loader, combined transactional status/triage switch, registration/resource gate and process-lifetime artifact leases |
 | [`packages/review-routing`](packages/review-routing/) | Strict native OMP cross-family model selection |
 | [`packages/hot-reload`](packages/hot-reload/) | Shared reloadable-shim generation/lifecycle helper |
 | [`packages/orca-integration`](packages/orca-integration/) | Bound Orca worker lifecycle and explicit model routes |

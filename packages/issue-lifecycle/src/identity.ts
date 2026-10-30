@@ -26,6 +26,7 @@ export const identity = {
   registrationManifest,
   registrationManifestHash: registrationHash(registrationManifest),
   requiredLauncherProtocol: 1,
+  requiredLoaderProtocol: 1,
 } as const;
 export type ArtifactIdentity = Omit<typeof identity, "layout" | "support" | "requiredLauncherProtocol"> & {
   layout?: typeof identity.layout;

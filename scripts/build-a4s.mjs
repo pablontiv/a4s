@@ -45,6 +45,7 @@ for (const target of new Set(targets)) {
     execFileSync(bun, ["build", "--compile", "--compile-autoload-package-json", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
       `--target=${target}`, `--define=A4S_COMPILED=true`, `--define=A4S_RELEASE_EXTENSION=false`,
       `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
+      `--define=A4S_REGISTRATION_MANIFEST=${JSON.stringify(identity.registrationManifest)}`,
       join(source, "src", "cli.ts"), "--outfile", output], { cwd: root, stdio: "inherit" });
     await chmod(output, 0o755);
     const releaseManifest = { name: manifest.name, version, repository: manifest.repository, private: true, type: "module", exports: manifest.exports, omp: manifest.omp };
@@ -65,6 +66,7 @@ for (const target of new Set(targets)) {
       await mkdir(dirname(destination), { recursive: true });
       execFileSync(bun, ["build", "--target=node", "--format=esm", "--define=A4S_COMPILED=false", "--define=A4S_RELEASE_EXTENSION=true",
         `--define=A4S_BUILD_VERSION=${JSON.stringify(version)}`, `--define=A4S_BUILD_COMMIT=${JSON.stringify(commit)}`,
+        `--define=A4S_REGISTRATION_MANIFEST=${JSON.stringify(identity.registrationManifest)}`,
         join(source, "src", entry), "--outfile", destination], { cwd: root, stdio: "inherit" });
     }
     // The runner belongs to this release; OMP's task/config modules remain external

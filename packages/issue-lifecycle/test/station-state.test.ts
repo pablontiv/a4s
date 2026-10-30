@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -18,6 +18,7 @@ for (const point of ["before-rename", "after-rename"] as const) {
     const state = await readStationState(f.home, f.dependencies);
     assert.equal(state.current.version, expected.version);
     assert.equal(state.generation, point === "before-rename" ? 0 : 1);
+    assert.equal(readlinkSync(join(stationRoot(f.home), "current")), expected.version);
     for (const kind of ["launcher", "plugin"] as const) assert.equal((await selectStationBuild(f.home, kind, "atomic reader", f.dependencies)).artifact.version, expected.version);
     const report = await gc(f.home, f.dependencies);
     assert.ok(report.retained.some(entry => entry.version === expected.version && entry.holders.includes("current")));
@@ -26,6 +27,25 @@ for (const point of ["before-rename", "after-rename"] as const) {
     assert.ok(!readdirSync(stationRoot(f.home)).some(name => name.endsWith(".tmp")));
   });
 }
+
+test("native resource discovery is a repairable state-derived cache pointer, not an execution selector", async t => {
+  const f = stationFixture(t), current = await f.release("r1"), next = await f.release("r2");
+  await initializeStation(f.home, current, f.dependencies);
+  const pointer = join(stationRoot(f.home), "current");
+  rmSync(pointer);
+  symlinkSync("r999", pointer);
+  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assert.equal(readlinkSync(pointer), "r1");
+  await promote(f.home, { ...f.dependencies, releases: async () => [next] });
+  assert.equal(readlinkSync(pointer), "r2");
+  const loader = join(stationRoot(f.home), "loader");
+  mkdirSync(loader);
+  writeFileSync(join(loader, "package.json"), '{"name":"@a4s/loader"}');
+  await gc(f.home, f.dependencies);
+  assert.ok(existsSync(join(loader, "package.json")));
+  await rollback(f.home, f.dependencies);
+  assert.equal(readlinkSync(pointer), "r1");
+});
 
 test("state schemas, format sets and symlinks fail closed; initialization cannot overwrite", async t => {
   const f = stationFixture(t), old = await f.release("r1");

@@ -1,0 +1,15 @@
+{
+  "name": "@a4s/loader",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "omp": { "extensions": ["./src/index.ts"] },
+  "scripts": {
+    "test": "node --import tsx --import ../../scripts/test-no-spawn.mjs --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": { "@a4s/hot-reload": "*", "@a4s/launcher": "*" },
+  "devDependencies": { "@a4s/issue-lifecycle": "*" }
+}

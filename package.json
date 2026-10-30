@@ -21,8 +21,9 @@
   },
   "scripts": {
     "build:a4s": "node scripts/build-a4s.mjs",
-    "typecheck": "npm run typecheck --workspace @a4s/hot-reload && npm run typecheck --workspace @a4s/context-management && npm run typecheck --workspace @a4s/orca-integration && npm run typecheck --workspace @a4s/review-routing && npm run typecheck --workspace @a4s/launcher && npm run typecheck --workspace @a4s/issue-lifecycle && npm run typecheck --workspace @a4s/agent-messaging && npm run typecheck --workspace @a4s/message-bus",
-    "test": "npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-integration && npm test --workspace @a4s/review-routing && npm test --workspace @a4s/launcher && npm test --workspace @a4s/issue-lifecycle && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/agent-messaging && npm test --workspace @a4s/message-bus",
+    "build:loader": "node scripts/build-loader.mjs",
+    "typecheck": "npm run typecheck --workspace @a4s/hot-reload && npm run typecheck --workspace @a4s/loader && npm run typecheck --workspace @a4s/context-management && npm run typecheck --workspace @a4s/orca-integration && npm run typecheck --workspace @a4s/review-routing && npm run typecheck --workspace @a4s/launcher && npm run typecheck --workspace @a4s/issue-lifecycle && npm run typecheck --workspace @a4s/agent-messaging && npm run typecheck --workspace @a4s/message-bus",
+    "test": "npm test --workspace @a4s/hot-reload && npm test --workspace @a4s/loader && npm test --workspace @a4s/context-management && npm test --workspace @a4s/orca-integration && npm test --workspace @a4s/review-routing && npm test --workspace @a4s/launcher && npm test --workspace @a4s/issue-lifecycle && npm test --workspace @a4s/pi-tool-row-presentation && npm test --workspace @a4s/agent-messaging && npm test --workspace @a4s/message-bus",
     "bus": "npm run bus --workspace @a4s/message-bus --"
   },
   "devDependencies": {

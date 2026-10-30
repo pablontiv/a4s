@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add generation-scoped abort, shared handoff state and commit hooks (helper API 2). Quiesce detached producers before switching, bound lifecycle startup/shutdown, and roll both extension dispatchers back on rejected or timed-out startup (#795).
 - Use root Node and shared development-tool requirements; keep the package version only in its manifest and reference runtime verification without duplicating host pins.
 
 ## 0.1.0

@@ -43,6 +43,8 @@ export function assertIdentityContracts(value: Record<string, unknown>, historic
   assertProtocols(legacy ? value.support : value);
   if (!legacy) {
     if (!Number.isSafeInteger(value.requiredLauncherProtocol) || (value.requiredLauncherProtocol as number) < 1) throw new Error("Invalid required launcher protocol");
+    if (value.requiredLoaderProtocol !== undefined &&
+        (!Number.isSafeInteger(value.requiredLoaderProtocol) || (value.requiredLoaderProtocol as number) < 1)) throw new Error("Invalid required loader protocol");
     const manifest = value.registrationManifest;
     if (!isRecord(manifest) || manifest.schema !== 1 || !Number.isSafeInteger(manifest.loaderHelperApi) || (manifest.loaderHelperApi as number) < 1 ||
         !Array.isArray(manifest.commands) || !Array.isArray(manifest.tools) || !Array.isArray(manifest.extensions) ||

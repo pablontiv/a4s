@@ -88,6 +88,7 @@ steps:
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "$iteration" > "$OUT_DIR/generation"
       printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
+      printf 'REVIEW_BUILD=%s\n' "$(dirname "$A4S_BIN")" >> "$DAGU_OUTPUT_FILE"
       if test -f "$OUT_DIR/import-error"; then
         printf '{"line":1,"field":"$input","rule":"import-units","expected":"completed upstream import","observed":"import-error"}\n' | tee "$OUT_DIR/findings.md" >&2
         exit 1
@@ -96,6 +97,7 @@ steps:
         --snapshot "$OUT_DIR/validated-units.jsonl" --findings "$OUT_DIR/findings.md"
     outputs:
       - name: GENERATION
+      - name: REVIEW_BUILD
 
   - id: review
     depends: check_plan
@@ -104,6 +106,13 @@ steps:
       prompt: >-
         ${steps.check_plan.outputs.GENERATION}.
         Launch task agent=plan-reviewer named PlanReview<RUN> (retries v<N>).
+        Pin native plan-reviewer discovery to this run's cached build:
+        ${steps.check_plan.outputs.REVIEW_BUILD}.
+        If this parent session was not opened against that package, resume the
+        same parent session with omp --no-extensions -e <cached-build>
+        --session <parent-session-file> before launching the reviewer.
+        Do not substitute the current station agent or use taskFile as an agent file.
+        Preserve @slow and enabled model overrides; retain the final native provider/model.
         Put this exact generation marker on the first line of that assignment's
         task field, the field check_review reads from session_init.task.
         Do not put the marker only in the shared context field.

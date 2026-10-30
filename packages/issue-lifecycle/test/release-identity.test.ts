@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { idFromCount, publicationPlan, assertPublishedDigest } from "../../../scripts/release-identity.mjs";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { HELPER_API_VERSION } from "@a4s/hot-reload";
 import { parse } from "yaml";
 import { identity } from "../src/identity.ts";
 import { assertReadCoverage, formatSupport } from "../../launcher/src/artifact-support.ts";
@@ -49,7 +50,7 @@ test("registration manifest is canonical and matches real host registrations", (
   assert.deepEqual(commands, registrationManifest.commands);
   assert.deepEqual(tools, registrationManifest.tools);
   assert.equal(identity.requiredLauncherProtocol, 1);
-  assert.equal(registrationManifest.loaderHelperApi, 1);
+  assert.equal(registrationManifest.loaderHelperApi, HELPER_API_VERSION);
 });
 
 test("release workflow consumes only same-repository validated main runs with full history and explicit shipped inputs", () => {

@@ -105,19 +105,33 @@ release availability, plugin loading and station activation are separate facts.
 
 ## D11 — Stable-loader hot-reload transaction
 
-**Status: native PoC PASS; production implementation belongs to
-[U4, issue #795](https://github.com/pablontiv/a4s/issues/795).**
+**Status: native PoC PASS; U4 production source integration is in
+[`packages/loader`](../../packages/loader/) and the shared
+[`generation runtime`](../../packages/hot-reload/src/generation.ts).**
 [Issue #787's PASS comment](https://github.com/pablontiv/a4s/issues/787#issuecomment-6515266902)
-is the retained decision basis, not a claim that production hot reload is
-installed. Issue #787 preserves the throwaway `poc/hot-loader/` harness and this
-architecture record; it does not change the production runtime.
+is the retained native decision basis, not a claim that this source is installed.
+Issue #787 preserves the throwaway `poc/hot-loader/` harness and this architecture
+record; its observations below remain the historical PoC's bounded claims.
 
-U4's stable `packages/loader` package (`@a4s/loader`) is to live outside the
-selected build root and be linked once at `~/.omp/plugins/node_modules`.
+U4's stable `packages/loader` package (`@a4s/loader`) lives outside the
+selected build root and is operator-linked once at `~/.omp/plugins/node_modules`.
 Changing that loader requires an OMP restart. The experiment instead installed
 only `@a4s/poc-hot-loader` in an isolated plugin root. Native plugin discovery
 loaded it without `-e` or `--no-extensions`; native OMP PID 405996 executed both
 cached builds A → B → A without restarting or invoking `/reload-plugins`.
+
+The production loader checks state automatically and defers session/agent-end
+requests through a timer before checking idle. It attempts a changed generation
+once, retaining the old behavior on failure; manual `/reload-plugins` can retry.
+It checks the canonical metadata/resource manifest and required protocols before
+leasing/importing, then constructs both complete bundles privately. Generation
+abort owns observer controllers and pump timers; switch-owned plain queues,
+notification toasts, transition deduplication and event-log acknowledgements
+survive success and rollback. Every imported candidate retains its lease until
+OMP process exit, even if construction or timed startup fails. No module-memory
+eviction is claimed. The restart/drain procedure in
+[`deployment.md`](../operations/deployment.md#retiring-plugin-generations-restart-and-drain)
+separates retiring-reader retention from active behavior.
 
 ### Transaction and ownership boundary
 

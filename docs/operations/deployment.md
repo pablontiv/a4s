@@ -204,7 +204,7 @@ lease and restore probe access, never manually assume the process is dead.
    old installed source checkouts, executor launchers/plugin links and checkout
    entries in the service PATH. Preserve unrelated operator files and development
    checkouts. Do not retain compatibility aliases.
-7. **Load and accept.** Restart OMP to load the release plugin. Retain identity,
+7. **Load and accept.** Restart OMP to load the stable loader. Retain identity,
    readiness, exact receipt/snapshot tuple and agreed live acceptance evidence
    before reopening admission. A source test is not proof of station cutover.
 
@@ -251,7 +251,7 @@ payload promotion does not reinstall the launcher or repin a DAG.
 export DAGU_HOME="<canonical-station-home>"
 LAUNCHER_ROOT="<verified-extracted-a4s-launch-platform-archive>"
 TUPLE="<version>@<commit>#<archive-sha256>"
-RELEASE_ROOT="<absolute-verified-extracted-release-root>"
+LOADER_ROOT="$DAGU_HOME/cache/a4s/loader"
 
 # Install once on the service user's PATH, with a4s selecting this launcher.
 install -m 0755 "$LAUNCHER_ROOT/a4s-launch" "$HOME/.local/bin/a4s-launch"
@@ -264,7 +264,9 @@ a4s state
 # Review/validate the single `a4s tick` step and minute schedule before installing.
 dagu validate "$LAUNCHER_ROOT/reconcile.yaml"
 install -m 0644 "$LAUNCHER_ROOT/reconcile.yaml" "$DAGU_HOME/dags/reconcile.yaml"
-omp plugin link "$RELEASE_ROOT"
+# Build from the reviewed source checkout once; loader changes require restart.
+node scripts/build-loader.mjs --outdir "$LOADER_ROOT"
+omp plugin link "$LOADER_ROOT"
 ```
 
 Preserve/resolve existing operator-owned binaries, links and DAGs before those
@@ -352,6 +354,47 @@ acceptance evidence outside cleanup windows. Record first-tick duration,
 skipped ticks and history bytes when accepting the operator's new reconciler.
 
 ## Active runs and recovery
+
+### Retiring plugin generations: restart and drain
+
+The operator installs `@a4s/loader` once (see
+[whole-package OMP loading](private-install.md#whole-package-omp-loading)).
+Equal registration/resource manifests switch status and triage together at a
+deferred idle boundary. A failed or timed-out startup aborts candidate observers,
+restores the old lifecycle and preserves the undelivered queue. A manifest,
+skills/agents, helper/loader or required launcher protocol change instead keeps
+the active generation and prompts **restart OMP**; do not force partial activation.
+
+Only one generation produces notifications, but every build whose import began
+retains its plugin lease until that OMP process exits, including failed candidates
+and retired generations. Neither `/reload-plugins`, GC nor a symlink relink evicts
+module memory. Repeated switches therefore retain disk/modules until restart.
+Promotion can report a retiring plugin PID/generation as the reader blocking a
+new-format writer even when a bridge build is already current.
+
+1. Read station status, the blocking lease holder/PID/generation, active runs,
+   open role jobs and planning reviewers. Retain run receipts and cached builds.
+2. Let interactive turns/reviews finish; stop that OMP session cleanly. Wait for
+   its actual process exit, not just observer shutdown. Never remove a live lease
+   file or delete a cached build to bypass compatibility. After an unclean exit,
+   launcher GC verifies PID/start identity before collecting dead leases.
+3. Start OMP again using the stable loader. It reads `state.current`, repairs the
+   cache-only `current` resource pointer and creates a fresh process lease. Native
+   agent discovery is restart-only; skills and agents are included in the manifest
+   gate, rather than assuming hot rediscovery of either.
+4. Retry normal promotion after the old PID is gone. Its retired-reader barrier
+   is now absent; other nonterminal runs/jobs and persisted formats still gate a
+   new-format writer. Do not repin old runs. Resume planning parents with their
+   own cached package and native by-name reviewer selection, not current agents.
+
+A model/service cutover still requires closed admission, zero nonterminal runs
+and zero open role jobs under the separate procedure above. Ordinary same-manifest
+hot switches do not impose that global drain. Loader/helper changes require OMP
+restart; launcher protocol skew requires operator launcher reinstall as well.
+a4s writes only cache-directory runtime state and never station/service
+configuration, plugin-manager links or service activation.
+
+### Run recovery
 
 Read exact DAG/run status and approval iteration before any human-task action.
 The designated reconciler owns CI/merge observation and `await_ci`/`await_merge`

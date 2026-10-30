@@ -15,7 +15,7 @@ instead come from a verified tagged release, never an installed source checkout.
   npm installs its `devDependencies.bun` pin for tests.
 - Dagu 2.24.0 for native first-attempt evidence, Git, authenticated `gh`, `jq`,
   Bash and Node for the real gate preload. Install the separate stable launcher
-  below and link/load a verified payload's complete extracted root.
+  and stable loader below; payloads remain complete verified extracted roots.
   Python `fcntl` is required only by Node/tsx development tests, not the engine.
 - Semantic role jobs use the station's `omp` from the service/bootstrap PATH,
   not Bun or an installed OMP source tree. The executing release ships the pinned
@@ -37,8 +37,8 @@ npm test
 npm run typecheck
 ```
 
-The root and CI gates run all nine workspace test suites and eight declared
-typechecks. The tool-row workspace runs transpiled behavioral tests; its optional
+The root and CI gates discover all current workspace test suites and declared
+typechecks, including `@a4s/loader`. The tool-row workspace runs transpiled behavioral tests; its optional
 Pion host supplies the renderer types for host-side development. Default tests
 select only top-level test files and preload `scripts/test-no-spawn.mjs`, which
 rejects child commands other than direct `git`/`tar`; they do not run native CLIs,
@@ -78,21 +78,41 @@ missing retry bindings fail closed and are never repinned.
 
 ## Whole-package OMP loading
 
-Run from the intended consumer checkout. The lifecycle package root is the
-verified extracted release directory, containing `a4s`, `identity.json`,
-`package.json`, `src/`, `agents/` and `skills/`:
+The operator installs and links the **stable loader once**, not each payload.
+From a reviewed source checkout with dependencies installed:
 
 ```sh
-omp --no-extensions \
-  -e <absolute-release-root> \
-  -e <absolute-source-checkout>/packages/review-routing
+node scripts/build-loader.mjs --outdir "$DAGU_HOME/cache/a4s/loader"
+omp plugin link "$DAGU_HOME/cache/a4s/loader"
 ```
 
-More generally, `omp -e <absolute-package-directory>` is the supported one-off
-package-root loader. The lifecycle root discovers both extension entries, its
-agents and package skills together. Root utility skills and generic native
-roles have separate installation below. `--no-extensions` suppresses ambient
-extension registration; it does not disable native agent or skill discovery.
+This creates a self-contained `@a4s/loader` package under the runtime cache.
+Its native skills/agents roots point to `../current/skills` and
+`../current/agents`; the launcher maintains that cache-only derived symlink from
+`state.current` under its state lock. `state.json` remains authoritative and reads
+repair the pointer after an interrupted commit. No station settings, service
+files or plugin-manager links are written by a4s. Preserve unrelated plugin
+entries; the operator removes the obsolete `@a4s/issue-lifecycle` link, links
+`@a4s/loader`, and restarts OMP. Verify the manager's actual directory source and
+manifest entry, plus one status observer and both extensions after startup.
+
+Loader changes require an operator rebuild/relink if needed and OMP restart.
+Payload promotion requires neither reinstall nor per-release relink. Same
+registration/resource metadata switches both extensions automatically at idle;
+different commands/tools, schemas/descriptions/completions, skills/agents or
+loader/helper/launcher protocols keep the active generation and prompt restart.
+The seven interactive skill trees follow current station resources at discovery;
+agent rediscovery requires a new OMP process. We conservatively gate both skill
+and agent digests, not just extension metadata.
+
+For a planning parent's pinned reviewer, native explicit package loading remains
+supported: `omp --no-extensions -e <run-cached-build>` (resume the same parent
+with `--session <parent-session-file>` if necessary). This selects that build's
+`plan-reviewer` by name rather than current station resources. `taskFile` is not
+an agent-definition API. Role-job triage already passes the cached run's
+`triage-reviewer.md` directly to the compiled-host runner. Preserve `@slow` and
+enabled overrides/routing; record the resolved native provider/model.
+Builtin `task`, the station OMP binary and settings/routing remain shared.
 `DAGU_URL` is the actual server root (default `http://127.0.0.1:8080`), and
 `DAGU_HOME` must identify that controller's store/config. The scheduler
 environment sets `A4S_PRIMARY` to that station's main checkout so lifecycle
@@ -112,38 +132,22 @@ Dagu. `a4s queue --lane <lane>` checks initial readiness; afterwards use
 `a4s queue <primary>/.workspace/dagu/config.json`. Bootstrap authors policy and
 checks readiness, not DAG installation or service repair.
 
-For an authorized persistent lifecycle installation:
-
-```sh
-omp plugin link <absolute-release-root>
-```
-
 Initial/model-changing cutover closes admission and establishes zero nonterminal
 runs and zero open role jobs. Select the intended compiled `omp` on the service
-PATH, verify `a4s role-jobs detect`, and provision queues, the stable launcher
-and single-step tick DAG. Remove obsolete links/PATH entries only after
-references clear. Restart OMP to load the release plugin; service activation
-remains exclusively the operator's. Ordinary payload promotion uses state, not
-per-consumer or scheduled exact-release pins. Follow the complete
-[cutover procedure](deployment.md#identity-and-adoption) and
-[launcher/tick installation](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
-`omp plugin link` must replace the old lifecycle checkout registration: the
-service user's `~/.omp/plugins/node_modules/@a4s/issue-lifecycle` must resolve to
-the verified extracted release root, and its managed `omp-plugins.lock.json`
-entry must record that release's actual manifest version and directory source,
-not `0.5.25` or PRIMARY's package directory. Preserve unrelated entries and let
-the installed plugin manager maintain its lock schema. Restart OMP and retain
-resolved-path, lock-entry and whole-package load evidence; no such station
-changes are performed by the engine.
+PATH, verify `a4s role-jobs detect`, and provision queues, the stable launcher,
+loader and single-step tick DAG. Restart OMP before reopening admission; service
+activation remains exclusively the operator's. Ordinary payload promotion uses
+state, not per-consumer or scheduled exact-release pins. Follow the complete
+[cutover procedure](deployment.md#identity-and-adoption),
+[launcher/tick installation](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin)
+and [retiring-generation drain](deployment.md#retiring-plugin-generations-restart-and-drain).
 
-Both manifest extension paths (`./src/status/reloadable.ts` and
-`./src/triage/reloadable.ts`) ship in the archive and select adjacent `a4s`.
-For existing-run mutations the plugin requires declared dispatch protocol
-`a4s-run/1`, checks receipt/config, checkpoint-protocol and role-job-store
-compatibility and dispatches the run's cached executable, not the plugin's version.
-HUD rows can show both releases
-and flag unsupported receipts read-only; triage, protection, role dispatch and
-HUD receipt writes reject unsupported/missing artifacts before mutation.
+The loader imports the immutable build's `src/status/index.ts` and
+`src/triage/native.ts` as one transaction. Every imported/retired build stays
+leased until process exit; behavior shutdown alone never frees its files.
+For existing-run mutations, declared `a4s-run/1`, receipt/config, checkpoint and
+role-job-store coverage still select the run's cached executable, not current
+plugin version. Unsupported/missing artifacts fail closed before mutation.
 
 Other source-linked packages keep their selected checkout available; never use
 a soon-to-be-deleted issue worktree. Native resource refresh alone does not prove

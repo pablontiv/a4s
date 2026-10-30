@@ -14,6 +14,23 @@ import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 import { EventLog } from "./event-log.ts";
 import { SESSION_ID_TOOL, WORKFLOWS_COMMAND } from "../registration.ts";
+import type { GenerationScope } from "@a4s/hot-reload";
+import type { TransitionStorage } from "./progress.ts";
+
+interface NoticeStorage {
+  transitions: TransitionStorage;
+  uiTransitions: TransitionStorage;
+  seen: Set<string>;
+  tracked: Map<string, { summary: RunDetails; detailsBaseline: boolean; ledgerBaseline: boolean }>;
+  completed: Set<string>;
+  initialDiscovery: boolean;
+}
+
+function noticeStorage(): NoticeStorage {
+  return { transitions: { states: new Map(), notices: new Set() },
+    uiTransitions: { states: new Map(), notices: new Set() }, seen: new Set(),
+    tracked: new Map(), completed: new Set(), initialDiscovery: true };
+}
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const exec = promisify(execFile);
@@ -151,19 +168,18 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
-  const transitions = new Transitions(ctx.sessionManager.getSessionId());
-  const ledger = new EventLog();
-  const tracked = new Map<string, { summary: RunDetails; detailsBaseline: boolean; ledgerBaseline: boolean }>();
-  const completed = new Set<string>();
-  let initialDiscovery = true;
+async function watchNotices(base: string, repo: string, ctx: Context, signal: AbortSignal, wake: (message: string) => void, storage: NoticeStorage): Promise<void> {
+  const transitions = new Transitions(ctx.sessionManager.getSessionId(), undefined, undefined, storage.transitions);
+  const ledger = new EventLog(storage.seen);
+  const { tracked, completed } = storage;
   while (!signal.aborted) {
     try {
       for (const summary of await discover(base, repo, signal, true)) {
+        if (signal.aborted) return;
         if (runParam(summary, "OMP_SESSION_ID") !== ctx.sessionManager.getSessionId()) continue;
         const topic = topicFor(summary);
         if (completed.has(topic)) continue;
-        if (initialDiscovery && ["succeeded", "failed", "aborted"].includes(summary.statusLabel)) {
+        if (storage.initialDiscovery && ["succeeded", "failed", "aborted"].includes(summary.statusLabel)) {
           completed.add(topic);
           continue;
         }
@@ -171,17 +187,19 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
         if (state) state.summary = summary;
         else {
           const detailed = summary.nodes?.every(node => node.statusLabel !== "waiting" || node.step.humanTask !== undefined) ?? false;
-          if (initialDiscovery && detailed) transitions.observe(summary, { baseline: true });
-          tracked.set(topic, { summary, detailsBaseline: initialDiscovery && !detailed, ledgerBaseline: initialDiscovery });
+          if (storage.initialDiscovery && detailed) transitions.observe(summary, { baseline: true });
+          tracked.set(topic, { summary, detailsBaseline: storage.initialDiscovery && !detailed, ledgerBaseline: storage.initialDiscovery });
         }
       }
       // Freeze membership before reading any individual run. A failed first
       // detail or ledger read must not turn an existing run into a new one.
-      initialDiscovery = false;
+      if (signal.aborted) return;
+      storage.initialDiscovery = false;
       for (const [topic, state] of tracked) {
         const { summary } = state;
         try {
           const run = await runDetails(base, summary, signal);
+          if (signal.aborted) return;
           const primary = run.resolvedPrimary ?? runParam(run, "PRIMARY");
           if (primary) summary.resolvedPrimary = primary;
           try { await recordRunObservation(run, primary || ctx.cwd); }
@@ -192,13 +210,14 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
             && ["escalation", "rebase_escalation"].includes(node.step.id ?? node.step.name))
             ? await readEscalationDiagnostic(primary, run.dagRunId, signal) : undefined;
           const stalls = await readStallNotices(primary, run.dagRunId, signal);
+          if (signal.aborted) return;
           const integrationProtection = primary ? readActiveProtection(primary) : undefined;
           const terminal = ["succeeded", "failed", "aborted"].includes(run.statusLabel);
           let snapshots: RunDetails[] = [];
           let ledgerRead = false;
           if (!terminal) {
             try {
-              snapshots = await ledger.read(base, run, signal);
+              snapshots = await ledger.read(base, run, signal, false);
               ledgerRead = true;
             } catch (error) {
               // Current details can still establish the baseline or report a
@@ -211,10 +230,11 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
           }
           // Seed/deliver the current opening before baselining recovered history,
           // so a fresh current transition is not consumed by the silent ledger.
+          if (signal.aborted) return;
           for (const snapshot of [run, ...snapshots]) {
             if (snapshot !== run) {
-              try { await recordRunObservation(snapshot, primary || ctx.cwd, "persisted-transition"); }
-              catch (error) { console.warn("DAGU_RECEIPT_OBSERVATION_REJECTED", error); }
+              void recordRunObservation(snapshot, primary || ctx.cwd, "persisted-transition")
+                .catch(error => console.warn("DAGU_RECEIPT_OBSERVATION_REJECTED", error));
             }
             const baseline = snapshot === run
               ? state.detailsBaseline && !terminal
@@ -225,6 +245,7 @@ async function watchNotices(base: string, repo: string, ctx: Context, signal: Ab
             for (const message of effects.wakeMessages ?? (effects.wakeMessage ? [effects.wakeMessage] : [])) wake(message);
             if (effects.warningMessage) ctx.ui.notify(effects.warningMessage, "warning");
           }
+          ledger.commit();
           state.detailsBaseline = false;
           // An empty successful read establishes a baseline too. A failed read
           // keeps its own baseline without suppressing later current-state changes.
@@ -251,13 +272,14 @@ function isTimeout(error: unknown): boolean {
     || (failure.cause !== error && isTimeout(failure.cause));
 }
 
-async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView): Promise<void> {
+async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView, storage: NoticeStorage): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
-  if (ctx.agent.kind === "main") void watchNotices(base, repo, ctx, signal, wake).catch(() => {});
+  if (ctx.agent.kind === "main") void watchNotices(base, repo, ctx, signal, wake, storage).catch(() => {});
   const runs = new Map<string, RunDetails>();
-  const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
+  const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined,
+    undefined, undefined, storage.uiTransitions);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
   const activities = new Map<string, string>();
   const activityWatches = new Map<string, { key: string; controller: AbortController }>();
@@ -267,7 +289,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   let offlineRetrySeconds: number | undefined;
   let slow = false;
   const render = (): void => {
-    if (!ctx.hasUI) return;
+    if (!ctx.hasUI || signal.aborted) return;
     if (view.hidden) {
       ctx.ui.setWidget("dagu-status", undefined);
       return;
@@ -315,6 +337,7 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
     })().catch(() => {});
   };
   const apply = (run: RunDetails, baseline = false): void => {
+    if (signal.aborted) return;
     const issue = issueNumber(run);
     const slug = issue ? titles.get(issue) : undefined;
     const effects = transitions.observe(run, slug ? { baseline, slug, checkpoints: false } : { baseline, checkpoints: false });
@@ -419,9 +442,17 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   }
 }
 
-export default function daguStatus(pi: ExtensionAPI): void {
+export default function daguStatus(pi: ExtensionAPI, scope?: GenerationScope): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
+  let pumpTimer: NodeJS.Timeout | undefined;
+  const shared = scope?.state;
+  const queues = (shared?.get("status.queues") as Map<string, {
+    messages: string[]; claimed: boolean; alerts: { message: string; type: "info" | "warning" | "error" }[];
+  }> | undefined) ?? new Map();
+  const notices = (shared?.get("status.notices") as Map<string, NoticeStorage> | undefined) ?? new Map();
+  shared?.set("status.queues", queues);
+  shared?.set("status.notices", notices);
   const view: WidgetView = { expanded: false, hidden: false };
   const modes: Record<string, (view: WidgetView) => void> = {
     "": view => { view.hidden ? (view.hidden = false) : (view.expanded = !view.expanded); },
@@ -447,12 +478,17 @@ export default function daguStatus(pi: ExtensionAPI): void {
       view.render?.();
     },
   });
-  const queues = new Map<string, { messages: string[]; claimed: boolean }>();
   const pump = (): void => {
     const ctx = activeContext;
-    if (!ctx || ctx.agent.kind !== "main") return;
+    if (scope && !scope.ready) return;
+    if (!ctx) return;
     const queue = queues.get(ctx.sessionManager.getSessionId());
     if (!queue) return;
+    while (queue.alerts.length) {
+      const alert = queue.alerts.shift()!;
+      ctx.ui.notify(alert.message, alert.type);
+    }
+    if (ctx.agent.kind !== "main") return;
     while (queue.messages.length) {
       const idle = ctx.isIdle();
       if (idle && queue.claimed) break;
@@ -466,6 +502,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
       if (idle) break;
     }
   };
+  scope?.onCommit(pump);
   pi.registerTool({
     ...SESSION_ID_TOOL,
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
@@ -480,6 +517,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
   });
   const stop = (): void => {
     controller?.abort();
+    clearTimeout(pumpTimer);
     delete view.render;
     if (activeContext?.hasUI) activeContext.ui.setWidget("dagu-status", undefined);
     activeContext = undefined;
@@ -490,16 +528,31 @@ export default function daguStatus(pi: ExtensionAPI): void {
     if (!ctx.hasUI && ctx.agent.kind !== "main") return;
     activeContext = ctx;
     controller = new AbortController();
+    const activeController = controller;
+    scope?.onAbort(stop);
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
     const session = ctx.sessionManager.getSessionId();
-    void observe(ctx, controller.signal, message => {
-      if (controller?.signal.aborted || activeContext !== ctx
+    let storage = notices.get(session);
+    if (!storage) { storage = noticeStorage(); notices.set(session, storage); }
+    const queue = queues.get(session) ?? { messages: [], claimed: false, alerts: [] };
+    queues.set(session, queue);
+    // A failed candidate must not consume transition deduplication while dropping
+    // its UI notification. Queue both message kinds in switch-owned plain state.
+    const observerContext: Context = Object.assign(Object.create(ctx), {
+      ui: Object.assign(Object.create(ctx.ui), {
+        notify(message: string, type: "info" | "warning" | "error") {
+          if (activeController.signal.aborted) return;
+          queue.alerts.push({ message, type });
+          pump();
+        },
+      }),
+    });
+    void observe(observerContext, activeController.signal, message => {
+      if (activeController.signal.aborted || activeContext !== ctx
         || ctx.sessionManager.getSessionId() !== session) return;
-      let queue = queues.get(session);
-      if (!queue) { queue = { messages: [], claimed: false }; queues.set(session, queue); }
       queue.messages.push(message);
       pump();
-    }, view).catch(() => {});
+    }, view, storage).catch(() => {});
   };
   pi.on("session_start", start);
   pi.on("session_switch", start);
@@ -510,6 +563,7 @@ export default function daguStatus(pi: ExtensionAPI): void {
     const queue = queues.get(ctx.sessionManager.getSessionId());
     if (queue) queue.claimed = false;
     // The host becomes idle after agent_end handlers have returned.
-    setTimeout(pump, 0);
+    clearTimeout(pumpTimer);
+    pumpTimer = setTimeout(pump, 0);
   });
 }

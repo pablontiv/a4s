@@ -36,5 +36,8 @@
     "@a4s/hot-reload": "*",
     "@a4s/launcher": "*",
     "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@a4s/loader": "*"
   }
 }
