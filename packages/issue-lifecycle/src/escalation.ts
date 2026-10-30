@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -35,7 +36,7 @@ export async function main(args: string[]): Promise<void> {
   const common = execFileSync("git", ["-C", process.env.PRIMARY ?? "", "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim();
   const root = join(common, "dagu-feature", "runs", run);
   const receipt = join(root, "receipt.json");
-  const { receipt: value } = await receiptArtifact(process.env.DAGU_HOME || "", receipt);
+  const { receipt: value } = await receiptArtifact(readServiceEnvironment().DAGU_HOME, receipt);
   if (!isRecord(value.initial) || typeof value.initial.admittedAt !== "string") throw new Error("Invalid admission receipt initial.admittedAt");
   let admitted = value.initial.admittedAt;
   await withFileLockAsync(join(root, "escalation.lock"), async () => {
@@ -80,8 +81,8 @@ export async function main(args: string[]): Promise<void> {
       if (action === "route") {
         if (!trigger || iteration <= trigger.iteration) return;
         decision = "change-route";
-        const base = (process.env.DAGU_URL ?? `http://127.0.0.1:${process.env.DAGU_PORT ?? "8080"}`).replace(/\/$/, "");
-        const response = await fetch(`${base}/api/v1/dag-runs/feature/${run}`, { signal: AbortSignal.timeout(10000) });
+        const base = readServiceEnvironment().DAGU_URL;
+        const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(10000) });
         if (!response.ok) throw new Error(`Dagu run details: HTTP ${response.status}`);
         const details = await response.json() as { dagRunDetails: { nodes?: { pushBackHistory?: { iteration?: number }[] }[] } };
         nativeAudit = details.dagRunDetails.nodes?.flatMap(node => node.pushBackHistory ?? []).find(event => event.iteration === iteration) ?? null;

@@ -34,6 +34,10 @@ params:
       minLength: 1
   required: [ISSUE]
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - PRIMARY: __PRIMARY__
   - BASE_BRANCH: TEMPLATE_BASE_BRANCH
   - TEST_PATHS: __TEST_PATHS__
@@ -607,7 +611,7 @@ handler_on:
               if (( transition != 0 )); then
                 STATUS=$(dagu status poc --run-id "$RUN")
                 if grep -q "^Failed -" <<<"$STATUS" &&
-                   ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=poc" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                   ATTEMPT=$(curl -fsS --max-time 10 --get "${DAGU_URL:?explicit station endpoint required}/api/v1/event-logs" --data-urlencode "dagName=poc" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
                   printf "stale-process repair: run=%s attempt=%s step=fix_result; recover: dagu retry --run-id %s --step scope_gate --downstream poc\n" "$RUN" "${ATTEMPT:-unknown}" "$RUN" >&2
                 fi
                 exit "$transition"

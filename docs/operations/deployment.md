@@ -332,7 +332,12 @@ a4s state
 
 # Review/validate the single `a4s tick` step and minute schedule before installing.
 dagu validate "$LAUNCHER_ROOT/reconcile.yaml"
-install -m 0644 "$LAUNCHER_ROOT/reconcile.yaml" "$DAGU_HOME/dags/reconcile.yaml"
+# Dagu forwards only DAGU_*/PATH-style variables to steps, not A4S_SERVICE_ENV:
+# carry the operator's declaration selection as the installed DAG's env.
+{ printf 'env:\n  - A4S_SERVICE_ENV: %s\n' "$(jq -n --arg v "$A4S_SERVICE_ENV" '$v')"
+  cat "$LAUNCHER_ROOT/reconcile.yaml"; } > "$LAUNCHER_ROOT/reconcile.installed.yaml"
+dagu validate "$LAUNCHER_ROOT/reconcile.installed.yaml"
+install -m 0644 "$LAUNCHER_ROOT/reconcile.installed.yaml" "$DAGU_HOME/dags/reconcile.yaml"
 # Build from the reviewed source checkout once; loader changes require restart.
 node scripts/build-loader.mjs --outdir "$LOADER_ROOT"
 omp plugin link "$LOADER_ROOT"
@@ -481,8 +486,18 @@ bounded unauthenticated HTTP GETs. It never inspects process tables or service
 managers, creates a home/probe DAG, enqueues a run or changes station bytes.
 Bootstrap obtains its probe endpoint/home only through its release-bound
 `"$A4S_BIN" service-environment`; it does not parse the declaration itself.
-Other endpoint/home clients and templates are a separate cutover: continue
-supplying the same explicit environment values to those clients.
+All launcher and lifecycle clients, native Dagu children, and freshly rendered
+DAGs use this same launcher-owned reader. Independent `DAGU_PORT` URLs and
+current-user-home defaults are not supported; explicit endpoint, port, or home
+values that conflict with the declaration fail before station access.
+
+This cutover applies only to fresh admissions from new immutable release
+artifacts. Their rendered snapshots retain the normalized endpoint, literal home
+(including spaces), scheduler PATH, and declaration selection. Run-bound helpers
+reject a changed declaration rather than retarget an admitted run. Existing
+releases, snapshots, receipts, run bindings, and installed Dagu/service files
+are never rewritten. Keep the declaration available and unchanged for its
+admitted runs; operator activation remains a separate decision.
 
 Exit 1 identifies missing/unreadable/malformed declarations, the invalid or
 inconsistent field, missing declared tools, config leaves/queues, API/auth errors

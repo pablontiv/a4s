@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stationEnv } from "./fixtures/service-environment.ts";
 import { execFileSync, type spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -108,7 +109,7 @@ async function fixture(ids: string[], options: { waiting?: boolean; failure?: st
       const result = { status: 0, stdout: "", stderr: "" };
       try {
         await main([target.name, "u"], {
-          env: { ...process.env, DAGU_HOME: root, DAGU_URL: "http://fixture" },
+          env: { ...process.env, ...stationEnv(root) },
           fetch: request, spawnSync: native, receiptArtifact: roleReceiptArtifact,
           log: message => { result.stdout += `${message}\n`; },
           error: message => { result.stderr += `${message}\n`; },

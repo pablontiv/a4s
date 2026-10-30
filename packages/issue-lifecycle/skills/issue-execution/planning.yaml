@@ -17,6 +17,10 @@ params:
     type: string
     required: true
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - PRIMARY: __PRIMARY__
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
@@ -32,7 +36,7 @@ steps:
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       NWO=$(cd "$PRIMARY" && gh repo view --json nameWithOwner --jq .nameWithOwner)
       [[ "$NWO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-      OUT_DIR="${DAGU_HOME:-$HOME/.dagu}/data/planning/${NWO/\//__}/$RUN"
+      OUT_DIR="${DAGU_HOME:?explicit station home required}/data/planning/${NWO/\//__}/$RUN"
       mkdir -p "$OUT_DIR"
       printf '%s\n' "$SOURCE" > "$OUT_DIR/source.md"
       touch "$OUT_DIR/findings.md"
@@ -84,7 +88,7 @@ steps:
     run: |
       set -euo pipefail
       : > "$OUT_DIR/findings.md"
-      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      rest=$(curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/planning/$(jq -nr --arg run "$RUN" '$run|@uri')")
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       printf 'PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=%s ITERATION=%s END\n' "$RUN" "$iteration" > "$OUT_DIR/generation"
       printf 'GENERATION=%s\n' "$(cat "$OUT_DIR/generation")" >> "$DAGU_OUTPUT_FILE"
@@ -154,7 +158,7 @@ steps:
       [[ "$REVIEW" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
       test -n "$OMP_SESSION_ID"
       cmp "$OUT_DIR/validated-units.jsonl" "$OUT_DIR/units.jsonl"
-      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      rest=$(curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/planning/$(jq -nr --arg run "$RUN" '$run|@uri')")
       cutoff=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0].startedAt | select(type == "string" and length > 0)' <<<"$rest")
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       marker="PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
@@ -279,7 +283,7 @@ steps:
       set -euo pipefail
       cmp "$OUT_DIR/reviewed-units.jsonl" "$OUT_DIR/units.jsonl"
       cmp "$OUT_DIR/review-accepted" "$OUT_DIR/generation"
-      rest=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/planning/$RUN")
+      rest=$(curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/planning/$(jq -nr --arg run "$RUN" '$run|@uri')")
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       test "$(cat "$OUT_DIR/review-accepted")" = "PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
       jq -e '.verdict == "accept" and (.findings | all(.severity != "blocker"))' "$OUT_DIR/review-$iteration.json" >/dev/null

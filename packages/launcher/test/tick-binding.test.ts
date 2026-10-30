@@ -36,15 +36,17 @@ test("binding replay restores recorded A even if current B cannot start", async 
   await assert.rejects(selectPayload(f.home, ["tick"], { ...f.dependencies, confirm: async () => "retry" }), /attempt=retry/);
 });
 test("PoC-4 native trigger evidence: manual/scheduler first, retry/404/malformed/offline fail closed", async t => {
+  // The gate may itself run inside another DAG; this fixture owns its identity.
+  const env = { ...process.env, DAG_NAME: "reconcile" };
   for (const trigger of ["manual", "scheduler", "retry", "unknown"]) {
     t.mock.method(globalThis, "fetch", async () => Response.json({ dagRunDetails: { name: "reconcile", dagRunId: "tick", triggerType: trigger } }));
-    assert.equal(await confirmFirstAttempt("tick", {}), trigger === "manual" || trigger === "scheduler" ? "first" : trigger);
+    assert.equal(await confirmFirstAttempt("tick", env), trigger === "manual" || trigger === "scheduler" ? "first" : trigger);
     t.mock.restoreAll();
   }
   for (const response of [Response.json({ code: "not_found" }, { status: 404 }), Response.json({ dagRunDetails: {} })]) {
     t.mock.method(globalThis, "fetch", async () => response);
-    assert.equal(await confirmFirstAttempt("tick", {}), "unknown"); t.mock.restoreAll();
+    assert.equal(await confirmFirstAttempt("tick", env), "unknown"); t.mock.restoreAll();
   }
   t.mock.method(globalThis, "fetch", async () => { throw new Error("offline"); });
-  assert.equal(await confirmFirstAttempt("tick", {}), "unknown");
+  assert.equal(await confirmFirstAttempt("tick", env), "unknown");
 });

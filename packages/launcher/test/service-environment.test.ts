@@ -21,6 +21,10 @@ test("service declaration is explicitly selected, literal and independent of cal
     assert.throws(() => readServiceEnvironment({ A4S_SERVICE_ENV: home }), /field=A4S_SERVICE_ENV.*cannot read/);
     assert.throws(() => readServiceEnvironment({ ...env, DAGU_HOME: join(home, "other") }), /field=DAGU_HOME.*does not match/);
     assert.throws(() => readServiceEnvironment({ ...env, DAGU_URL: "http://127.0.0.1:18766" }), /field=DAGU_URL.*does not match/);
+    assert.throws(() => readServiceEnvironment({ ...env, DAGU_PORT: "8080" }), /field=DAGU_PORT.*does not match/);
+    assert.equal(readServiceEnvironment({ ...env, DAGU_PORT: "18765" }).DAGU_URL, expected.DAGU_URL);
+    writeFileSync(env.A4S_SERVICE_ENV!, JSON.stringify({ ...expected, DAGU_URL: `${expected.DAGU_URL}///` }));
+    assert.equal(readServiceEnvironment(env).DAGU_URL, expected.DAGU_URL);
     for (const [field, values] of Object.entries({
       DAGU_URL: [undefined, "", 1, "not a URL", "https://127.0.0.1:1234", "http://example.com:1234", "http://user:pass@localhost:1234", "http://localhost:0", "http://localhost:1234/path", "http://localhost:1234?auth=x"],
       DAGU_HOME: [undefined, "", 1, "relative", "~/dagu", "/bad\npath", join(home, "absent"), env.A4S_SERVICE_ENV],

@@ -28,8 +28,8 @@
   },
   "scripts": {
     "test": "tsx --import ./test/fixtures/dagu-home.mjs --import ../../scripts/test-no-spawn.mjs --test test/*.test.ts",
-    "test:live": "python3 bin/heavy-slot.py env A4S_LIVE_DAGU=1 tsx --import ./test/fixtures/dagu-home.mjs --test test/live/*.test.ts",
-    "test:compiled": "python3 bin/heavy-slot.py env A4S_COMPILED_SMOKE=1 tsx --import ./test/fixtures/dagu-home.mjs --test --test-concurrency=1 test/live/executable.test.ts",
+    "test:live": "python3 bin/heavy-slot.py env A4S_LIVE_DAGU=1 node --import tsx --import ./test/fixtures/dagu-home.mjs --test test/live/*.test.ts",
+    "test:compiled": "python3 bin/heavy-slot.py env A4S_COMPILED_SMOKE=1 node --import tsx --import ./test/fixtures/dagu-home.mjs --test --test-concurrency=1 test/live/executable.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

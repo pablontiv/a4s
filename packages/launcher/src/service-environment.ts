@@ -35,7 +35,7 @@ export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): Se
   try { url = new URL(declaration.DAGU_URL); }
   catch { failure("DAGU_URL", "expected an absolute HTTP loopback endpoint"); }
   if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
-    || url.username || url.password || url.search || url.hash || url.pathname !== "/" || url.port === "0") {
+    || url.username || url.password || url.search || url.hash || !/^\/+$/.test(url.pathname) || url.port === "0") {
     failure("DAGU_URL", "expected an unauthenticated HTTP loopback origin, without path, query or fragment");
   }
   if (!isAbsolute(declaration.DAGU_HOME)) failure("DAGU_HOME", "required absolute home path");
@@ -48,8 +48,17 @@ export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): Se
   if (env.DAGU_HOME !== undefined && (!isAbsolute(env.DAGU_HOME) || resolve(env.DAGU_HOME) !== resolve(declaration.DAGU_HOME))) {
     failure("DAGU_HOME", "selected DAGU_HOME does not match the declaration");
   }
-  if (env.DAGU_URL !== undefined && env.DAGU_URL.replace(/\/+$/, "") !== declaration.DAGU_URL.replace(/\/+$/, "")) {
-    failure("DAGU_URL", "selected DAGU_URL does not match the declaration");
+  if (env.DAGU_URL !== undefined) {
+    let selected: URL;
+    try { selected = new URL(env.DAGU_URL); }
+    catch { failure("DAGU_URL", "selected DAGU_URL does not match the declaration"); }
+    if (selected.origin !== url.origin || selected.username || selected.password ||
+      selected.search || selected.hash || !/^\/+$/.test(selected.pathname)) {
+      failure("DAGU_URL", "selected DAGU_URL does not match the declaration");
+    }
+  }
+  if (env.DAGU_PORT !== undefined && env.DAGU_PORT !== (url.port || "80")) {
+    failure("DAGU_PORT", "selected DAGU_PORT does not match the declared endpoint");
   }
   const directories = declaration.PATH.split(":");
   if (directories.some(directory => !isAbsolute(directory))) failure("PATH", "every scheduler PATH entry must be absolute and nonempty; no shell expansion is performed");
@@ -61,7 +70,7 @@ export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): Se
     } catch { return false; }
   }));
   if (missing.length) failure("PATH", `declared scheduler PATH is missing ${missing.join(", ")}`);
-  return { DAGU_URL: declaration.DAGU_URL.replace(/\/+$/, ""), DAGU_HOME: declaration.DAGU_HOME, PATH: declaration.PATH };
+  return { DAGU_URL: url.origin, DAGU_HOME: resolve(declaration.DAGU_HOME), PATH: declaration.PATH };
 }
 
 export function serviceEnvironmentCommand(args: string[]): void {

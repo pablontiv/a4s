@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -55,30 +56,29 @@ test("bootstrap detect rejects a protected run-spec route even if queue readines
       git: '#!/bin/sh\nprintf "%s\\n" "$PRIMARY"\n',
       gh: '#!/bin/sh\ncase "$*" in *nameWithOwner*) echo fixture/repo;; *"repo view"*) echo repo;; esac\n',
       dagu: "#!/bin/sh\nexit 0\n",
-      a4s: "#!/bin/sh\nexit 0\n",
+      a4s: `#!/bin/sh\nif [ "$1" = service-environment ]; then exec '${process.execPath}' --import '${import.meta.resolve("tsx")}' '${join(packageDir, "src/cli.ts")}' "$@"; fi\nexit 0\n`,
     };
     for (const [tool, script] of Object.entries(scripts)) {
       writeFileSync(join(bin, tool), script);
       chmodSync(join(bin, tool), 0o755);
     }
+    const env = stationEnvironment({ ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: root, A4S_BIN: join(bin, "a4s"), DAGU_HOME: root, DAGU_PORT: String(address.port), DAG_RUN_ID: "bootstrap fixture", DAGU_OUTPUT_FILE: join(root, "outputs") });
     const before = readdirSync(root).sort();
     const result = await promisify(execFile)("bash", ["-c", bootstrap().steps.find(step => step.id === "detect")!.run!], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: root, A4S_BIN: join(bin, "a4s"), DAGU_HOME: root,
-        DAGU_PORT: String(address.port), DAG_RUN_ID: "bootstrap fixture", DAGU_OUTPUT_FILE: join(root, "outputs") },
+      env,
     }).then(() => assert.fail("protected run-spec route accepted"), error => ({ code: error.code, stderr: String(error.stderr) }));
     assert.equal(result.code, 1);
     assert.match(result.stderr, /401/);
     assert.match(result.stderr, /bootstrap detect: unauthenticated loopback Dagu run-spec API is not reachable/);
     assert.ok(result.stderr.includes(`${root}/config.yaml`));
     assert.match(result.stderr, /auth.mode: none and coordinator.enabled: true/);
-    assert.match(result.stderr, /restart the Dagu service and retry bootstrap/);
+    assert.match(result.stderr, /station safe activation policy and retry bootstrap/);
     assert.deepEqual(requests, ["GET /api/v1/dag-runs/dagu-feature-bootstrap/bootstrap%20fixture/spec"]);
     assert.deepEqual(readdirSync(root).sort(), before);
     status = 200;
     const probe = bootstrap().steps.find(step => step.id === "detect")!.run!.split("base=${BASE_BRANCH:")[0]!;
     await promisify(execFile)("bash", ["-c", probe], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: root, A4S_BIN: join(bin, "a4s"), DAGU_HOME: root,
-        DAGU_PORT: String(address.port), DAG_RUN_ID: "bootstrap fixture" },
+      env,
     });
     assert.equal(requests.length, 2);
     assert.equal(requests[1], requests[0]);

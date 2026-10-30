@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -84,26 +85,19 @@ async function stage(root: string, result: "blocked" | "completed"): Promise<{ c
   const address = server.address();
   const port = address && typeof address === "object" ? address.port : 0;
   const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), cli, "stage", "implement"], {
-    env: {
-      ...process.env,
-      PATH: `${bin}:${process.env.PATH}`,
-      PRIMARY: repo,
-      WORKTREE: repo,
-      DAGU_HOME: home,
-      RUN: run,
-      ISSUE: "189",
-      DAGU_URL: `http://127.0.0.1:${port}`,
-      DAGU_OUTPUT_FILE: output,
-      A4S_TEST_STEP_OUTPUT: output,
-      DAG_RUN_STEP_NAME: "implement",
-      DAG_RUN_STEP_STDOUT_FILE: join(root, "step-stdout"),
-      DAG_RUN_LOG_FILE: join(root, "step-log"),
-      DAG_PUSHBACK_ITERATION: "0",
-      // omp is the fake executable on bin; no source runtime or Bun is selected.
-      A4S_ROLE_RESULT: result === "blocked" ? "blocked" : "completed",
-      A4S_ROLE_BRIDGE_SOCKET: join("/tmp", `a4s-bridge-${process.pid}-${result}.sock`),
-      A4S_ROLE_BRIDGE_READY: join(root, `bridge-${result}`),
-    },
+    env: stationEnvironment({ ...process.env, PATH: `${bin}:${process.env.PATH}`, PRIMARY: repo, WORKTREE: repo, DAGU_HOME: home, RUN: run,
+    ISSUE: "189",
+    DAGU_URL: `http://127.0.0.1:${port}`,
+    DAGU_OUTPUT_FILE: output,
+    A4S_TEST_STEP_OUTPUT: output,
+    DAG_RUN_STEP_NAME: "implement",
+    DAG_RUN_STEP_STDOUT_FILE: join(root, "step-stdout"),
+    DAG_RUN_LOG_FILE: join(root, "step-log"),
+    DAG_PUSHBACK_ITERATION: "0",
+    // omp is the fake executable on bin; no source runtime or Bun is selected.
+    A4S_ROLE_RESULT: result === "blocked" ? "blocked" : "completed",
+    A4S_ROLE_BRIDGE_SOCKET: join("/tmp", `a4s-bridge-${process.pid}-${result}.sock`),
+    A4S_ROLE_BRIDGE_READY: join(root, `bridge-${result}`), }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";

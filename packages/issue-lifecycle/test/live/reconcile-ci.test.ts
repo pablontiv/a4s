@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -184,13 +185,13 @@ else if(a[0]==='human-task') {
   writeFileSync(join(state, "identity"), identity);
   writeFileSync(git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
   writeFileSync(join(state, "base"), git(primary, "rev-parse", "HEAD") + "\n");
-  const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: join(root, "dagu-home"), LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") };
+  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_HOME: join(root, "dagu-home"), LC_ALL: "C", PATH: `${bin}:${process.env.PATH}`, PRIMARY: primary, WORKTREE: worktree, BRANCH: branch, ISSUE: "226", RUN: run, PR_NUMBER: "", BASE_BRANCH: "main", GATE: "true", OMP_SESSION_ID: "ci226-owner", CI_REMOTE: remote, CI_CONTROL: control, CI_CALLS: calls, DAGU_OUTPUT_FILE: join(root, "outputs") });
   env.CODE_SCANNING = "off";
   env.CODEQL_SECURITY_THRESHOLD = "high_or_higher";
   env.CODEQL_ALERTS_THRESHOLD = "errors";
   env.IMPLEMENTER = "ImplementTest";
   const artifact = compiledArtifact(env.DAGU_HOME!);
-  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, env.DAGU_HOME!, run, reconcileSnapshot(artifact, ciBlocked), artifact)));
+  writeFileSync(join(state, "receipt.json"), JSON.stringify(roleAdmission(primary, env.DAGU_HOME!, run, reconcileSnapshot(artifact, ciBlocked, env), artifact)));
   delete env.DAGU_PARAMS_JSON;
   return { root, primary, remote, worktree, bin, branch, control, calls, state, env, base: git(primary, "rev-parse", "HEAD") };
 }

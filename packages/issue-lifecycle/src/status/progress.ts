@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { join } from "node:path";
 import {
   BUNDLE_VERSION,
@@ -102,7 +102,7 @@ const loadedCommit = loadedIdentity?.version === BUNDLE_VERSION ? loadedIdentity
 // state.json is atomically replaced; notices never execute through a resource link.
 function installedBundleIdentity(): ReleaseIdentity | undefined {
   try {
-    const root = stationRoot(process.env.DAGU_HOME ?? join(homedir(), ".dagu"));
+    const root = stationRoot(readServiceEnvironment().DAGU_HOME);
     const state = validateState(JSON.parse(readFileSync(join(root, "state.json"), "utf8")));
     const identity = readReleaseIdentity(join(root, state.current.version));
     return identity?.version === state.current.version && identity.commit === state.current.commit ? identity : undefined;

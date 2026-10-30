@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { recordRunObservation, receiptCompatibility } from "./receipt.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { execFile } from "node:child_process";
@@ -275,7 +276,7 @@ function isTimeout(error: unknown): boolean {
 async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void, view: WidgetView, storage: NoticeStorage): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
-  const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
+  const base = readServiceEnvironment().DAGU_URL;
   if (ctx.agent.kind === "main") void watchNotices(base, repo, ctx, signal, wake, storage).catch(() => {});
   const runs = new Map<string, RunDetails>();
   const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined,

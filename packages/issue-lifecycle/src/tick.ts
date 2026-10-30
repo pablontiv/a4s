@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseAllDocuments } from "yaml";
 import { packageRoot } from "./executable.ts";
@@ -12,7 +13,9 @@ import { isRecord } from "../../launcher/src/type-guard.ts";
 /** This process stays on the launcher's tick tuple even when promote commits a successor. */
 export async function tick(args: string[]): Promise<void> {
   if (args.length || !process.env.DAG_RUN_ID || !process.env.A4S_BIN || !process.env.A4S_ARTIFACT) throw new Error("tick requires a launcher-bound Dagu run");
-  const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
+  const service = readServiceEnvironment();
+  Object.assign(process.env, service);
+  const home = service.DAGU_HOME;
   process.env.CI_OBSERVATION_ID = process.env.DAG_RUN_ID;
   console.log(`tick=${process.env.DAG_RUN_ID} artifact=${process.env.A4S_ARTIFACT}`);
   console.log(JSON.stringify(await promote(home)));

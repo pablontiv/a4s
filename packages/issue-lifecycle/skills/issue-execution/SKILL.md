@@ -74,7 +74,7 @@ flowchart LR
   or provision repository-specific gate tools.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
-- Select the same `A4S_SERVICE_ENV` declaration as the service. Any explicit `DAGU_HOME` or `DAGU_URL` in your shell must match it; `a4s service-environment` reports the validated values or field-specific operator actions. Do not infer them from a user home, service label or default port. Other endpoint/home clients still require those explicit matching values until their separate cutover.
+- Select the same `A4S_SERVICE_ENV` declaration as the service. Any explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` in your shell must match it; `a4s service-environment` reports the validated values or field-specific operator actions. All clients and fresh DAG snapshots use this source; there is no user-home or default-port fallback. Only fresh admissions from new immutable releases receive this cutover. Existing snapshots, receipts, bindings and releases remain unchanged; run-bound helpers reject declaration changes rather than retargeting a run.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Node for the real filesystem gate preload. Kernel advisory locks are native
   in the compiled release; Python `fcntl` is a source-development fallback only.
@@ -148,7 +148,7 @@ conflicting environment value appears in `ROLE_JOB_CAPACITY` dispatch diagnostic
 An operator changes the policy in the station's canonical home with:
 
 ```sh
-DAGU_HOME="$HOME/.dagu" a4s role-jobs capacity 6
+A4S_SERVICE_ENV="<absolute-station-declaration.json>" a4s role-jobs capacity 6
 ```
 
 Use the actual service's `DAGU_HOME` and the desired positive integer. The command
@@ -231,8 +231,8 @@ See [operator cutover](../../../../docs/operations/deployment.md#identity-and-ad
 
 ## Global history retention
 
-The operator chooses history retention in `$DAGU_HOME/base.yaml` (default
-`~/.dagu/base.yaml`); the source example uses `hist_retention_days: 30`. Feature, PoC and
+The operator chooses history retention in the declared `$DAGU_HOME/base.yaml`;
+the source example uses `hist_retention_days: 30`. Feature, PoC and
 planning inherit that horizon. After Dagu's retention cleanup, runs older
 than thirty days are no longer queryable through `dagu history` or available
 for `dagu retry`. Preserve evidence needed for longer outside the run
@@ -452,7 +452,7 @@ Resolution order for the host reference:
 
 1. `$DAGU_HOME/primaries/<workspace>` when that file exists. `<workspace>` is the render's `workspace=` label. The file contains one absolute path. Use this when one scheduler serves more than one checkout.
 2. `A4S_PRIMARY` in the process environment. This is the station checkout. The scheduler environment must set it when durable renders are started directly.
-3. `$DAGU_HOME/a4s-primary`, one absolute path. `DAGU_HOME` defaults to `~/.dagu`.
+3. `$DAGU_HOME/a4s-primary`, one absolute path in the explicitly declared station home.
 
 A JSON absolute path already recorded in a render or run spec stays that checkout. The resolved path is the main checkout, not a linked worktree. Worktrees stay `$PRIMARY/.workspace/worktrees/...`.
 
@@ -560,7 +560,7 @@ a4s enqueue \
   OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-`snapshot` prints `out_dir`, `sha`, and `snapshot`. The persistent directory is `${DAGU_HOME:-$HOME/.dagu}/data/discovery/<owner>__<repo>/<run-id>/`; its detached `snapshot/` worktree is read-only.
+`snapshot` prints `out_dir`, `sha`, and `snapshot`. The persistent directory is `$DAGU_HOME/data/discovery/<owner>__<repo>/<run-id>/` under the declared home; its detached `snapshot/` worktree is read-only.
 
 | `human.task` | Coordinator artifact |
 |---|---|
@@ -593,8 +593,7 @@ a4s prioritize feature <repo>-issue-<n>
 # Or: a4s prioritize poc <repo>-poc-<run>
 ```
 
-Use the service's `DAGU_HOME` and `DAGU_URL` (default
-`http://127.0.0.1:8080`). The command requires the retained definition's explicit
+Select the service's `A4S_SERVICE_ENV` declaration. The command requires the retained definition's explicit
 repository queue and native `maxConcurrency=1`. It reads native head-to-tail queue
 pages and captures every queued run's original ID, parameters and per-run
 `/api/v1/dag-runs/<dag>/<run>/spec` bytes before dequeue. It keeps the urgent run
@@ -1382,9 +1381,9 @@ successful gate does the step check that the worktree is clean and record the
 tested SHA.
 
 Before any candidate, branch or clean-state checks, `gate` acquires the station's
-single heavy-test slot at `$DAGU_HOME/a4s/heavy-slot.lock` (default home
-`~/.dagu`). Every clone, worktree, operator shell and agent session on a station
-must use the service's same canonical `DAGU_HOME`. This path is independent of
+single heavy-test slot at the declared `$DAGU_HOME/a4s/heavy-slot.lock`. Every
+clone, worktree, operator shell and agent session on a station must select the
+same `A4S_SERVICE_ENV` declaration and canonical home. This path is independent of
 Git metadata. The compiled `a4s heavy-slot` helper holds an inheritable
 kernel lock through the complete Bash body, GATE, post-checks and tested-SHA
 publication. Every gate entry path shares this boundary: completion,
@@ -1407,8 +1406,8 @@ DAGU_HOME="<service-home>" A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/
 All three lifecycle test lanes load `test/fixtures/dagu-home.mjs` before test
 modules. It replaces inherited `HOME` and `DAGU_HOME` with a fresh private
 temporary directory per test process and removes that directory on exit.
-Fixtures and subprocesses use isolated homes, including children that omit
-`DAGU_HOME` and fall back to `~/.dagu`, never the ambient station's artifact
+Fixtures and subprocesses use explicitly declared isolated stations, never the
+ambient station's artifact
 cache. The native wrapper acquires
 the inherited station-wide lock before this preload; that orchestration lock is
 the single explicit exception outside the test process. Do not wrap the npm

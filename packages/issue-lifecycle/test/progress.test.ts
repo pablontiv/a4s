@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import test from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -503,7 +504,7 @@ test("runtime primary resolves the enqueued host binding through its workspace m
   const home = mkdtempSync(join(tmpdir(), "run-primary-"));
   const primary = join(home, "Repo con espacio", "ñ");
   const previous = { DAGU_HOME: process.env.DAGU_HOME, A4S_PRIMARY: process.env.A4S_PRIMARY };
-  process.env.DAGU_HOME = home;
+  t.after(useStation(home));
   process.env.A4S_PRIMARY = join(home, "fallback");
   t.after(() => {
     for (const [key, value] of Object.entries(previous)) {

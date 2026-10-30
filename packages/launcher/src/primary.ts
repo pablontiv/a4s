@@ -1,5 +1,6 @@
+import { readServiceEnvironment } from "./service-environment.ts";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+
 import { isAbsolute, join } from "node:path";
 
 /**
@@ -11,7 +12,7 @@ import { isAbsolute, join } from "node:path";
  * 1. `$DAGU_HOME/primaries/<workspace>` when the render's `workspace=` label
  *    names an existing one-line absolute path (multi-checkout schedulers).
  * 2. `A4S_PRIMARY` in the process environment (the station checkout).
- * 3. `$DAGU_HOME/a4s-primary`, one absolute path (`DAGU_HOME` defaults to `~/.dagu`).
+ * 3. `$DAGU_HOME/a4s-primary`, one absolute path in the declared station home.
  *
  * A recorded absolute path stays that checkout. The resolved path is the main
  * checkout; worktrees stay `$PRIMARY/.workspace/worktrees/...`.
@@ -26,7 +27,7 @@ export function workspaceLabel(text: string): string | undefined {
 }
 
 function stationHome(env: NodeJS.ProcessEnv): string {
-  return env.DAGU_HOME || join(homedir(), ".dagu");
+  return readServiceEnvironment(env).DAGU_HOME;
 }
 
 function readPathFile(file: string): string | undefined {

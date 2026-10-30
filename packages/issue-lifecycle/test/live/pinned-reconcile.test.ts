@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -41,7 +42,7 @@ test("a B-pinned live tick dispatches A and B and leaves an unavailable artifact
   const port = address.port;
   await new Promise<void>(resolve => socket.close(() => resolve()));
   const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_")));
-  Object.assign(env, { DAGU_HOME: home, DAGU_PORT: String(port), DAGU_URL: `http://127.0.0.1:${port}`, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" });
+  Object.assign(env, stationEnvironment({ ...env, DAGU_HOME: home, DAGU_PORT: String(port), DAGU_URL: `http://127.0.0.1:${port}`, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }));
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nqueues:\n  enabled: true\n  config:\n    - name: pinned-fixture\n      max_concurrency: 8\n`);
   const a = compiledArtifact(home, "0.6.1", "a".repeat(40));
   const b = compiledArtifact(home, "0.6.2", "b".repeat(40));

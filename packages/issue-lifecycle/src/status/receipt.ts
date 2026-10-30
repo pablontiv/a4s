@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+
 import { loadedExtensionDigest, receiptPath } from "../admission.ts";
 import { assertArtifactReceipt } from "../artifact-receipt.ts";
 import { invokeRun } from "../run-artifact.ts";
@@ -12,7 +13,7 @@ export function receiptCompatibility(primary: string, run: RunDetails): string |
     const path = receiptPath(primary, run.dagRunId);
     const receipt: unknown = JSON.parse(readFileSync(path, "utf8"));
     assertArtifactReceipt(receipt, path);
-    if (!existsSync(join(process.env.DAGU_HOME || join(homedir(), ".dagu"), "cache", "a4s", receipt.artifact.version, "artifact.json"))) throw new Error(`Cached artifact ${receipt.artifact.version} unavailable`);
+    if (!existsSync(join(readServiceEnvironment().DAGU_HOME, "cache", "a4s", receipt.artifact.version, "artifact.json"))) throw new Error(`Cached artifact ${receipt.artifact.version} unavailable`);
     return undefined;
   } catch (error) { return error instanceof Error ? error.message : String(error); }
 }

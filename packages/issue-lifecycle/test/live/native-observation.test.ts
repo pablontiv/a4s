@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -80,7 +81,7 @@ steps:
         const start = Date.now();
         const { promise, resolve, reject } = Promise.withResolvers<{ code: number | null; output: string }>();
         const child = spawn("dagu", ["start", "--config", config, "--run-id", scenario.name, dag], {
-          env: { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" },
+          env: stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" }),
         });
         let output = "";
         child.stdout.on("data", b => { output += b; }); child.stderr.on("data", b => { output += b; });

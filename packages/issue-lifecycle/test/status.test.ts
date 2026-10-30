@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { useStation } from "./fixtures/service-environment.ts";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
@@ -78,8 +79,7 @@ test("validation wait is displayed to the operator with current approval command
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  const previous = process.env.DAGU_URL;
-  process.env.DAGU_URL = `http://127.0.0.1:${address.port}`;
+  const restoreStation = useStation(process.env.DAGU_HOME!, `http://127.0.0.1:${address.port}`);
   const messages: Array<{ display?: boolean; content?: string }> = [];
   const handlers: Record<string, (event: unknown, context: typeof ctx) => void> = {};
   const ctx = {
@@ -107,7 +107,7 @@ test("validation wait is displayed to the operator with current approval command
     assert.match(messages[0]!.content!, /Isolated smoke/);
   } finally {
     handlers.session_shutdown!(null, ctx);
-    if (previous === undefined) delete process.env.DAGU_URL; else process.env.DAGU_URL = previous;
+    restoreStation();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
   }

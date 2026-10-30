@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -67,9 +68,9 @@ test("native GC preserves admissions, exact replay, cursor history and bindings 
     writeFileSync(join(primary, ".workspace/dagu/config.json"), serializeConfig(exampleConfig({ lane: "fixture" })));
     git("add", "."); git("commit", "-qm", "fixture policy");
     const httpPort = await port(), url = `http://127.0.0.1:${httpPort}`;
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, DAGU_HOME: home, DAGU_URL: url, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false", A4S_PRIMARY: primary, A4S_FIXTURE_RELEASES: releases, PATH: `${bin}:${process.env.PATH}` };
+    const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, HOME: root, DAGU_HOME: home, DAGU_URL: url, DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false", A4S_PRIMARY: primary, A4S_FIXTURE_RELEASES: releases, PATH: `${bin}:${process.env.PATH}` });
     for (const key of ["DAGU_QUEUE_DISPATCH_RETRY", "DAG_PUSHBACK_ITERATION", "DAGU_OUTPUT_FILE", "DAG_RUN_ID", "DAG_NAME", "RUN", "PRIMARY", "A4S_ARTIFACT", "A4S_BIN"]) delete env[key];
-    Object.assign(process.env, { DAGU_HOME: home, DAGU_URL: url, A4S_PRIMARY: primary, A4S_FIXTURE_RELEASES: releases, PATH: env.PATH });
+    Object.assign(process.env, { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV, DAGU_HOME: home, DAGU_URL: url, A4S_PRIMARY: primary, A4S_FIXTURE_RELEASES: releases, PATH: env.PATH });
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
     writeFileSync(join(home, "a4s-primary"), `${primary}\n`);
     // The native admission's tick payload is a real compiled version invocation:

@@ -528,7 +528,9 @@ artifact. The legacy stamp parser/inference paths MUST be removed at cutover.
 ## Pinned station reconciliation (I4)
 
 The operator installs `packages/launcher/reconcile.yaml`: one scheduled step,
-`a4s tick`, with no A4S_BIN/A4S_ARTIFACT/version literal. The launcher selects
+`a4s tick`, with no A4S_BIN/A4S_ARTIFACT/version literal. Dagu does not forward
+`A4S_*` service variables to steps, so the operator's installed copy adds one
+DAG-level `env` entry, `A4S_SERVICE_ENV: <absolute declaration>`. The launcher selects
 `state.current` for a fresh tick only after native Dagu confirms its first
 attempt, and durably writes `ticks/<dagRunId>.json` =
 `{dagRunId, tuple, createdAt}` under the state lock before exec. Retry reads that

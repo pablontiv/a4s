@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
 import { receiptPath } from "../admission.ts";
@@ -25,8 +26,9 @@ const execute = deps.spawnSync ?? spawnSync;
 const verifyReceipt = deps.receiptArtifact ?? receiptArtifact;
 const log = deps.log ?? console.log;
 const reportError = deps.error ?? console.error;
-const base = (env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
-const home = resolve(env.DAGU_HOME || join(homedir(), ".dagu"));
+const service = readServiceEnvironment(env);
+const base = service.DAGU_URL;
+const home = resolve(service.DAGU_HOME);
 
 async function get(path: string): Promise<Record<string, unknown>> {
   const response = await fetch(`${base}/api/v1/${path}`, { signal: AbortSignal.timeout(10000) });
@@ -66,7 +68,7 @@ async function items(queue: string): Promise<Run[]> {
 const key = (entry: Run) => JSON.stringify([entry.name, entry.dagRunId]);
 const order = (entries: Run[]) => JSON.stringify(entries.map(key));
 function native(args: string[]): void {
-  const result = execute("dagu", args, { encoding: "utf8" });
+  const result = execute("dagu", args, { encoding: "utf8", env: { ...env, ...service } });
   if (result.status !== 0) throw new Error(`dagu ${args[0]}: ${result.error?.message || result.stderr.trim() || `exit=${result.status} signal=${result.signal}`}`);
 }
 async function originalParams(entry: Run, source: string): Promise<string[]> {

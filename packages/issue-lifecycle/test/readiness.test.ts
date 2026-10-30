@@ -111,8 +111,8 @@ test("bootstrap uses its release-bound launcher reader and shares failure diagno
   const definition = parse(bootstrap);
   const detect = definition.steps.find((step: { id: string }) => step.id === "detect").run as string;
   assert.ok(detect.includes('service_environment=$("$A4S_BIN" service-environment)'));
-  assert.ok(detect.includes('spec_url="$service_url/api/v1/dag-runs/'));
-  assert.ok(detect.includes('"$spec_url" "$service_home"'));
+  assert.ok(detect.includes('spec_url="$DAGU_URL/api/v1/dag-runs/'));
+  assert.ok(detect.includes('"$spec_url" "$DAGU_HOME"'));
   assert.doesNotMatch(detect, /DAGU_PORT|HOME\/\.dagu|A4S_SERVICE_ENV|launchctl|plutil|\/proc|checkout/);
   const old = process.env.A4S_SERVICE_ENV;
   delete process.env.A4S_SERVICE_ENV;

@@ -21,12 +21,19 @@ def main():
             with open(os.environ["A4S_GATE_JOURNAL"], "a") as journal:
                 journal.write(json.dumps({"id": "lock_wait", "endedAt": time.time_ns() // 1000000, "exitCode": 0}) + "\n")
 
+    # Resolve through the launcher-owned reader, never parse a second contract.
+    package = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    reader = ([os.environ["A4S_BIN"]] if os.environ.get("A4S_BIN") else
+              ["node", "--import", "tsx", os.path.join(package, "src", "cli.ts")])
+    service = json.loads(subprocess.check_output(
+        [*reader, "service-environment"], cwd=package, text=True))
+    os.environ.update(service)
+    home = service["DAGU_HOME"]
     if os.environ.get("A4S_HEAVY_SLOT_HELD") == "1":
         print("slot: reenter marker=A4S_HEAVY_SLOT_HELD", file=sys.stderr, flush=True)
         acquired()
         os.execvp(body[0], body)
 
-    home = os.environ.get("DAGU_HOME") or os.path.expanduser("~/.dagu")
     path = os.path.join(os.path.abspath(home), "a4s", "heavy-slot.lock")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)

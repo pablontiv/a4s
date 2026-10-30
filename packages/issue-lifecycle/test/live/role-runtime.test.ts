@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -25,7 +26,7 @@ steps:
   - id: detect
     run: ${JSON.stringify(`${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(cli)} detect > ${JSON.stringify(output)}`)}
 `);
-    execFileSync("dagu", ["start", dag], { env: { ...process.env, DAGU_HOME: join(root, "home"), DAGU_COORDINATOR_ENABLED: "false" }, encoding: "utf8", timeout: 25_000, stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("dagu", ["start", dag], { env: stationEnvironment({ ...process.env, DAGU_HOME: join(root, "home"), DAGU_COORDINATOR_ENABLED: "false" }), encoding: "utf8", timeout: 25_000, stdio: ["ignore", "pipe", "pipe"] });
     assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), { root: realpathSync(join(root, "bin/omp")), agents: [
       { name: "triage-reviewer", source: join(packageRoot, "agents/triage-reviewer.md") }, { name: "task", source: `fixture:${root}` },
     ] });

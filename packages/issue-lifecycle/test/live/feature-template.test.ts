@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -265,7 +266,7 @@ test("maintained close completes without inspecting changed files or re-sealing 
 });
 
 function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
-  return {
+  return stationEnvironment({
     HOME: process.env.HOME,
     // Node's socket-backed stdin must not turn isolated Bash children into remote-login shells.
     SHLVL: "1",
@@ -288,7 +289,7 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
     SUMMARY: "Delivered files",
     MESSAGE: "feat: delivered change",
     IMPLEMENTER: "ImplementTest",
-  };
+  });
 }
 
 function runFailingCloseGate(script: string, repo: Repository) {
@@ -520,7 +521,7 @@ for (const live of [false, true]) {
         const file = join(repo.root, "retained-smoke.yaml");
         writeFileSync(file, "name: retained-smoke\ntype: graph\nshell: bash\nenv:\n" + Object.entries(env).filter(([, value]) => value !== undefined).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("") + "steps:\n" + scripts.map((script, index) =>
           `  - id: phase${index}\n${index ? `    depends: phase${index - 1}\n` : ""}    run: |\n${script.split("\n").map(line => "      " + line).join("\n")}\n${index === 3 ? "    outputs:\n      - name: tested_sha\n" : ""}`).join(""));
-        execFileSync("dagu", ["start", "--run-id", env.RUN!, file], { cwd: repo.root, env: { ...process.env, ...env, DAGU_HOME: home }, stdio: "pipe" });
+        execFileSync("dagu", ["start", "--run-id", env.RUN!, file], { cwd: repo.root, env: stationEnvironment({ ...process.env, ...env, DAGU_HOME: home }), stdio: "pipe" });
       } else {
         for (const script of scripts) runScript(script, repo, env);
       }
@@ -653,7 +654,7 @@ printf '%s\\n' "a4s $arguments" >> ${JSON.stringify(calls)}
       + source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n"))
       + `steps:\n  - id: triage\n    run: |\n      printf '%s\\n' 'POC=yes' 'QUESTION=runtime behavior' 'BASIS=regression test' 'REVIEW=' 'REQUIRED_TARGETS=["linux-arm64"]' 'AUTHORIZED_TARGETS=["linux-arm64"]' 'SCOPE_BASIS=regression test authorized linux-arm64' >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n      - name: QUESTION\n      - name: BASIS\n      - name: REVIEW\n      - name: REQUIRED_TARGETS\n      - name: AUTHORIZED_TARGETS\n      - name: SCOPE_BASIS\n`
       + source.slice(source.indexOf("  - id: triage_decision\n")));
-    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const env = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" });
     const result = spawnSync("dagu", ["start", "--run-id", run, dag], {
       encoding: "utf8", timeout: 45_000, env,
     });
@@ -1532,14 +1533,14 @@ esac
           ...(step.id === "triage" ? { outputs: [{ name: "POC" }] }
             : step.id === "checkpoint_push" ? { outputs: [{ name: "INTEGRATED" }] } : {}),
         });
-        const env: NodeJS.ProcessEnv = { ...fixture.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(fixture.port) };
+        const env: NodeJS.ProcessEnv = stationEnvironment({ ...fixture.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(fixture.port) });
         // Native Dagu, not the direct-shell helper, owns each step's output sink.
         delete env.DAGU_OUTPUT_FILE;
         const file = join(home, "dags", "feature.yaml");
         writeFileSync(file, stringify({
           name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
           params: [{ ISSUE: "189" }, { PR_NUMBER: "" }, { OMP_SESSION_ID: "integration-test-owner" }],
-          env: [...Object.entries({ ...featureScriptEnv(repo), DAGU_HOME: home })
+          env: [...Object.entries(env)
             .filter((entry): entry is [string, string] => entry[0] !== "DAGU_OUTPUT_FILE" && entry[1] !== undefined)
             .map(([key, value]) => ({ [key]: value })),
           { DAGU_RESOURCE_GUARD: source.env.find(entry => "DAGU_RESOURCE_GUARD" in entry)!.DAGU_RESOURCE_GUARD },
@@ -2109,7 +2110,7 @@ for (const [name, definition] of definitions) {
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    const env: NodeJS.ProcessEnv = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" };
+    const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" });
     let serviceLog = "";
     const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
       cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -2241,7 +2242,7 @@ test("native terminal replacement captures retained and nonempty correction", {
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" };
+  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", OMP_SESSION_ID: "retained-owner" });
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -2383,7 +2384,7 @@ test("real Dagu retries rebase after a six-second index lock", {
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
-  const env = { ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+  const env = stationEnvironment({ ...process.env, ...featureScriptEnv(repo), DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" });
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: repo.root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -2517,6 +2518,11 @@ type RecoveryFixture = {
   close: () => Promise<void>;
 };
 
+/** The running fixture Dagu's declaration; Dagu forwards no A4S_* variable, so native DAG env must carry it. */
+function declaredStation(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { A4S_SERVICE_ENV: env.A4S_SERVICE_ENV, DAGU_HOME: env.DAGU_HOME, DAGU_URL: env.DAGU_URL };
+}
+
 async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   const suffix = testRunId("recovery");
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
@@ -2528,7 +2534,7 @@ async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
-  const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+  const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
   // Fixture CLI retries are user requests; its scheduler supplies dispatch context.
   delete env.DAGU_QUEUE_DISPATCH_RETRY;
   delete env.DAG_PUSHBACK_ITERATION;
@@ -2605,7 +2611,7 @@ for (const [name, definition] of definitions) {
       writeFileSync(gateOutput, "FAIL persistent candidate defect\n");
       const script = stringify({
         name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
-        env: { A4S_BIN: a4sBin, PRIMARY: repo.primary, WORKTREE: repo.worktree,
+        env: { A4S_BIN: a4sBin, A4S_SERVICE_ENV: fixture.env.A4S_SERVICE_ENV, DAGU_URL: fixture.env.DAGU_URL, DAGU_HOME: fixture.home, PATH: fixture.env.PATH, PRIMARY: repo.primary, WORKTREE: repo.worktree,
           BRANCH: repo.branch, ISSUE: "189", RUN: "${context.run.id}", OMP_SESSION_ID: "recovery-owner",
           DAGU_PORT: String(fixture.port), ESCALATION_PUSHBACKS: "2", ESCALATION_FINDINGS: "2", ESCALATION_SECONDS: "3600" },
         steps: [
@@ -2695,7 +2701,7 @@ esac
     const script = [
       "type: graph\nshell: bash\nmax_active_steps: 1\n",
       `params:\n  - ISSUE: "189"\n  - PR_NUMBER: ""\n  - OMP_SESSION_ID: recovery-owner\n`,
-      `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - VALIDATION: ""\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n`,
+      `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n  - PRIMARY: ${JSON.stringify(repo.primary)}\n  - BASE_BRANCH: main\n  - VALIDATION: ""\n  - BRANCH: dagu/issue-\${ISSUE}\n  - GATE: test -f required.txt\n  - REQUIRED_CHECK: validate\n  - PATH: ${bin}:${process.env.PATH}\n  - WORKTREE: ${repo.worktree}\n  - RUN: \${context.run.id}\n  - DAGU_FEATURE_BUNDLE: test\n  - DAGU_PORT: "${fixture.port}"\n  - A4S_SERVICE_ENV: ${JSON.stringify(env.A4S_SERVICE_ENV)}\n  - DAGU_URL: ${JSON.stringify(env.DAGU_URL)}\n  - DAGU_HOME: ${JSON.stringify(home)}\n`,
       source.slice(source.indexOf("  - DAGU_RESOURCE_GUARD: |"), source.indexOf("steps:\n")),
       "steps:\n",
       `  - id: triage\n    run: |\n      mkdir -p "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")"\n      echo POC=no >> "$DAGU_OUTPUT_FILE"\n    outputs:\n      - name: POC\n`,
@@ -3027,7 +3033,7 @@ for (const [name, definition] of [definitions[0]]) {
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
-    const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" });
     const binary = execFileSync("which", ["dagu"], { encoding: "utf8" }).trim();
     t.diagnostic(`isolated Dagu binary=${binary} version=${liveDaguVersion} home=${home} port=${port}`);
     let serviceLog = "";
@@ -3155,7 +3161,7 @@ for (const [name, definition] of definitions) {
     const port = await freePort();
     const schedulerPort = await freePort();
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
-    const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" };
+    const env = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false" });
     let logs = "";
     const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
     service.stdout.on("data", data => { logs += data; });
@@ -3318,7 +3324,7 @@ for (const [name, definition] of definitions) {
     writeFileSync(join(state, "identity"), identity);
     writeFileSync(git(repo.worktree, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature-owner"), identity);
     const fixtureBin = join(repo.root, "role-bin"); mkdirSync(fixtureBin);
-    const env: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: join(fixtureBin, "a4s"), PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
+    const env: NodeJS.ProcessEnv = stationEnvironment({ ...process.env, A4S_BIN: join(fixtureBin, "a4s"), PATH: `${fixtureBin}:${process.env.PATH}`, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" });
     // This scheduler owns a new run's iteration independently of the parent role job.
     delete env.DAG_PUSHBACK_ITERATION;
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
@@ -3454,13 +3460,11 @@ test("adopted policy rejects run overrides before repository writes and admits o
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>(resolve => listener.close(() => resolve()));
-  const env = {
-    ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, A4S_PRIMARY: repo.primary,
-    GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
-    REBASE_RESOLVER: "printf adopted-resolver",
-    STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION,
-    DAGU_VERSION: liveDaguVersion, SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture",
-  };
+  const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), PRIMARY: repo.primary, A4S_PRIMARY: repo.primary,
+  GATE: "printf adopted-gate", REQUIRED_CHECK: "adopted-check", REPO: "fixture", BASE_BRANCH: "main",
+  REBASE_RESOLVER: "printf adopted-resolver",
+  STAGE: stage, TEST_PATHS: "test/", BUNDLE_NAME: "@a4s/issue-lifecycle", BUNDLE_VERSION,
+  DAGU_VERSION: liveDaguVersion, SOURCE_NWO: "fixture/repo", SOURCE_SHA: "1".repeat(40), DAG_RUN_ID: "bootstrap-fixture", });
   mkdirSync(join(home, "dags"), { recursive: true });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
   // Standalone starts still run the exit ownership guard, which reads enqueued
@@ -4154,7 +4158,7 @@ for (const [name, definition] of definitions) {
         validation.with.push_back.rewind_to = "implement";
         const push = structuredClone(source.steps.find((step: { id: string }) => step.id === "push"));
         push.depends = "validation";
-        const variables = { ...featureScriptEnv(repo), RUN: id, GATE: 'kill -TERM "$PPID"', VALIDATION: "" };
+        const variables = { ...featureScriptEnv(repo), ...declaredStation(runtime.env), RUN: id, GATE: 'kill -TERM "$PPID"', VALIDATION: "" };
         const dag = join(runtime.home, "dags", "feature.yaml");
         writeFileSync(dag, stringify({
           name: "feature", type: "graph", shell: "bash", max_active_steps: 1,
@@ -4197,7 +4201,7 @@ test("real Dagu gate timing retains failed automatic retry and every npm phase i
   const repo = repository(id);
   try {
     const gate = timedNpmGate(repo);
-    const variables = { ...featureScriptEnv(repo), RUN: id, GATE: gate };
+    const variables = { ...featureScriptEnv(repo), ...declaredStation(runtime.env), RUN: id, GATE: gate };
     const step = extractStep(readFileSync(definitions[0][1], "utf8"), "gate")
       .replace("    depends: conflict_review_cancellation\n", "");
     const dag = join(runtime.home, "dags", "feature.yaml");

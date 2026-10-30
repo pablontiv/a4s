@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -48,7 +49,7 @@ test(`Dagu ${liveDaguVersion} preserves CLI/storage contracts, the SSE boundary 
   const home = join(root, "home");
   const port = await freePort();
   const schedulerPort = await freePort();
-  const env = { ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_PARAMS_JSON: "{}" };
+  const env = stationEnvironment({ ...process.env, DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_PARAMS_JSON: "{}" });
   const dagu = (...args: string[]) => execFileSync("dagu", args, { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const run = testRunId("runtime-compat");
   const staleRun = testRunId("native-stale");

@@ -25,6 +25,10 @@ params:
       type: string
       default: ""
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - PRIMARY: __PRIMARY__
   - BASE_BRANCH: TEMPLATE_BASE_BRANCH
   - VALIDATION: __VALIDATION__
@@ -71,7 +75,7 @@ env:
           printf '%s\n' "$value"
           return 0
         fi
-        home=${DAGU_HOME:-$HOME/.dagu}
+        home=${DAGU_HOME:?explicit station home required}
         if [[ "$workspace" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$home/primaries/$workspace" ]]; then
           value=$(tr -d '\r\n' < "$home/primaries/$workspace")
         elif [[ -n ${A4S_PRIMARY:-} ]]; then
@@ -109,7 +113,7 @@ env:
             *) return 1 ;;
           esac
           if [[ "$candidate" == @snapshot ]]; then
-            spec=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$predecessor" '$run|@uri')/spec") || return 1
+            spec=$(curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/feature/$(jq -nr --arg run "$predecessor" '$run|@uri')/spec") || return 1
             candidate=$(jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson' <<<"$spec") || return 1
             workspace=$(jq -r '[.spec | split("\n")[] | select(startswith("  - workspace=")) | ltrimstr("  - workspace=")] | first // ""' <<<"$spec") || return 1
             candidate=$(resolve_primary_binding "$candidate" "$workspace") || return 1
@@ -211,7 +215,7 @@ env:
         fi
         while IFS=$'\t' read -r run status candidate branch issue; do
           if [[ "$candidate" == @snapshot ]]; then
-            spec=$(curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$(jq -nr --arg run "$run" '$run|@uri')/spec") ||
+            spec=$(curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/feature/$(jq -nr --arg run "$run" '$run|@uri')/spec") ||
               { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
             candidate=$(jq -er '.spec | split("\n")[] | select(startswith("  - PRIMARY: ")) | ltrimstr("  - PRIMARY: ") | fromjson' <<<"$spec") ||
               { printf 'dagu-feature: cannot resolve adopted primary for run %s\n' "$run" >&2; exit 1; }
@@ -2020,7 +2024,7 @@ handler_on:
                 if (( transition != 0 )); then
                   STATUS=$(dagu status feature --run-id "$RUN")
                   if grep -q "^Failed -" <<<"$STATUS" &&
-                     ATTEMPT=$(curl -fsS --max-time 10 --get "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/event-logs" --data-urlencode "dagName=feature" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
+                     ATTEMPT=$(curl -fsS --max-time 10 --get "${DAGU_URL:?explicit station endpoint required}/api/v1/event-logs" --data-urlencode "dagName=feature" --data-urlencode "dagRunId=$RUN" --data-urlencode "paginationMode=cursor" --data-urlencode "limit=1" | jq -er ".entries[0] | select(.type == \"dag.run.failed\" and .data.dag_run_status.error == \"process terminated unexpectedly - stale local process detected\") | .attemptId"); then
                     case "$STEP" in
                       dependency_review) RETRY=checkpoint_push ;;
                       conflict_review) RETRY=rebase ;;

@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -68,7 +69,7 @@ test("heavy-slot blocks on the Python-owned kernel lock and retains the reentry 
     const journal = join(home, "journal");
     let settled = false;
     const pending = execute(process.execPath, [...prefix, "heavy-slot", "--gate", "one", process.execPath, "-e", 'console.log(process.env.A4S_HEAVY_SLOT_HELD)'], {
-      env: { ...process.env, DAGU_HOME: home, A4S_HEAVY_SLOT_HELD: "", A4S_GATE_JOURNAL: journal },
+      env: stationEnvironment({ ...process.env, DAGU_HOME: home, A4S_HEAVY_SLOT_HELD: "", A4S_GATE_JOURNAL: journal }),
     });
     const child = pending.finally(() => { settled = true; });
     let resolve!: () => void;
@@ -84,7 +85,7 @@ test("heavy-slot blocks on the Python-owned kernel lock and retains the reentry 
     assert.match(result.stderr, /gate: acquired lock=/);
     const records = readFileSync(journal, "utf8").trim().split("\n").map(line => JSON.parse(line));
     assert.deepEqual(records.map(record => [record.id, record.exitCode]), [["lock_wait", 0]]);
-    const reentered = run(["heavy-slot", process.execPath, "-e", "process.exit(9)"], { ...process.env, A4S_HEAVY_SLOT_HELD: "1", DAGU_HOME: home });
+    const reentered = run(["heavy-slot", process.execPath, "-e", "process.exit(9)"], stationEnvironment({ ...process.env, A4S_HEAVY_SLOT_HELD: "1", DAGU_HOME: home }));
     assert.equal(reentered.status, 9);
     assert.match(reentered.stderr, /slot: reenter marker=A4S_HEAVY_SLOT_HELD/);
   } finally { holder.kill(); rmSync(home, { recursive: true, force: true }); }
@@ -95,9 +96,7 @@ test("the ported gate releases its flock on integration hold and reacquires for 
   try {
     const attempt = join(home, "attempt");
     const body = `const fs=require("node:fs"); const path=${JSON.stringify(attempt)}; if(!fs.existsSync(path)){fs.writeFileSync(path,"retry");process.exit(86)}console.log("retried")`;
-    const result = run(["heavy-slot", "--gate", "hold", process.execPath, "-e", body], {
-      ...process.env, DAGU_HOME: home, A4S_HEAVY_SLOT_HELD: "", A4S_INTEGRATION_POLL_SEC: "0",
-    });
+    const result = run(["heavy-slot", "--gate", "hold", process.execPath, "-e", body], stationEnvironment({ ...process.env, DAGU_HOME: home, A4S_HEAVY_SLOT_HELD: "", A4S_INTEGRATION_POLL_SEC: "0", }));
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, "retried\n");
     assert.equal(result.stderr.match(/gate: acquired lock=/g)?.length, 2);

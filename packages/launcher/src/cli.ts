@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { homedir } from "node:os";
-import { join } from "node:path";
+
 import { pathToFileURL } from "node:url";
 import { handoff, restoreArtifact } from "./select.ts";
 import { initializeStation, rollback } from "./station.ts";
@@ -13,12 +12,13 @@ declare const A4S_COMPILED: boolean;
 /** Operator-installed program, compiled independently of payload identity. */
 export async function main(args: string[]): Promise<void> {
   if (args[0] === "service-environment") return serviceEnvironmentCommand(args.slice(1));
-  const home = args[0] === "queue" ? readServiceEnvironment().DAGU_HOME
-    : process.env.DAGU_HOME || join(homedir(), ".dagu");
   if (args[0] === "launcher-version" && args.length === 1) {
     console.log(JSON.stringify({ launcherProtocol: LAUNCHER_PROTOCOL, stateSchemas: STATE_SCHEMAS }));
     return;
   }
+  const service = readServiceEnvironment();
+  Object.assign(process.env, service);
+  const home = service.DAGU_HOME;
   if (args[0] === "state" || args[0] === "rollback") {
     if (args.length !== 1) throw new Error(`Usage: a4s ${args[0]}`);
     console.log(JSON.stringify(await (args[0] === "state" ? readStationState(home) : rollback(home))));

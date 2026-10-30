@@ -1,3 +1,4 @@
+import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -92,7 +93,7 @@ function git(repo: string, ...args: string[]): string {
   return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 async function stageState(run: string): Promise<StageState> {
-  const endpoint = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+  const endpoint = readServiceEnvironment().DAGU_URL;
   const response = await fetch(`${endpoint}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Dagu role authorization HTTP ${response.status}`);
   const details = (await response.json() as { dagRunDetails: { nodes: NodeState[]; params: string } }).dagRunDetails;
@@ -151,7 +152,7 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
   const common = git(primary, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const state = join(common, "dagu-feature", "runs", run);
   const receiptPath = join(state, "receipt.json");
-  const home = realpathSync(process.env.DAGU_HOME || "");
+  const home = realpathSync(readServiceEnvironment().DAGU_HOME);
   const { receipt: verified } = await receiptArtifact(home, receiptPath);
   if (compiled) assertExecutingArtifact(verified.artifact);
   const receipt = verified as unknown as Receipt;

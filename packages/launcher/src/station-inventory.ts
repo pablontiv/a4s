@@ -1,7 +1,8 @@
+import { readServiceEnvironment } from "./service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import { homedir } from "node:os";
+
 import { DatabaseSync } from "node:sqlite";
 import { readCommittedConfig } from "./config.ts";
 import { isRecord } from "./type-guard.ts";
@@ -52,10 +53,11 @@ export function nonterminal(run: StationRun): boolean {
   return !!activeStatuses[status] || run.retryable === true;
 }
 async function api(path: string): Promise<Response> {
-  return fetch(`${(process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "")}/api/v1/${path}`, { signal: AbortSignal.timeout(15000) });
+  return fetch(`${readServiceEnvironment().DAGU_URL}/api/v1/${path}`, { signal: AbortSignal.timeout(15000) });
 }
 /** All DAGs, all history pages: page size is never a retention limit. */
-export async function listStationRuns(home = process.env.DAGU_HOME || join(homedir(), ".dagu"), limit = 100): Promise<StationRun[]> {
+export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME, limit = 100): Promise<StationRun[]> {
+  readServiceEnvironment({ ...process.env, DAGU_HOME: home });
   const runs: StationRun[] = [];
   const seen = new Set<string>();
   // Cursor filters stay fixed. Dagu's second-resolution upper bound must cover

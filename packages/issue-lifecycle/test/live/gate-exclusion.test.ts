@@ -10,6 +10,7 @@ import { parse } from "yaml";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { compiledA4sBin } from "../fixtures/admission.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
+import { declareService } from "../fixtures/service-environment.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -71,7 +72,8 @@ sys.exit(int(release.read_text()))
 `);
   const processes: Running[] = [];
   const env = (run: string): NodeJS.ProcessEnv => {
-    const result: NodeJS.ProcessEnv = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: home, PATH: `${bin}:${process.env.PATH}`, RUN: run };
+    mkdirSync(home, { recursive: true });
+    const result: NodeJS.ProcessEnv = { ...process.env, ...declareService(home, process.env.DAGU_URL!, `${bin}:${process.env.PATH}`), A4S_BIN: a4sBin, PATH: `${bin}:${process.env.PATH}`, RUN: run };
     delete result.A4S_HEAVY_SLOT_HELD;
     delete result.A4S_GATE_JOURNAL;
     delete result.NODE_OPTIONS;
@@ -213,7 +215,7 @@ test("real Dagu preserves eight-slot and foreign queue capacity while cross-clon
     const config = "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 8\n    - name: foreign\n      max_concurrency: 3\n";
     writeFileSync(join(f.home, "config.yaml"), config);
     const dag = join(f.root, "gates.yaml");
-    const vars = { A4S_BIN: a4sBin, PATH: f.env("holder").PATH, DAGU_HOME: f.home, PRIMARY: "${REPO}", WORKTREE: "${REPO}", BRANCH: "main", RUN: "${ID}", GATE: `exec python3 ${JSON.stringify(f.body)}`, ISSUE: "606" };
+    const vars = { A4S_BIN: a4sBin, PATH: f.env("holder").PATH, A4S_SERVICE_ENV: f.env("holder").A4S_SERVICE_ENV, DAGU_URL: f.env("holder").DAGU_URL, DAGU_HOME: f.home, PRIMARY: "${REPO}", WORKTREE: "${REPO}", BRANCH: "main", RUN: "${ID}", GATE: `exec python3 ${JSON.stringify(f.body)}`, ISSUE: "606" };
     writeFileSync(dag, `queue: a4s\nshell: bash\nparams:\n  - REPO: ''\n  - ID: ''\nenv:\n${Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")}steps:\n  - id: gate\n    run: |\n${gateScript.split("\n").map(line => `      ${line}\n`).join("")}    outputs:\n      - name: tested_sha\n`);
     const holder = f.start("dagu", ["start", "--run-id", "holder", dag, "--", `REPO=${f.primary}`, "ID=holder"], f.root);
     await until("native holder starts", () => f.events().some(row => row.run === "holder"));

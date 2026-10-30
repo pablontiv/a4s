@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import { renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
@@ -54,7 +55,7 @@ for (const definition of [
     assert.ok(address && typeof address !== "string");
     const port = address.port;
     await new Promise<void>(resolve => listener.close(() => resolve()));
-    const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` };
+    const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}` });
     writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\n`);
     const source = readFileSync(definition, "utf8");
     const step = (id: string): string => {
@@ -143,7 +144,7 @@ test("real Dagu completes declined PoCs and preserves PASS publication", { ...li
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>(resolve => socket.close(() => resolve()));
-  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_HOST: "127.0.0.1", DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, COMMENTS: join(root, "comments") };
+  const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_HOME: home, DAGU_HOST: "127.0.0.1", DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false", PATH: `${bin}:${process.env.PATH}`, COMMENTS: join(root, "comments") });
   const command = (exe: string, args: string[], cwd = root) => execFileSync(exe, args, { cwd, env, encoding: "utf8" }).trim();
   const git = (...args: string[]) => command("git", args);
   const dagu = (...args: string[]) => command("dagu", args);
@@ -212,6 +213,8 @@ esac
     writeFileSync(definition, readFileSync(new URL("../../skills/issue-execution/poc.yaml", import.meta.url), "utf8")
       .replace(/^env:\n/m, `env:\n  - A4S_BIN: ${JSON.stringify(a4sBin)}\n`)
       .replaceAll("__DAGU_FEATURE_VERSION__", BUNDLE_VERSION)
+      .replaceAll("__DAGU_URL__", JSON.stringify(`http://127.0.0.1:${port}`)).replaceAll("__DAGU_HOME__", JSON.stringify(home))
+      .replaceAll("__SERVICE_PATH__", JSON.stringify(env.PATH)).replaceAll("__A4S_SERVICE_ENV__", JSON.stringify(env.A4S_SERVICE_ENV))
       .replaceAll("TEMPLATE_REPO", "decline263").replaceAll("TEMPLATE_BASE_BRANCH", "main")
       .replaceAll("__PRIMARY__", primary).replaceAll("__TEST_PATHS__", "_test$")
       .replaceAll("__ESCALATION_POC_INCONCLUSIVE__", '"2"'));

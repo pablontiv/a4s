@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -69,14 +70,12 @@ test("bootstrap writes optional validation as the sole adopted value", () => {
       const stage = join(root, "feature.yaml");
       const result = spawnSync("bash", ["-c", script], {
         encoding: "utf8",
-        env: {
-          ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-test",
-          A4S_BIN: bootstrapExecutable(root),
-          STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
-          GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
-          REBASE_RESOLVER: "node scripts/resolve-policy.mjs",
-          VALIDATION: validation,
-        },
+        env: stationEnvironment({ ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-test",
+        A4S_BIN: bootstrapExecutable(root),
+        STAGE: stage, REPO: "fixture", BASE_BRANCH: "main", PRIMARY: root,
+        GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/",
+        REBASE_RESOLVER: "node scripts/resolve-policy.mjs",
+        VALIDATION: validation, }),
       });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const config = JSON.parse(readFileSync(stage, "utf8")) as { validation: string; rebaseResolver: string; lane: string };
@@ -94,13 +93,11 @@ test("bootstrap preserves the installed blocker reporting choice and accepts exp
   let installed = "";
   try {
     for (const [answer, expected] of [["", "ask"], ["auto", "auto"], ["", "auto"], ["ask", "ask"], ["", "ask"]]) {
-      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: {
-        ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-policy",
-        A4S_BIN: bootstrapExecutable(root),
-        STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
-        GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
-        A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed,
-      } });
+      const result = spawnSync("bash", ["-c", script], { encoding: "utf8", env: stationEnvironment({ ...process.env, DAGU_HOME: join(root, "home"), DAG_RUN_ID: "bootstrap-policy",
+      A4S_BIN: bootstrapExecutable(root),
+      STAGE: stage, PRIMARY: root, REPO: "fixture", BASE_BRANCH: "main",
+      GATE: "true", REQUIRED_CHECK: "validate", TEST_PATHS: "^test/", REBASE_RESOLVER: "",
+      A4S_BLOCKER_REPORTING: answer, CURRENT_A4S_BLOCKER_REPORTING: installed, }) });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       installed = JSON.parse(readFileSync(stage, "utf8")).blockerReporting;
       assert.equal(installed, expected);

@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -69,12 +70,9 @@ function lane(primary: string, issue: string, files: Record<string, string>): La
 }
 
 function environment(primary: string, entry: Lane, gate = "true"): NodeJS.ProcessEnv {
-  return {
-    ...process.env, A4S_BIN: a4sBin, PRIMARY: primary, WORKTREE: entry.worktree,
-    DAGU_HOME: join(dirname(primary), "dagu-home"), A4S_HEAVY_SLOT_HELD: "",
-    BRANCH: entry.branch, RUN: entry.run, ISSUE: entry.issue, BASE_BRANCH: "main", GATE: gate,
-    OMP_SESSION_ID: "owner-session", A4S_INTEGRATION_POLL_SEC: "0.05",
-  };
+  return stationEnvironment({ ...process.env, A4S_BIN: a4sBin, PRIMARY: primary, WORKTREE: entry.worktree, DAGU_HOME: join(dirname(primary), "dagu-home"), A4S_HEAVY_SLOT_HELD: "",
+  BRANCH: entry.branch, RUN: entry.run, ISSUE: entry.issue, BASE_BRANCH: "main", GATE: gate,
+  OMP_SESSION_ID: "owner-session", A4S_INTEGRATION_POLL_SEC: "0.05", });
 }
 
 function protect(primary: string, entry: Lane, decision: string) {

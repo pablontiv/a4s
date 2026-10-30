@@ -1,11 +1,12 @@
-import { homedir } from "node:os";
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+
 import { join } from "node:path";
 import { gc, initializeStation, promote } from "../../../launcher/src/station.ts";
 import { readStationState } from "../../../launcher/src/station-state.ts";
 import { parseArtifact } from "../../../launcher/src/release.ts";
 
 export async function main(args: string[]): Promise<void> {
-  const home = process.env.DAGU_HOME || join(homedir(), ".dagu");
+  const home = readServiceEnvironment().DAGU_HOME;
   if (args[0] === "init" && args.length === 3 && args[1] === "--artifact") {
     console.log(JSON.stringify(await initializeStation(home, parseArtifact(args[2]))));
     return;

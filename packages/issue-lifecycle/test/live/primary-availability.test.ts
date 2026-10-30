@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import { renderedFeature, renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -46,7 +47,7 @@ test("Dagu isolated primary checkpoints release the queue and rewind the same ru
   mkdirSync(join(home, "dags"), { recursive: true });
   mkdirSync(bin);
   const servicePort = await port();
-  const env = { ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_HOST: "127.0.0.1", DAGU_PORT: String(servicePort), PATH: `${bin}:${process.env.PATH}` };
+  const env = stationEnvironment({ ...process.env, A4S_BIN: a4sBin, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_COORDINATOR_ENABLED: "false", DAGU_HOST: "127.0.0.1", DAGU_PORT: String(servicePort), PATH: `${bin}:${process.env.PATH}` });
   const command = (executable: string, args: string[], cwd = root) => execFileSync(executable, args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const dagu = (...args: string[]) => command("dagu", args);
   const git = (cwd: string, ...args: string[]) => command("git", ["-C", cwd, ...args]);

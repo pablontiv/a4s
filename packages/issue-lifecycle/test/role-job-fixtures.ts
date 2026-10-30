@@ -12,13 +12,19 @@ import { compiledArtifact } from "./fixtures/admission.ts";
 import { packageDirectory } from "./fixtures/artifact.ts";
 import { exampleConfig } from "../../launcher/src/config.ts";
 import { materializeDag } from "../src/materialize.ts";
+import { stationEnvironment } from "./fixtures/service-environment.ts";
 
-export function reconcileSnapshot(artifact: ArtifactTuple, ciBlocked = 2): string {
+/** Renders under the given declared station, never the test process's ambient one. */
+export function reconcileSnapshot(artifact: ArtifactTuple, ciBlocked = 2, station: NodeJS.ProcessEnv = process.env): string {
   const config = exampleConfig();
   config.escalation.ciBlocked = ciBlocked;
-  return materializeDag(packageDirectory, "feature.yaml", config, {
-    version: artifact.version, source: `fixture/repo@${artifact.commit}`,
-  });
+  const previous = process.env;
+  try {
+    process.env = station;
+    return materializeDag(packageDirectory, "feature.yaml", config, {
+      version: artifact.version, source: `fixture/repo@${artifact.commit}`,
+    });
+  } finally { process.env = previous; }
 }
 
 /** Materialize real admitted artifacts before timing receipt-bound reconcile work. */
@@ -31,7 +37,8 @@ export function reconcileEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
   mkdirSync(homePath, { recursive: true });
   const home = realpathSync(homePath);
   const artifact = compiledArtifact(home);
-  const snapshot = reconcileSnapshot(artifact, Number(env.ESCALATION_CI_BLOCKED ?? 2));
+  const selected = stationEnvironment({ ...process.env, ...env, DAGU_HOME: home });
+  const snapshot = reconcileSnapshot(artifact, Number(env.ESCALATION_CI_BLOCKED ?? 2), selected);
   for (const row of available) {
     const primary = realpathSync(row.PRIMARY);
     const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${row.RUN}`], { encoding: "utf8" }).trim();
@@ -40,7 +47,7 @@ export function reconcileEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
     mkdirSync(state, { recursive: true });
     writeFileSync(path, JSON.stringify(roleAdmission(primary, home, row.RUN, snapshot, artifact)));
   }
-  return { A4S_ARTIFACT: artifactToken(artifact), ...env, DAGU_HOME: home };
+  return { A4S_ARTIFACT: artifactToken(artifact), ...selected };
 }
 
 export function roleAdmission(primary: string, home: string, run: string, snapshot: string, artifact?: ArtifactTuple): Receipt {

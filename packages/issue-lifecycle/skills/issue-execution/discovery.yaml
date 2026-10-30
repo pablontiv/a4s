@@ -20,6 +20,10 @@ params:
     type: string
     required: true
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - PRIMARY: __PRIMARY__
   - BASE_BRANCH: TEMPLATE_BASE_BRANCH
   - RUN: ${context.run.id}
@@ -39,7 +43,7 @@ steps:
       owner=${NWO%/*}
       repo=${NWO#*/}
       test "$owner" != "$NWO" && test -n "$owner" && test -n "$repo"
-      ROOT="${DAGU_HOME:-$HOME/.dagu}/data/discovery/${owner}__${repo}"
+      ROOT="${DAGU_HOME:?explicit station home required}/data/discovery/${owner}__${repo}"
       OUT_DIR="$ROOT/$RUN"
       SNAPSHOT="$OUT_DIR/snapshot"
       mkdir -p "$OUT_DIR"

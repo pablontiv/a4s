@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../../launcher/src/config.ts";
+import { useStation } from "./service-environment.ts";
 
 /** Genuine committed consumer policy, without binary builds or PATH fixtures. */
 export function inProcessAdmissionFixture() {
@@ -22,13 +23,14 @@ export function inProcessAdmissionFixture() {
   git("config", "maintenance.auto", "false");
   git("remote", "add", "origin", "https://github.com/example/fixture.git"); writeConfig();
   const previous = { DAGU_HOME: process.env.DAGU_HOME, A4S_PRIMARY: process.env.A4S_PRIMARY };
-  process.env.DAGU_HOME = home; process.env.A4S_PRIMARY = packageDir;
+  const restoreStation = useStation(home); process.env.A4S_PRIMARY = packageDir;
   writeFileSync(join(home, "config.yaml"), "coordinator:\n  enabled: false\n");
   writeFileSync(join(home, "a4s-primary"), `${packageDir}\n`);
   const receipt = (run: string) => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");
   return { root, packageDir, home, configPath, writeConfig, receipt,
     dag: join(packageDir, ".workspace", "dagu", "dags", "feature.yaml"),
     dispose() {
+      restoreStation();
       for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
       rmSync(root, { recursive: true, force: true });
     },

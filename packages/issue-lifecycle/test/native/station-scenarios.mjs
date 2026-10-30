@@ -196,6 +196,8 @@ export const nativeExecutor = {
       copyFileSync(join(repository, 'packages/issue-lifecycle/test/fixtures/release-gh.mjs'), releaseGh);
       writeFileSync(join(bin, 'gh'), `#!/usr/bin/env node\nimport {appendFileSync} from 'node:fs';\nimport {spawnSync} from 'node:child_process';\nconst args=process.argv.slice(2);\nif(args[0]==='repo'&&args[1]==='view') console.log(args.includes('--jq')?'fixture/native-cutover':JSON.stringify({nameWithOwner:'fixture/native-cutover',defaultBranchRef:{name:'main'}}));\nelse if(args[0]==='issue'&&args[1]==='view') console.log(JSON.stringify({number:821,title:'Isolated native acceptance fixture',body:'Read-only triage of a scratch local fixture. No implementation or remote effects are requested. The launcher, loader and runner mechanisms are already demonstrated; no feasibility experiment is required.',state:'OPEN',comments:[]}));\nelse if(args[0]==='issue'&&args[1]==='comment') appendFileSync(${JSON.stringify(join(c.out, 'fixture-comments.jsonl'))},JSON.stringify(args)+'\\n');\nelse if(args[0]==='api'||args[0]==='release'){const child=spawnSync(process.execPath,[${JSON.stringify(releaseGh)},...args],{stdio:'inherit'});process.exit(child.status??1);}\nelse throw new Error('Unauthorized fixture GitHub operation: '+JSON.stringify(args));\n`, { mode: 0o755 });
       c.env.PATH = `${bin}:${c.service.path}`; c.env.A4S_FIXTURE_RELEASES = c.releases;
+      c.env.A4S_SERVICE_ENV = join(c.home, 'service-environment.json');
+      writeFileSync(c.env.A4S_SERVICE_ENV, JSON.stringify({ DAGU_URL: c.env.DAGU_URL, DAGU_HOME: c.home, PATH: c.env.PATH }));
       c.primary = join(c.root, 'primary');
       command(c, 'consumer/init', 'git', ['init', '-b', 'main', c.primary], { cwd: c.root });
       c.env.A4S_PRIMARY = c.primary;

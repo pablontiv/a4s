@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
-import { serviceEnvironmentCommand } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment, serviceEnvironmentCommand } from "../../launcher/src/service-environment.ts";
 
 const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|tick|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
@@ -20,6 +20,9 @@ export async function main(argv: string[]): Promise<void> {
       process.exitCode = 1;
     }
     return;
+  }
+  if (["native", "tick", "gate", "role-jobs", "admit", "enqueue", "observe", "escalation", "stale-recovery", "prioritize", "station", "heavy-slot"].includes(command ?? "")) {
+    Object.assign(process.env, readServiceEnvironment());
   }
   switch (command) {
     case "service-environment": return serviceEnvironmentCommand(args);

@@ -1,6 +1,7 @@
+import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
-import { homedir } from "node:os";
+
 import { join } from "node:path";
 import {
   decideStaleRecoveries, emptyLedger, readAdminEvents, recoveryLog,
@@ -12,7 +13,7 @@ import { STALE_PROCESS_ERROR } from "../stale-recovery.ts";
 import { withFileLock } from "../../../launcher/src/file-lock.ts";
 
 function stationHome(): string {
-  return process.env.DAGU_HOME || join(homedir(), ".dagu");
+  return readServiceEnvironment().DAGU_HOME;
 }
 
 function loadLedger(path: string): RecoveryLedger {
@@ -33,7 +34,7 @@ function log(line: string): void {
 }
 
 function featureFailed(run: string): boolean {
-  const result = spawnSync("dagu", ["status", "feature", "--run-id", run], { encoding: "utf8" });
+  const result = spawnSync("dagu", ["status", "feature", "--run-id", run], { encoding: "utf8", env: { ...process.env, ...readServiceEnvironment() } });
   const line = (result.stdout ?? "").split("\n")[0] ?? "";
   if (line.startsWith("Failed")) return true;
   const detail = line || (result.stderr ?? "").trim() || result.error?.message || `exit ${result.status ?? "signal"}`;
@@ -53,7 +54,7 @@ async function run(argv: string[]): Promise<void> {
       event.data?.dag_run_status?.error?.includes(STALE_PROCESS_ERROR)).map(event => event.dag_run_id).filter((id): id is string => Boolean(id)));
     for (const id of runs) {
       try {
-        const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
+        const base = readServiceEnvironment().DAGU_URL;
         const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(id)}/spec`, { signal: AbortSignal.timeout(5000) });
         if (!response.ok) throw new Error(`Dagu spec HTTP ${response.status}`);
         const { spec } = await response.json() as { spec: string };
@@ -85,7 +86,7 @@ async function run(argv: string[]): Promise<void> {
       mkdirSync(home, { recursive: true });
       storeLedger(ledgerPath, ledger);
       log(recoveryLog(decision));
-      const retried = spawnSync("dagu", ["retry", "--run-id", decision.run, "--step", decision.step, "--downstream", "feature"], { stdio: "inherit" });
+      const retried = spawnSync("dagu", ["retry", "--run-id", decision.run, "--step", decision.step, "--downstream", "feature"], { stdio: "inherit", env: { ...process.env, ...readServiceEnvironment() } });
       if (retried.status !== 0) {
         log(`stale-process recovery failed: run=${decision.run} attempt=${decision.attempt} step=${decision.step} exit=${retried.status ?? retried.error?.message ?? "signal"}`);
         process.exitCode = 1;

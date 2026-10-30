@@ -8,6 +8,10 @@ hist_retention_runs: 1440
 type: graph
 shell: bash
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - CI_OBSERVATION_ID: ${context.run.id}
   - ESCALATION_CI_BLOCKED: __ESCALATION_CI_BLOCKED__
 steps:
@@ -26,7 +30,7 @@ steps:
           printf '%s\n' "$value"
           return 0
         fi
-        home=${DAGU_HOME:-$HOME/.dagu}
+        home=${DAGU_HOME:?explicit station home required}
         if [[ "$workspace" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$home/primaries/$workspace" ]]; then
           value=$(tr -d '\r\n' < "$home/primaries/$workspace")
         elif [[ -n ${A4S_PRIMARY:-} ]]; then
@@ -61,7 +65,7 @@ steps:
         if [[ "$rc" -eq 124 ]]; then printf '1\n' >>"$TMP/deadline"; fi
         return "$rc"
       }
-      base="http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature"
+      base="${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/feature"
       cursor=""
       pages=0
       while true; do
@@ -95,7 +99,7 @@ steps:
         if [[ "$(jq -r '.PRIMARY // empty' <<<"$row")" == "" ]]; then
           spec_lookups=$((spec_lookups + 1))
           encoded=$(jq -nr --arg run "$run" '$run|@uri')
-          if ! bounded curl -fsS "http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/feature/$encoded/spec" >"$TMP/spec"; then
+          if ! bounded curl -fsS "${DAGU_URL:?explicit station endpoint required}/api/v1/dag-runs/feature/$encoded/spec" >"$TMP/spec"; then
             echo "discover: spec unavailable for $run" >&2
             exit 1
           fi
@@ -192,6 +196,10 @@ name: reconcile-run
 type: graph
 shell: bash
 env:
+  - DAGU_URL: __DAGU_URL__
+  - DAGU_HOME: __DAGU_HOME__
+  - PATH: __SERVICE_PATH__
+  - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
   - CI_OBSERVATION_ID: ${context.run.id}
   - ESCALATION_CI_BLOCKED: __ESCALATION_CI_BLOCKED__
 params:

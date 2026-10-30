@@ -1,3 +1,4 @@
+import { stationEnvironment } from "../fixtures/service-environment.ts";
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
 import { once } from "node:events";
@@ -51,7 +52,7 @@ test("CLI reports committed config and the reconciler as compatible", () => {
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, repo], {
       encoding: "utf8",
-      env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: stationEnvironment({ ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` }),
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /config path=\.workspace\/dagu\/config\.json schema=2 .*lane=fixture .*queue=fixture source=config.yaml max_concurrency=6 ready=yes/);
@@ -79,7 +80,7 @@ test("CLI exits nonzero when committed config is missing", () => {
     chmodSync(dagu, 0o755);
     const result = spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, repo], {
       encoding: "utf8",
-      env: { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      env: stationEnvironment({ ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: daguHome, PATH: `${bin}:${process.env.PATH ?? ""}` }),
     });
     assert.equal(result.status, 1);
     assert.match(result.stdout, /compat=invalid/);
@@ -235,9 +236,9 @@ test("installed admission check preserves history, receipts, refs and checkout i
       await once(server, "listening");
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const env = { ...process.env, ...declareService(fixture.home, `http://127.0.0.1:${address.port}`),
-        A4S_PRIMARY: fixture.packageDir, A4S_FIXTURE_RELEASES: fixture.releases,
-        PATH: `${dirname(binary)}:${bin}:${process.env.PATH ?? ""}` };
+      const path = `${dirname(binary)}:${bin}:${process.env.PATH ?? ""}`;
+      const env = { ...process.env, ...declareService(fixture.home, `http://127.0.0.1:${address.port}`, path),
+        A4S_PRIMARY: fixture.packageDir, A4S_FIXTURE_RELEASES: fixture.releases, PATH: path };
       const check = async (status: number, reason: RegExp) => {
         const histories = history();
         const homeBefore = snapshot(fixture.home), repoBefore = snapshot(fixture.packageDir);
