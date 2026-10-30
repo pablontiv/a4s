@@ -38,6 +38,22 @@ function subscribe(client: any, topic: string): Promise<void> {
   })
 }
 
+function nextPublication(
+  client: MqttClient,
+  topic: string,
+  matches: (payload: string) => boolean,
+): Promise<string> {
+  const { promise, resolve } = Promise.withResolvers<string>()
+  const receive = (receivedTopic: string, receivedPayload: Buffer): void => {
+    const payload = receivedPayload.toString()
+    if (receivedTopic !== topic || !matches(payload)) return
+    client.off('message', receive)
+    resolve(payload)
+  }
+  client.on('message', receive)
+  return promise
+}
+
 // Direcciones y topics v2 fijos usados por el harness (project=a4s, instance=omp-1).
 const DIRECT_TOPIC = 'synagent/v2/a4s/omp-1'
 const PROJECT_TOPIC = 'synagent/v2/a4s/all'
@@ -268,6 +284,7 @@ test('OMP session adapter persists and lists DLQ failures, then reinjects a reco
   const harness = createHarness(settings, [], sessionId, 50)
   let restored: typeof harness | undefined
   t.after(async () => {
+    t.mock.timers.reset()
     await restored?.shutdown()
     await harness.shutdown()
     await end(observer)
@@ -320,11 +337,13 @@ test('OMP session adapter persists and lists DLQ failures, then reinjects a reco
     assert.match(listing, new RegExp(`causa=${cause}`))
   }
 
+  // Keep adapter deadlines under test control while MQTT delivery/acks progress.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const retriedPublication = nextPublication(observer, topic, payload => payload === dispatchPayload)
   harness.failDelivery = false
   await harness.command('agent-messaging', `dlq retry ${dispatchRecord.id}`)
-  await waitFor(() => harness.received.length === 1)
-  await waitFor(() => observed.filter(({ topic: observedTopic, payload }) =>
-    observedTopic === topic && payload === dispatchPayload).length === 2)
+  await harness.waitForDelivery(0)
+  await retriedPublication
   assert.match(harness.received[0]?.text ?? '', /id dispatch-dlq/)
   await harness.confirmDelivery(0)
   await harness.settle()
@@ -338,19 +357,24 @@ test('OMP session adapter persists and lists DLQ failures, then reinjects a reco
     to: `a4s/${sessionId}`,
     body: 'delivery confirmation times out',
   }))
+  const timeoutPublication = nextPublication(observer, dlqTopic, payload => {
+    const record = parseDeadLetter(payload)
+    return record.cause === 'DELIVERY_TIMEOUT' && record.payload === timeoutPayload
+  })
   await publish(publisher, topic, timeoutPayload)
-  await waitFor(() => observed.some(({ topic: observedTopic, payload }) =>
-    observedTopic === dlqTopic
-    && parseDeadLetter(payload).cause === 'DELIVERY_TIMEOUT'))
-  const timeoutRecord = observed
-    .filter(({ topic: observedTopic }) => observedTopic === dlqTopic)
-    .map(({ payload }) => parseDeadLetter(payload))
-    .find(({ cause }) => cause === 'DELIVERY_TIMEOUT')
-  assert.ok(timeoutRecord)
+  await harness.waitForDelivery(1)
+  t.mock.timers.tick(50)
+  const timeoutRecord = parseDeadLetter(await timeoutPublication)
   assert.equal(timeoutRecord.payload, timeoutPayload)
+  assert.equal(timeoutRecord.cause, 'DELIVERY_TIMEOUT')
+  assert.equal(harness.entries.some(entry =>
+    entry.customType === 'synagent-dlq'
+    && entry.data.cause === 'DELIVERY_TIMEOUT'
+    && entry.data.payload === dispatchPayload), false)
   assert.equal(harness.received.length, 2)
 
   await harness.command('agent-messaging', 'resume')
+  t.mock.timers.reset()
   await harness.shutdown()
   restored = createHarness(settings, harness.entries, sessionId, 50)
   await restored.start()
@@ -360,6 +384,61 @@ test('OMP session adapter persists and lists DLQ failures, then reinjects a reco
   assert.match(restored.notifications.at(-1)?.message ?? '', new RegExp(dispatchRecord.id))
   assert.match(restored.notifications.at(-1)?.message ?? '', /reintentado=/)
   assert.equal(restored.received.length, 0)
+})
+
+test('OMP session adapter cancels the confirmation deadline before yielding to task.delivered', { timeout: 10_000 }, async t => {
+  const { broker, server, url } = await startBroker()
+  const publisher = await connectClient(url, 'omp-confirmation-race-publisher')
+  const sessionId = 'omp-confirmation-race'
+  const topic = `synagent/v2/a4s/${sessionId}`
+  const incoming = message({ id: 'confirmation-race', to: `a4s/${sessionId}` })
+  const harness = createHarness({
+    'a4s.agent-messaging.broker-url': url,
+  }, [], sessionId, 50)
+  let releaseDelivered: (() => void) | undefined
+  t.after(async () => {
+    releaseDelivered?.()
+    t.mock.timers.reset()
+    await harness.shutdown()
+    await end(publisher)
+    await closeServer(server)
+    await closeBroker(broker)
+  })
+
+  await harness.start()
+  await waitFor(() => harness.notifications.some(({ message }) =>
+    message.includes('subscribed to') && message.includes(topic)))
+  const deliveredPublishing = Promise.withResolvers<void>()
+  broker.authorizePublish = (_client, packet, callback) => {
+    const event = JSON.parse(packet.payload.toString())
+    if (event.kind === 'task.delivered') {
+      releaseDelivered = () => callback(null)
+      deliveredPublishing.resolve()
+    } else {
+      callback(null)
+    }
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  await publish(publisher, topic, serialize(incoming))
+  await harness.waitForDelivery(0)
+  t.mock.timers.tick(49)
+  const confirmation = harness.confirmDelivery(0)
+  // Hold the task.delivered PUBACK so confirmation suspends after persisting.
+  await deliveredPublishing.promise
+  assert.ok(harness.entries.some(entry =>
+    entry.customType === 'synagent-delivered' && entry.data.id === incoming.id))
+  t.mock.timers.tick(1)
+  assert.equal(harness.entries.some(entry => entry.customType === 'synagent-dlq'), false)
+  assert.equal(harness.notifications.some(({ message }) => message.includes('no message_start')), false)
+
+  // Settlement can also finish before task.delivered's acknowledgement.
+  await harness.settle()
+  releaseDelivered!()
+  releaseDelivered = undefined
+  await confirmation
+  t.mock.timers.tick(50)
+  assert.equal(harness.entries.some(entry => entry.customType === 'synagent-dlq'), false)
+  assert.equal(harness.notifications.some(({ message }) => message.includes('before timeout')), false)
 })
 
 test('OMP session adapter publishes task events with frozen assistant completion text', async t => {
