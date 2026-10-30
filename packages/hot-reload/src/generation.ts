@@ -66,12 +66,14 @@ export class Generation {
     const ui = "ui" in ctx && typeof ctx.ui === "object" && ctx.ui !== null
       ? ctx.ui as Record<PropertyKey, unknown> : undefined;
     if (!ui) return ctx;
-    return Object.assign(Object.create(ctx), { ui: new Proxy(ui, { get: (target, key) => {
+    // Define, never assign: hosts may expose `ui` as a getter-only or readonly
+    // property, and assigning through such a prototype throws in strict mode.
+    return Object.create(ctx, { ui: { value: new Proxy(ui, { get: (target, key) => {
       const value = target[key];
       if (typeof value !== "function") return value;
       if (!["notify", "setWidget", "setStatus"].includes(String(key))) return value.bind(target);
       return (...args: unknown[]) => this.effect(signal, () => value.apply(target, args));
-    } }) });
+    } }), enumerable: true, writable: true, configurable: true } });
   }
   async record<API extends object>(api: API, factory: Factory<API>): Promise<void> {
     const facade = Object.create(api);

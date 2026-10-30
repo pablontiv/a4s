@@ -222,6 +222,24 @@ test("event indices stay stable as generations add and remove handlers", async (
   assert.equal(host.handlers.get("tool_call")?.length, 3);
 });
 
+test("handlers receive the host context when its ui is a getter-only accessor", async () => {
+  const host = new FakeHost();
+  const notices: string[] = [];
+  class GetterContext implements FakeContext {
+    isIdle() { return true; }
+    get ui() { return { notify: (message: string) => { notices.push(message); } }; }
+  }
+  const ctx = new GetterContext();
+  await hotReload(host, pi => {
+    pi.on("tool_call", (_event: Event, handlerContext: FakeContext) => {
+      handlerContext.ui.notify("allowed", "warning");
+      return handlerContext.isIdle();
+    });
+  }, implementation, { importModule: async () => ({ default: () => {} }) });
+  assert.deepEqual(await host.emit("tool_call", {}, ctx), [true]);
+  assert.deepEqual(notices, ["allowed"]);
+});
+
 test("factories inherit the real API and can register late within the active generation", async () => {
   const host = new FakeHost();
   const { ctx } = context();
