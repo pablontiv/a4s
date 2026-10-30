@@ -314,8 +314,9 @@ export class Transitions {
         const diagnosed = ["await_ci", "await_merge"].includes(step) && ["BLOCKED", "PENDING"].includes(ci?.class ?? "") && ci?.iteration === iteration;
         const ciCause = returned || diagnosed
           ? ` ci=${plain(ci!.class)}${ci!.class === "PENDING" ? " action=WAIT" : ""} sha=${plain(ci!.sha)} check=${plain(ci!.check)} cause=${plain(ci!.cause)} logs=${plain(ci!.log)}` : "";
+        // mark_success retains the command error but reports a succeeded node.
         const failedNode = step.startsWith("recover_")
-          ? run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === step.slice("recover_".length) && candidate.statusLabel === "failed")
+          ? run.nodes?.find(candidate => (candidate.step.id ?? candidate.step.name) === step.slice("recover_".length))
           : undefined;
         const causeText = step.startsWith("recover_") ? failureCause(failedNode)
           : step.endsWith("_primary_unavailable") ? node.step.humanTask.prompt

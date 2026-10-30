@@ -16,7 +16,17 @@ for (const kind of ["feature", "poc", "discovery"]) {
       assert.ok(gate.continue_on === undefined || gate.continue_on === "skipped", `${gate.id} failure stops recovery descendants`);
       const skips = (value: unknown) => value === "skipped" || (value as { skipped?: boolean } | undefined)?.skipped === true;
       assert.equal(skips(gate.continue_on), skips(checkpoint.continue_on), `${gate.id} preserves optional-branch continuation`);
-      assert.deepEqual(gate.preconditions, checkpoint.preconditions, `${gate.id} preserves optional-branch conditions`);
+      if (checkpoint.id.startsWith("recover_") || checkpoint.id === "fix_result") {
+        const predecessor = source.steps.find(step => step.id === checkpoint.depends)!;
+        assert.ok(predecessor.continue_on && typeof predecessor.continue_on === "object" &&
+          "mark_success" in predecessor.continue_on && predecessor.continue_on.mark_success === true,
+          `${predecessor.id} must not rerun when cancellation resumes`);
+        assert.deepEqual(gate.preconditions, [{
+          condition: `\${steps.${checkpoint.id}.outputs.CANCEL}`, expected: "re:^(yes|no)$",
+        }], `${gate.id} routes on the persisted response, never a resumed predecessor exit code`);
+      } else {
+        assert.deepEqual(gate.preconditions, checkpoint.preconditions, `${gate.id} preserves optional-branch conditions`);
+      }
       assert.match(gate.run!, /exit 77/);
       const successors = source.steps.filter(step => (Array.isArray(step.depends) ? step.depends : [step.depends]).includes(checkpoint.id));
       assert.deepEqual(successors.map(step => step.id), [gate.id], `${checkpoint.id} has one guarded outgoing edge`);
