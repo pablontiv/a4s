@@ -1585,8 +1585,42 @@ steps:
         *) printf 'Invalid CODE_SCANNING policy: %s\n' "${CODE_SCANNING:-}" >&2; exit 1 ;;
       esac
 
-  - id: auto_merge
+  - id: pr_head_ready
     depends: code_scanning
+    timeout_sec: 30
+    retry_policy:
+      limit: 12
+      interval_sec: 5
+      exit_code: [75]
+    run: |
+      set -euo pipefail
+      reject() { printf 'rule=pr_head_ready.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
+      equal() { [[ "$2" == "$3" ]] || reject "$@"; }
+      cd "$WORKTREE"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      sha=$(jq -r .sha "$STATE/candidate.json")
+      if [[ "${CODE_SCANNING:-required}" != off ]] &&
+         ! jq -e --arg sha "$sha" '.sha == $sha and .class == "PASS"' "$STATE/codeql-observation.json" >/dev/null; then exit 0; fi
+      equal branch "$BRANCH" "$(git branch --show-current)"
+      equal candidate_head "$sha" "$(git rev-parse HEAD)"
+      equal clean "" "$(git status --porcelain)"
+      jq -e --arg sha "$sha" --arg gate "$GATE" '.sha == $sha and .gate == $gate' "$STATE/gate.json" >/dev/null ||
+        reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
+      pr_ref=${PR_NUMBER:-$BRANCH}
+      if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
+      read_status=0
+      observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid) || read_status=$?
+      if [[ "$read_status" -ne 0 ]]; then
+        reject read "successful GitHub head read" "gh exit=$read_status; check authentication, permissions and network"
+      fi
+      [[ "$observed_sha" =~ ^[0-9a-f]{40}$ ]] || reject head_format commit_oid "$observed_sha"
+      if [[ "$observed_sha" != "$sha" ]]; then
+        printf 'rule=pr_head_ready.head_convergence expected=%s observed=%s\n' "$sha" "$observed_sha" >&2
+        exit 75
+      fi
+
+  - id: auto_merge
+    depends: pr_head_ready
     run: |
       set -euo pipefail
       reject() { printf 'rule=auto_merge.%s expected=%q observed=%q\n' "$1" "$2" "$3" >&2; exit 1; }
@@ -1614,16 +1648,6 @@ steps:
         reject gate_binding "sha=$sha gate=$GATE" "$(cat "$STATE/gate.json")"
       pr_ref=${PR_NUMBER:-$BRANCH}
       if [[ -z "${PR_NUMBER:-}" && -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
-      for ((attempt = 0; attempt <= 12; attempt++)); do
-        observed_sha=$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)
-        if test "$observed_sha" = "$sha"; then
-          break
-        fi
-        if test "$attempt" -eq 12; then
-          reject head_convergence "$sha" "$observed_sha"
-        fi
-        sleep 5
-      done
       observation=$(gh pr view "$pr_ref" --json state,mergeStateStatus,autoMergeRequest,mergeCommit,headRefOid)
       equal head_sha "$sha" "$(jq -r '.headRefOid' <<< "$observation")"
       merge_body=$(printf 'Closes #%s\n\n%s' "$ISSUE" "$(git log -1 --format=%b "$sha")")

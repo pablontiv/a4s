@@ -1676,6 +1676,7 @@ esac
     })),
     { label: "MERGED same head", state: "MERGED", mergeCommit: { oid: "a".repeat(40) } },
     { label: "MERGED different head", state: "MERGED", mergeCommit: { oid: "a".repeat(40) }, wrongHead: true, failure: true },
+    { label: "candidate changed after readiness", candidateChanged: true, failure: true },
     { label: "gh observation error", ghError: true, failure: true },
     { label: "gh merge error", mergeStateStatus: "CLEAN", merge: "immediate", mergeError: true, failure: true },
   ]) {
@@ -1715,12 +1716,16 @@ case "$*" in
 esac
 `);
       chmodSync(executable, 0o755);
+      runScript(extractScript(definition, "  - id: pr_head_ready"), repo);
+      if ("candidateChanged" in scenario) {
+        writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ sha: "c".repeat(40) }));
+      }
       if ("failure" in scenario) {
         const result = spawnSync("bash", ["-c", autoMergeScript], {
-          encoding: "utf8", env: featureScriptEnv(repo),
+          encoding: "utf8", env: { ...featureScriptEnv(repo), ...("candidateChanged" in scenario ? { CODE_SCANNING: "off" } : {}) },
         });
         assert.notEqual(result.status, 0);
-        if ("ghError" in scenario || "wrongHead" in scenario) assert.equal(existsSync(argsFile), false);
+        if ("ghError" in scenario || "wrongHead" in scenario || "candidateChanged" in scenario) assert.equal(existsSync(argsFile), false);
         return;
       }
       assert.match(runScript(autoMergeScript, repo), new RegExp(`pr=190\\nhead_sha=${sha}`));
@@ -1747,7 +1752,7 @@ esac
   }
 
   for (const converges of [true, false]) {
-    test(`${name} auto_merge ${converges ? "waits for the pushed head" : "reports expected and last observed heads on expiry"}`, () => {
+    test(`${name} pr_head_ready ${converges ? "waits for the pushed head" : "reports expected and last observed heads on expiry"}`, () => {
       const repo = repository();
       try {
         const sha = git(repo.worktree, "rev-parse", "HEAD");
@@ -1779,21 +1784,82 @@ esac
         writeFileSync(join(bin, "sleep"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${sleeps}"\n`);
         chmodSync(join(bin, "gh"), 0o755);
         chmodSync(join(bin, "sleep"), 0o755);
-        const result = spawnSync("bash", ["-c", autoMergeScript], {
+        let result = spawnSync("bash", ["-c", extractScript(definition, "  - id: pr_head_ready")], {
           encoding: "utf8", env: featureScriptEnv(repo),
         });
+        for (let retry = 0; result.status === 75 && retry < 12; retry++) {
+          result = spawnSync("bash", ["-c", extractScript(definition, "  - id: pr_head_ready")], {
+            encoding: "utf8", env: featureScriptEnv(repo),
+          });
+        }
         assert.equal(readFileSync(reads, "utf8"), converges ? "3" : "13");
-        assert.deepEqual(readFileSync(sleeps, "utf8").trim().split("\n"), Array(converges ? 2 : 12).fill("5"));
+        assert.equal(existsSync(sleeps), false);
+        if (result.status === 0) runScript(autoMergeScript, repo);
         if (converges) {
           assert.equal(result.status, 0, result.stderr);
           assert.match(readFileSync(merged, "utf8"), new RegExp(`--auto --squash --match-head-commit ${sha}`));
         } else {
           assert.notEqual(result.status, 0);
-          assert.match(result.stderr, new RegExp(`rule=auto_merge.head_convergence expected=${sha} observed=${oldSha}`));
+          assert.match(result.stderr, new RegExp(`rule=pr_head_ready.head_convergence expected=${sha} observed=${oldSha}`));
         }
       } finally {
         rmSync(repo.root, { recursive: true, force: true });
       }
+    });
+  }
+  for (const analysisClass of ["PENDING", "BLOCKED"]) {
+    test(`${name} pr_head_ready preserves ${analysisClass} CodeQL queue release without GitHub reads`, () => {
+      const repo = repository();
+      try {
+        recordCandidate(repo);
+        const sha = git(repo.worktree, "rev-parse", "HEAD");
+        writeFileSync(join(repo.state, "codeql-observation.json"), JSON.stringify({ sha, class: analysisClass }));
+        const calls = join(repo.root, "unexpected-gh-read");
+        const bin = join(repo.root, "bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${calls}"\nexit 91\n`);
+        chmodSync(join(bin, "gh"), 0o755);
+        for (const id of ["pr_head_ready", "auto_merge"]) {
+          const result = spawnSync("bash", ["-c", extractScript(definition, `  - id: ${id}`)], {
+            encoding: "utf8", env: { ...featureScriptEnv(repo), CODE_SCANNING: "required" },
+          });
+          assert.equal(result.status, 0, result.stderr);
+        }
+        assert.equal(existsSync(calls), false, "non-passing analysis must neither poll nor mutate GitHub");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+  for (const failure of ["auth-4", "auth-75", "candidate", "gate"]) {
+    test(`${name} pr_head_ready ${failure} is non-retryable and has no merge effects`, () => {
+      const repo = repository();
+      try {
+        recordCandidate(repo);
+        runScript(extractScript(definition, "  - id: gate"), repo);
+        const calls = join(repo.root, "readiness-calls");
+        const bin = join(repo.root, "bin");
+        mkdirSync(bin, { recursive: true });
+        writeFileSync(join(bin, "gh"), `#!/bin/sh
+printf '%s\\n' "$*" >> "${calls}"
+printf 'GraphQL: Resource not accessible by integration (HTTP 403)\\n' >&2
+exit ${failure === "auth-75" ? 75 : 4}
+`);
+        chmodSync(join(bin, "gh"), 0o755);
+        if (failure === "candidate") writeFileSync(join(repo.state, "candidate.json"), JSON.stringify({ sha: "c".repeat(40) }));
+        if (failure === "gate") writeFileSync(join(repo.state, "gate.json"), "{}");
+        const result = spawnSync("bash", ["-c", extractScript(definition, "  - id: pr_head_ready")], {
+          encoding: "utf8", env: { ...featureScriptEnv(repo), CODE_SCANNING: "off" },
+        });
+        assert.equal(result.status, 1, result.stderr);
+        if (failure.startsWith("auth")) {
+          assert.match(result.stderr, /HTTP 403/);
+          assert.match(result.stderr, /rule=pr_head_ready.read/);
+          assert.equal(readFileSync(calls, "utf8").trim().split("\n").length, 1);
+          assert.doesNotMatch(readFileSync(calls, "utf8"), /merge/);
+        } else {
+          assert.equal(existsSync(calls), false, "binding failure must precede external observation");
+          assert.match(result.stderr, new RegExp(`rule=pr_head_ready.${failure === "candidate" ? "candidate_head" : "gate_binding"}`));
+        }
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
   }
 }

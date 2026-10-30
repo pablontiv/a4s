@@ -10,6 +10,44 @@ The source CLI runs with Node's strip-only TypeScript support. The package
 `typecheck` script enables `erasableSyntaxOnly` to reject non-erasable syntax,
 including constructor parameter properties, enums, and runtime namespaces.
 
+## PR-head readiness
+
+Fresh feature snapshots use `code_scanning -> pr_head_ready -> auto_merge`.
+Readiness is an idempotent GitHub head observation, not merge authorization.
+Native Dagu retries only exit 75 (a successful read of a different head): one
+initial observation plus twelve retries, five seconds apart. Each attempt has
+its own 30-second native timeout. Exhaustion logs
+`rule=pr_head_ready.head_convergence` with the expected candidate and last
+observed head. Read failures preserve GitHub stderr and add a
+`rule=pr_head_ready.read` authentication/permissions/network diagnostic; they do
+not retry, even if the external process returns 75. Malformed heads, changed
+candidate/gate/worktree bindings and native timeouts also fail closed.
+
+Pending required CodeQL still releases the queue without polling or enabling
+merge; adopted off policy still follows required checks. `auto_merge` retains
+integration protection, candidate/gate authorization, final head revalidation
+and `--match-head-commit`. No merge/publication mutation is retried. The
+integration-protection loop, durable CI/merge human checkpoints, implementation
+and rebase retries, and CI budgets are separate mechanisms, not short PR-head
+observation loops; their policies are unchanged.
+The remaining short feature-template loops perform lock acquisition, retry
+`update-ref` after lock contention, wait for cancellation termination, or confirm
+an operator transition reached Waiting. They are synchronization, mutation
+recovery or durable-checkpoint protocols, not equivalent head observations, and
+are intentionally unchanged. No automatic-step defaults are applied to human
+tasks or Git effects.
+
+`npm test --workspace @a4s/issue-lifecycle` stays in-process.
+`npm run test:live --workspace @a4s/issue-lifecycle` explicitly opts into native
+coverage, including `test/live/native-observation.test.ts` against pinned Dagu
+2.24.0. Its isolated homes and stubbed GitHub calls exercise all thirteen
+convergence positions, exhaustion, auth failures and fresh timeout budgets.
+Native step logs are append-only across retries; inspect each labelled read and
+`retryCount`, not `doneCount` or separate DAG-attempt IDs. Failure/timeout routing
+is a failed observation and aborted downstream. On failure the test retains the
+generated definition, native logs/status and timing records in its temporary
+home. Existing admitted snapshots and receipts are not rewritten.
+
 ## Versioned executable and release builds
 
 The release engine is one Bun-compiled `a4s` executable. Repository tools and

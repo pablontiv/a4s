@@ -32,7 +32,7 @@ for (const [name, definition] of definitions) {
     const source = readFileSync(definition, "utf8");
     for (const [step, dependency] of [
       ["recover_gate", "gate"], ["validation", "recover_gate_cancellation"],
-      ["push", "validation_cancellation"], ["pr", "recover_push_cancellation"], ["code_scanning", "pr"], ["auto_merge", "code_scanning"],
+      ["push", "validation_cancellation"], ["pr", "recover_push_cancellation"], ["code_scanning", "pr"], ["pr_head_ready", "code_scanning"], ["auto_merge", "pr_head_ready"],
     ]) assert.match(extractStep(source, step!), new RegExp(`depends: ${dependency}`));
     const publications = source.split("\n  - id:").filter(block => block.includes('push "--force-with-lease=$remote_ref:$expected" --set-upstream origin "$sha:$remote_ref"'));
     assert.equal(publications.length, 1);
@@ -71,6 +71,17 @@ for (const [name, definition] of definitions) {
     assert.match(extractStep(source, "poc_scope_prepare"), /name: SCOPE_REJECTION/);
     assert.match(extractStep(source, "poc_scope_decision"), /outputs.SCOPE_REJECTION/);
     assert.match(source, /"recover_poc_scope - scope-transition.log"/);
+  });
+  test(`${name} readiness alone is retried and cannot mutate GitHub`, () => {
+    const source = readFileSync(definition, "utf8");
+    const ready = extractStep(source, "pr_head_ready");
+    assert.match(ready, /timeout_sec: 30/);
+    assert.match(ready, /retry_policy:\n      limit: 12\n      interval_sec: 5\n      exit_code: \[75\]/);
+    assert.match(ready, /exit 75/);
+    assert.doesNotMatch(ready, /gh pr merge|sleep|for \(\(/);
+    const merge = extractStep(source, "auto_merge");
+    assert.doesNotMatch(merge, /retry_policy|head_convergence/);
+    assert.match(merge, /equal head_sha/);
   });
   test(`${name} changed publication disarms the resolved PR and merge requests always guard the admitted SHA`, () => {
     const source = readFileSync(definition, "utf8");
