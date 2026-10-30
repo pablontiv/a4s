@@ -15,10 +15,14 @@ import { classifyRuns } from "./reconcile-classify.ts";
 import { observeRequiredCheckPolicy } from "./required-check-policy.ts";
 import { observeRequiredChecks } from "./required-check-results.ts";
 
+export function requireExactRelease(release: string): void {
+  if (!/^a4s@(?:r(0|[1-9]\d*)|v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.test(release)) throw new Error("Pinned reconciliation requires an exact release a4s@vX.Y.Z, never a moving ref");
+}
+
 export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
   if (mode === "cache" && args.length === 2 && args[0] === "--release") {
-    if (!/^a4s@v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(args[1]!)) throw new Error("Pinned reconciliation requires an exact release a4s@vX.Y.Z, never a moving ref");
+    requireExactRelease(args[1]!);
     const release = resolveRelease(args[1]!);
     const cached = await ensureArtifact(process.env.DAGU_HOME || join(homedir(), ".dagu"), release);
     console.log(artifactToken(cached.record));
@@ -83,5 +87,5 @@ export async function main(argv: string[]): Promise<void> {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile cache --release a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile cache --release a4s@r<N>|a4s@vX.Y.Z | render --artifact <version>@<commit>#<digest> | classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }
