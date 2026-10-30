@@ -45,8 +45,7 @@ async function run(argv: string[], io: RoleJobIO, deps: RoleJobDependencies): Pr
     io.log(`result.path=${join(state, "role-jobs", id, "result.json")}`);
     const result = verifyTriageResult(primary, run, id);
     io.log(`transcript.path=${result.native!.transcript}`);
-    const status = deps.execFileSync("dagu", ["status", "feature", "--run-id", process.env.RUN || ""], { encoding: "utf8" });
-    const iteration = Number(/push-back iteration: ([0-9]+)/.exec(status)?.[1] ?? "0");
+    const iteration = Number(process.env.DAG_PUSHBACK_ITERATION ?? "0");
     if (result.binding.iteration !== iteration) throw new Error("Triage result belongs to another native iteration");
     const output = (value: unknown) => String(value).replace(/[\r\n]+/g, " ");
     if (result.output?.poc !== process.env.POC || output(result.output?.question) !== process.env.QUESTION || output(result.output?.reason) !== process.env.BASIS) throw new Error("Triage outputs differ from the native role result");
