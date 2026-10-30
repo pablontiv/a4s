@@ -107,7 +107,7 @@ async function serviceHost(c, label, binary, args) {
   const directory = join(c.out, label);
   const script = join(directory, 'service-host.sh'), pidFile = join(directory, 'host.pid'), exitFile = join(directory, 'host.exit');
   writeFileSync(script, `#!/bin/bash\ncd ${quote(c.primary)} || exit 1\nfor key in \${!DAGU_@} \${!DAG_@}; do unset "$key"; done\nunset RUN PRIMARY A4S_BIN A4S_ARTIFACT OMP_SESSION_ID\nexport DAGU_HOME=${quote(c.home)} A4S_PRIMARY=${quote(c.primary)}\n${[binary, ...args].map(quote).join(' ')} >${quote(join(directory, 'host.log'))} 2>&1 &\nhost=$!\necho "$host" >${quote(pidFile)}\nwait "$host"\ncode=$?\necho "$code" >${quote(exitFile)}\nexit "$code"\n`);
-  const run = `cutover-${c.phase}-selected-binary-${label.split('/').at(-1)}`;
+  const run = `${c.probeRun}-${label.split('/').at(-1)}`;
   const dag = join(directory, 'probe.yaml');
   writeFileSync(dag, `name: ${run}\nsteps:\n  - id: native\n    command: bash ${JSON.stringify(script)}\n`);
   command({ ...c, env: process.env }, `${label}/enqueue`, c.dagu, ['enqueue', '--run-id', run, dag]);
@@ -122,7 +122,10 @@ async function serviceHost(c, label, binary, args) {
 async function serviceProbe(c) {
   // Execute the probe on the station scheduler, not in this invoking shell. It
   // writes only to the explicitly supplied evidence directory and promotes nothing.
-  const run = `cutover-${c.phase}-selected-binary`;
+  // Station run IDs are permanent; a per-attempt suffix lets the phase be retried.
+  // Dagu DAG names must stay under 40 characters, including the host label suffix.
+  c.probeRun = `${c.phase}-sb-${Date.now().toString(36)}`;
+  const run = c.probeRun;
   const probe = join(c.out, 'service-probe.yaml');
   const script = join(c.out, 'service-probe.mjs');
   writeFileSync(script, `import {writeFileSync,realpathSync,readFileSync} from 'node:fs';\nimport {execFileSync} from 'node:child_process';\nimport {createHash} from 'node:crypto';\nconst locate=n=>execFileSync('sh',['-c','command -v "$1"','probe',n],{encoding:'utf8'}).trim();\nconst binary=realpathSync(locate('omp')),dagu=realpathSync(locate('dagu'));\nwriteFileSync(${JSON.stringify(join(c.out, 'service-environment.json'))},JSON.stringify({binary,dagu,path:process.env.PATH,home:process.env.HOME,agentDir:process.env.PI_CODING_AGENT_DIR,version:execFileSync(binary,['--version'],{encoding:'utf8'}).trim(),digest:createHash('sha256').update(readFileSync(binary)).digest('hex')}),{mode:0o600});\n`);
@@ -153,7 +156,8 @@ async function buildFixtures(c) {
     const agentSentinel = name === 'skillsOnly' ? 'A' : sentinel;
     for (const key of ['agent', 'reviewer']) writeFileSync(paths[key], `${original[key]}\nNative acceptance sentinel: ${agentSentinel}. When the scratch assignment asks for a sentinel, return exactly ${agentSentinel} in its sentinel field. For the isolated native acceptance fixture issue, answer poc=no, with this sentinel in the reason; all operations are local, already demonstrated mechanisms and require no feasibility experiment.\n`);
     writeFileSync(paths.skill, `${original.skill}\nNative acceptance skill sentinel: ${name === 'agentOnly' ? 'skillsOnly' : sentinel}.\n`);
-    if (name === 'nonStarting') writeFileSync(paths.cli, `if (typeof A4S_COMPILED !== 'undefined' && A4S_COMPILED && process.argv[2] !== 'version') throw new Error('Native acceptance non-starting fixture');\n${original.cli}`);
+    // Insert after any shebang: a shebang is only valid on the first line.
+    if (name === 'nonStarting') writeFileSync(paths.cli, original.cli.replace(/^(#![^\n]*\n)?/, shebang => `${shebang}if (typeof A4S_COMPILED !== 'undefined' && A4S_COMPILED && process.argv[2] !== 'version') throw new Error('Native acceptance non-starting fixture');\n`));
     const patch = command(c, `build/${name}/patch`, 'git', ['-C', c.source, 'diff', '--', 'packages/issue-lifecycle']).stdout;
     const patchPath = join(c.out, `build/${name}/fixture.patch`); writeFileSync(patchPath, patch);
     command(c, `build/${name}/compile`, process.execPath, ['scripts/build-a4s.mjs', '--target', `bun-${target}`, '--outdir', c.releases, '--test-version', version, '--test-commit', c.commit], { cwd: c.source, env: { ...c.env, A4S_LIVE_DAGU: '1' } });
