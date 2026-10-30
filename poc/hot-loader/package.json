@@ -1,0 +1,8 @@
+{
+  "name": "@a4s/poc-hot-loader",
+  "private": true,
+  "type": "module",
+  "omp": {
+    "extensions": ["loader.ts"]
+  }
+}
