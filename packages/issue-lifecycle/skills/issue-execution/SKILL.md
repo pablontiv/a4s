@@ -44,7 +44,7 @@ flowchart LR
 
 ## Requirements
 
-- The operator supplies `dagu` and a running scheduler, plus one station-local JSON service-environment declaration selected by absolute `A4S_SERVICE_ENV`. Its required literal `DAGU_URL`, absolute `DAGU_HOME` and absolute-entry `PATH` are supplied identically to Dagu and a4s; readiness never discovers them from a process or service manager. See [station contract and operator-owned manager examples](../../../../docs/operations/deployment.md#declare-the-station-service-environment).
+- The operator supplies `dagu` and a running scheduler, plus one station-local JSON service-environment declaration at `$XDG_CONFIG_HOME/a4s/service-environment.json` (default `~/.config/a4s/service-environment.json`). An absolute `A4S_SERVICE_ENV` is an explicit override for isolated/test stations, not a required host variable. Its required literal `DAGU_URL`, absolute `DAGU_HOME` and absolute-entry `PATH` are supplied identically to Dagu and a4s; readiness never discovers those values from a process or service manager. See [station contract and operator-owned manager examples](../../../../docs/operations/deployment.md#declare-the-station-service-environment).
 - `@a4s/issue-lifecycle` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - The operator-installed stable `a4s-launch` is `a4s` on PATH for admission.
   Load/link the selected payload's complete extracted release root as the OMP
@@ -74,7 +74,7 @@ flowchart LR
   or provision repository-specific gate tools.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
-- Select the same `A4S_SERVICE_ENV` declaration as the service. Any explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` in your shell must match it; `a4s service-environment` reports the validated values or field-specific operator actions. All clients and fresh DAG snapshots use this source; there is no user-home or default-port fallback. Only fresh admissions from new immutable releases receive this cutover. Existing snapshots, receipts, bindings and releases remain unchanged; run-bound helpers reject declaration changes rather than retargeting a run.
+- Use the same default config home or explicit `A4S_SERVICE_ENV` override as the service. Any explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` in your shell must match the declaration; `a4s service-environment` reports the validated values or field-specific operator actions, including the expected default path when missing. CLI, OMP run guard and status widget share discovery. All clients and fresh DAG snapshots use this source; only the declaration filename has a home fallback, never the service values or port. Fresh snapshots pin the resolved absolute declaration filename. Existing snapshots, receipts, bindings and releases remain unchanged; run-bound helpers reject declaration changes rather than retargeting a run.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Node for the real filesystem gate preload. Kernel advisory locks are native
   in the compiled release; Python `fcntl` is a source-development fallback only.
@@ -148,7 +148,7 @@ conflicting environment value appears in `ROLE_JOB_CAPACITY` dispatch diagnostic
 An operator changes the policy in the station's canonical home with:
 
 ```sh
-A4S_SERVICE_ENV="<absolute-station-declaration.json>" a4s role-jobs capacity 6
+a4s role-jobs capacity 6
 ```
 
 Use the actual service's `DAGU_HOME` and the desired positive integer. The command
@@ -187,10 +187,15 @@ the service, or restarts it. The operator supplies Dagu 2.23.0 or newer, an
 unauthenticated loopback API, enabled queues/coordinator and the named global
 lane queue with operator-selected capacity.
 
-Set `A4S_SERVICE_ENV` to the absolute filename of the operator's UTF-8 JSON
-object containing `DAGU_URL`, `DAGU_HOME`, and `PATH`. Supply the same declaration
-to Dagu's service environment; it is not committed consumer workflow policy.
-There is no shell expansion or fallback. The declared scheduler PATH must resolve
+Place the operator's UTF-8 JSON object containing `DAGU_URL`, `DAGU_HOME`, and
+`PATH` at `$XDG_CONFIG_HOME/a4s/service-environment.json`. An unset, empty or
+relative `XDG_CONFIG_HOME` selects `~/.config/a4s/service-environment.json`;
+`HOME` supplies the user home, or the OS user home when unavailable.
+For an isolated/test station, set `A4S_SERVICE_ENV` to an absolute filename instead.
+An explicitly empty, relative, missing or invalid override fails closed without
+trying the default. Supply the same declaration to Dagu's service environment;
+it is not committed consumer workflow policy. Discovery never supplies missing
+JSON fields or expands their values. The declared scheduler PATH must resolve
 `bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`; initial admission
 also needs `a4s`. An interactive shell's PATH neither repairs nor invalidates
 the declared toolchain. Any explicitly selected home/endpoint must match.
@@ -198,7 +203,8 @@ the declared toolchain. Any explicitly selected home/endpoint must match.
 Before adoption, inspect without changing the station:
 
 ```sh
-export A4S_SERVICE_ENV="<absolute-station-declaration.json>"
+# No export needed at the default location.
+# Explicit override only: export A4S_SERVICE_ENV="<absolute-station-declaration.json>"
 a4s service-environment
 a4s queue --lane "<lane>"
 # After a consumer config exists:
@@ -593,7 +599,7 @@ a4s prioritize feature <repo>-issue-<n>
 # Or: a4s prioritize poc <repo>-poc-<run>
 ```
 
-Select the service's `A4S_SERVICE_ENV` declaration. The command requires the retained definition's explicit
+Select the service's declaration through the default config home or explicit `A4S_SERVICE_ENV` override. The command requires the retained definition's explicit
 repository queue and native `maxConcurrency=1`. It reads native head-to-tail queue
 pages and captures every queued run's original ID, parameters and per-run
 `/api/v1/dag-runs/<dag>/<run>/spec` bytes before dequeue. It keeps the urgent run
@@ -1383,7 +1389,7 @@ tested SHA.
 Before any candidate, branch or clean-state checks, `gate` acquires the station's
 single heavy-test slot at the declared `$DAGU_HOME/a4s/heavy-slot.lock`. Every
 clone, worktree, operator shell and agent session on a station must select the
-same `A4S_SERVICE_ENV` declaration and canonical home. This path is independent of
+same declaration (default config home or explicit `A4S_SERVICE_ENV` override) and canonical home. This path is independent of
 Git metadata. The compiled `a4s heavy-slot` helper holds an inheritable
 kernel lock through the complete Bash body, GATE, post-checks and tested-SHA
 publication. Every gate entry path shares this boundary: completion,

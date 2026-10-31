@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { stationEnv } from "./fixtures/service-environment.ts";
+import { stationEnv, useDefaultStation } from "./fixtures/service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,4 +116,33 @@ test("verified dispatch binds receipt run, primary and station before accepting 
     }
     await assert.rejects(verifiedRun(primary, "../ambiguous", async () => cachedArtifact(home)), /unambiguous run ID/);
   } finally { process.env = previous; }
+});
+
+test("run guard resolves a default declaration and still rejects admitted station changes", async () => {
+  const restore = useDefaultStation(home);
+  const run = "default-declaration";
+  const path = save(run);
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  value.initial.runtimeAndModels.station = JSON.parse(readFileSync(join(home, "config/a4s/service-environment.json"), "utf8"));
+  writeFileSync(path, JSON.stringify(value));
+  const verify: typeof verifiedRun = (primary, run) => verifiedRun(primary, run, async () => cachedArtifact(home));
+  try {
+    for (const command of [
+      `PRIMARY='${primary}' dagu retry feature --run-id ${run}`,
+      `PRIMARY='${primary}' dagu human-task complete feature --run-id ${run} --step validation`,
+    ]) {
+      const decision = await runMutationDecision({ toolName: "bash", toolCallId: "default", input: { command } }, primary, verify);
+      assert.ok(decision && "input" in decision, JSON.stringify(decision));
+      assert.ok(String(decision.input.command).includes(cachedArtifact(home).executable));
+    }
+    const declaration = join(home, "config/a4s/service-environment.json");
+    const station = JSON.parse(readFileSync(declaration, "utf8"));
+    writeFileSync(declaration, JSON.stringify({ ...station, DAGU_URL: "http://127.0.0.1:19644" }));
+    delete process.env.DAGU_URL;
+    const rejected = await runMutationDecision({ toolName: "bash", toolCallId: "changed", input: {
+      command: `PRIMARY='${primary}' dagu retry feature --run-id ${run}`,
+    } }, primary, verify);
+    assert.ok(rejected && "block" in rejected);
+    assert.match(rejected.reason, /Run station declaration differs from admitted DAGU_URL/);
+  } finally { restore(); }
 });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { queueReadiness, stationReadiness } from "../src/queue.ts";
-import { declareService } from "./fixtures/service-environment.ts";
+import { declareService, useDefaultStation } from "./fixtures/service-environment.ts";
 import { main as launcher } from "../../launcher/src/cli.ts";
 import { main as release } from "../src/cli.ts";
 import { parse } from "yaml";
@@ -73,7 +73,7 @@ test("readiness uses only declared file/HTTP boundaries and preserves all statio
       assert.equal(report.ready, true, report.checks.join("\n"));
     }
     assert.deepEqual(requests, Array(2).fill(["GET /api/v1/queues", "GET /api/v1/services/scheduler"]).flat());
-    for (const invalid of [{}, { ...env, DAGU_HOME: join(home, "other") }, { ...env, A4S_SERVICE_ENV: join(home, "absent") }]) {
+    for (const invalid of [{ HOME: home }, { ...env, DAGU_HOME: join(home, "other") }, { ...env, A4S_SERVICE_ENV: join(home, "absent") }]) {
       requests.length = 0;
       const report = await stationReadiness(undefined, "fixture", invalid);
       assert.equal(report.ready, false);
@@ -114,7 +114,9 @@ test("bootstrap uses its release-bound launcher reader and shares failure diagno
   assert.ok(detect.includes('spec_url="$DAGU_URL/api/v1/dag-runs/'));
   assert.ok(detect.includes('"$spec_url" "$DAGU_HOME"'));
   assert.doesNotMatch(detect, /DAGU_PORT|HOME\/\.dagu|A4S_SERVICE_ENV|launchctl|plutil|\/proc|checkout/);
-  const old = process.env.A4S_SERVICE_ENV;
+  const previous = process.env;
+  const home = mkdtempSync(join(tmpdir(), "a4s-missing-default-"));
+  process.env = { ...previous, XDG_CONFIG_HOME: home };
   delete process.env.A4S_SERVICE_ENV;
   try {
     const errors: string[] = [];
@@ -125,8 +127,54 @@ test("bootstrap uses its release-bound launcher reader and shares failure diagno
       }, /service-environment ready=no field=A4S_SERVICE_ENV/);
     }
     assert.equal(errors[0], errors[1]);
+    assert.ok(errors[0]!.includes(join(home, "a4s", "service-environment.json")));
   } finally {
-    if (old === undefined) delete process.env.A4S_SERVICE_ENV;
-    else process.env.A4S_SERVICE_ENV = old;
+    process.env = previous;
+    rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("launcher and release service-environment commands discover the same default declaration", async t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-cli-default-"));
+  const restore = useDefaultStation(home, "http://127.0.0.1:19643");
+  const output: string[] = [];
+  t.mock.method(console, "log", (text: string) => { output.push(text); });
+  try {
+    for (const command of [launcher, release]) await command(["service-environment"]);
+    assert.equal(output.length, 2);
+    assert.equal(output[0], output[1]);
+    assert.deepEqual(JSON.parse(output[0]!), {
+      DAGU_URL: "http://127.0.0.1:19643", DAGU_HOME: home, PATH: process.env.PATH,
+    });
+  } finally { restore(); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("readiness accepts a default declaration and diagnoses its exact missing path before HTTP", async t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s-readiness-default-"));
+  const restore = useDefaultStation(home, "http://127.0.0.1:19643");
+  let requests = 0;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    requests++;
+    const url = new URL(String(input));
+    assert.equal(url.origin, "http://127.0.0.1:19643");
+    return Response.json(url.pathname.endsWith("/queues")
+      ? { queues: [{ name: "fixture", type: "global" }] }
+      : { schedulers: [{ status: "active" }] });
+  });
+  writeFileSync(join(home, "config.yaml"), "auth: {mode: none}\ncoordinator: {enabled: true}\nqueues:\n  config:\n    - {name: fixture, max_concurrency: 1}\n");
+  try {
+    const ready = await stationReadiness(undefined, "fixture");
+    assert.equal(ready.ready, true, ready.checks.join("\n"));
+    assert.equal(requests, 2);
+    requests = 0;
+    const conflicting = await stationReadiness(undefined, "fixture", { ...process.env, DAGU_URL: "http://127.0.0.1:19644" });
+    assert.equal(conflicting.ready, false);
+    assert.match(conflicting.checks.join("\n"), /field=DAGU_URL.*does not match/);
+    const file = join(home, "config", "a4s", "service-environment.json");
+    rmSync(file);
+    const missing = await stationReadiness(undefined, "fixture");
+    assert.equal(missing.ready, false);
+    assert.ok(missing.checks.join("\n").includes(file));
+    assert.equal(requests, 0);
+  } finally { restore(); rmSync(home, { recursive: true, force: true }); }
 });

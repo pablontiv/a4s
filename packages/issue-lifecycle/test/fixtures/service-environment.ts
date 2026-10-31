@@ -36,6 +36,18 @@ export function useStation(home: string, endpoint?: string): () => void {
   };
 }
 
+/** Emulate an OMP host started without an explicit declaration override. */
+export function useDefaultStation(home: string, endpoint?: string): () => void {
+  const previous = { ...process.env };
+  const restore = useStation(home, endpoint);
+  const config = join(home, "config");
+  mkdirSync(join(config, "a4s"), { recursive: true });
+  writeFileSync(join(config, "a4s", "service-environment.json"), readFileSync(process.env.A4S_SERVICE_ENV!));
+  process.env = { ...process.env, XDG_CONFIG_HOME: config };
+  delete process.env.A4S_SERVICE_ENV;
+  return () => { restore(); process.env = previous; };
+}
+
 /** Declare the station selected by a native fixture's complete child environment. */
 export function stationEnvironment<T extends NodeJS.ProcessEnv>(env: T): T & NodeJS.ProcessEnv {
   const endpoint = env.DAGU_PORT ? `http://127.0.0.1:${env.DAGU_PORT}` : env.DAGU_URL ?? process.env.DAGU_URL!;
