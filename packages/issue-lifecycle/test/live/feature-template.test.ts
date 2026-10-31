@@ -187,9 +187,9 @@ function writePocBasis(repo: Repository, pocRun: string, mutate: (worktree: stri
     while IFS= read -r -d '' path; do
       (cd "$WORKTREE"; git diff --no-index --binary -- /dev/null "$path") >> "$PATCH" || test "$?" -eq 1
     done < <(git -C "$WORKTREE" ls-files --others --exclude-standard -z)
-    shasum -a 256 "$PATCH" | awk '{print $1}' > "$PATCH.sha256"
   `], { env: { ...process.env, WORKTREE: worktree, BASE: base, PATCH: patch } });
-  const digest = readFileSync(`${patch}.sha256`, "utf8").trim();
+  const digest = createHash("sha256").update(readFileSync(patch)).digest("hex");
+  writeFileSync(`${patch}.sha256`, `${digest}\n`);
   writeFileSync(join(state, "comment.url"), "https://example.test/comments/9\n");
   writeFileSync(join(state, "promotion.url"), "https://example.test/comments/9\n");
   writeFileSync(join(state, "base.sha"), `${base}\n`);
@@ -610,6 +610,7 @@ test("template captures native implementation and publishes the gated candidate"
     const candidate = JSON.parse(readFileSync(join(repo.state, "candidate.json"), "utf8"));
     assert.equal(git(repo.primary, "ls-remote", "origin", `refs/heads/${repo.branch}`).split(/\s/)[0], candidate.sha);
     assert.equal(candidate.implementation.inputSha, binding.sha);
+    assert.equal(candidate.implementation.resultDigest, createHash("sha256").update(readFileSync(resultFile)).digest("hex"));
     assert.notEqual(candidate.sha, binding.sha);
     assert.equal(candidate.summary, output.summary);
     assert.equal(candidate.message, output.message);
@@ -1043,6 +1044,13 @@ for (const [name, definition] of definitions) {
       assert.notEqual(rejected.status, 0, rejected.stdout);
       assert.match(rejected.stderr, /rule=start_gate.poc_patch_digest expected=\S+ observed=\S+/);
       assert.equal(existsSync(mismatch.worktree), false);
+      for (const sidecar of ["corrupt\n", `${"A".repeat(64)}\n`, `${"0".repeat(64)}\n`]) {
+        writeFileSync(`${basis.patch}.sha256`, sidecar);
+        const corrupt = spawnSync("bash", ["-c", script], { encoding: "utf8", env: { ...featureScriptEnv(mismatch), ...env } });
+        assert.notEqual(corrupt.status, 0, corrupt.stdout);
+        assert.match(corrupt.stderr, /rule=start_gate.poc_patch_digest/);
+        assert.equal(existsSync(mismatch.worktree), false);
+      }
     } finally {
       rmSync(mismatch.root, { recursive: true, force: true });
     }

@@ -26,6 +26,10 @@ steps:
       for tool in git gh jq curl dagu "$A4S_BIN"; do
         command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
       done
+      # Templates hash with the release executable (Node crypto) under this declared service PATH; no host hash utility is required.
+      empty_digest=$("$A4S_BIN" planning sha256 --file /dev/null) && test "$empty_digest" = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 || {
+        printf 'bootstrap detect: release hashing runtime is unavailable under the declared service environment\n' >&2; exit 1;
+      }
       "$A4S_BIN" role-jobs detect
       gh auth status >/dev/null
       test "$(git -C "$PRIMARY" rev-parse --show-toplevel)" = "$PRIMARY"

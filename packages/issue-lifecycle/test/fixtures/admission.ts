@@ -110,7 +110,8 @@ export function admissionFixture() {
     for (const file of [archive, `${archive}.sha256`]) cpSync(join(directory, file), join(releases, file));
     const path = `${githubBin}:${env.PATH ?? process.env.PATH ?? ""}`;
     const service = declareService(home, env.DAGU_URL ?? process.env.DAGU_URL!, path);
-    return spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, subcommand, "--run-id", run, dagArg, "--", "ISSUE=277", ...(params.some(param => param.startsWith("OMP_SESSION_ID=")) || !owner ? [] : [`OMP_SESSION_ID=${owner}`]), ...params], { cwd: packageDir,
+    const stageParams = dagArg === "planning" ? [] : ["ISSUE=277"];
+    return spawnSync(process.execPath, ["--import", import.meta.resolve("tsx"), cli, subcommand, "--run-id", run, dagArg, "--", ...stageParams, ...(params.some(param => param.startsWith("OMP_SESSION_ID=")) || !owner ? [] : [`OMP_SESSION_ID=${owner}`]), ...params], { cwd: packageDir,
       env: { ...process.env, ...service, A4S_PRIMARY: packageDir, ...env, PATH: path, A4S_FIXTURE_RELEASES: releases }, encoding: "utf8", timeout: 30000 });
   };
   const receipt = (run: string): string => join(packageDir, ".git", "dagu-feature", "runs", run, "receipt.json");

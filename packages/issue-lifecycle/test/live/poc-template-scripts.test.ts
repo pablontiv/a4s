@@ -1,6 +1,7 @@
 import { useStation } from "../fixtures/service-environment.ts";
 import { renderedPoc } from "../fixtures/rendered-feature.ts";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -236,7 +237,7 @@ for (const origin of ["backlog", "feature-triage"] as const) {
         "ISSUE=41", "OMP_SESSION_ID=same-session",
         "POC_BASIS=https://example.test/comments/9",
       ]]);
-      const digest = execFileSync("shasum", ["-a", "256", join(fixture.state, "full.patch")], { encoding: "utf8" }).slice(0, 64);
+      const digest = createHash("sha256").update(readFileSync(join(fixture.state, "full.patch"))).digest("hex");
       assert.equal(readFileSync(join(fixture.state, "full.patch.sha256"), "utf8").trim(), digest);
     } finally {
       fixture.cleanup();
@@ -355,7 +356,7 @@ function cleanupFixture() {
       assert.equal(result.status, 0, result.stderr);
       assert.ok(readFileSync(join(fixture.state, "comment.url"), "utf8").trim());
       const patchPath = join(fixture.state, "full.patch");
-      const digest = execFileSync("shasum", ["-a", "256", patchPath], { encoding: "utf8" }).slice(0, 64);
+      const digest = createHash("sha256").update(readFileSync(patchPath)).digest("hex");
       assert.equal(readFileSync(`${patchPath}.sha256`, "utf8").trim(), digest);
     },
     exit() {

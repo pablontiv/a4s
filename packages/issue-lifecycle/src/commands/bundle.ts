@@ -13,6 +13,8 @@ import { main as escalation } from "../escalation.ts";
 import { executingRunArtifact, invokeRun } from "../run-artifact.ts";
 import type { RunDetails } from "../status/progress.ts";
 import { isRecord } from "../../../launcher/src/type-guard.ts";
+import { fileDigest } from "../../../launcher/src/artifact-cache.ts";
+import { planningTranscript } from "../planning-transcript.ts";
 
 interface RuntimeObservation {
   run: RunDetails;
@@ -77,6 +79,23 @@ export async function main(argv: string[]): Promise<void> {
   const [command, ...args] = argv;
   if (command === "escalation") {
     await escalation(args);
+    return;
+  }
+  if (command === "sha256" || command === "planning-reviewer-transcript") {
+    try {
+      if (command === "sha256") {
+        if (args.length !== 2 || args[0] !== "--file" || !args[1]) throw new Error("Usage: sha256 --file <path>");
+        console.log(await fileDigest(args[1]));
+      } else {
+        if (args.length !== 6 || args[0] !== "--coordinator" || args[2] !== "--session" || args[4] !== "--review") {
+          throw new Error("Usage: planning-reviewer-transcript --coordinator <admitted-json> --session <id> --review <id>");
+        }
+        console.log(JSON.stringify(planningTranscript(JSON.parse(args[1] || "null"), args[3]!, args[5]!)));
+      }
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
     return;
   }
   if (command === "validate-planning-units") {

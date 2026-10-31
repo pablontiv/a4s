@@ -434,7 +434,12 @@ an existing readable absolute directory. Every colon-separated PATH entry must
 be absolute; empty PATH entries are invalid.
 Field values are literal: no shell expansion, inferred `DAGU_HOME`, port or caller-PATH fallback.
 The declared PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
-`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`.
+`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`. Hashing is
+done by the release executable (`a4s planning sha256 --file`), so no `shasum` or
+`sha256sum` is needed; bootstrap `detect` fails if that probe fails under the
+declared environment. Planning review resolves coordinating transcripts from the
+session id and transcript root recorded at admission, not from the service's
+default OMP profile.
 If the invoking environment selects `DAGU_HOME` or `DAGU_URL`, it must agree with
 the declaration. The caller's PATH is not used to judge scheduler tools.
 

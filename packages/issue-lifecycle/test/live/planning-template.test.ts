@@ -56,19 +56,25 @@ jq -nc --argjson iteration "\${FAKE_ITERATION:-0}" --argjson nodes "\${FAKE_REVI
       (if $iteration == 0 then {} else {approvalIteration:$iteration} end)] end)}}
 '
 `);
-  const env = { ...process.env, A4S_BIN: a4sBin, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
+  const sessions = join(root, ".omp", "agent", "sessions", "-primary");
+  const env = { ...process.env, A4S_BIN: a4sBin, HOME: root, TMPDIR: join(root, "tmp"), PRIMARY: primary, OUT_DIR: out, UNITS_FROM: upstream, NWO: "owner/repo", RUN: testRunId("repo-breakdown-test"), SOURCE: "plan", OMP_SESSION_ID: "owner-session", COORDINATING_SESSION: coordinating(sessions), DAGU_OUTPUT_FILE: join(root, "outputs"), PATH: `${bin}:${process.env.PATH}` };
   const run = (id: string, extra: NodeJS.ProcessEnv = {}) => spawnSync("bash", ["--noprofile", "--norc", "-c", script(id)], { env: { ...env, ...extra }, encoding: "utf8" });
   const importRows = (rows: unknown[]) => { jsonl(upstream, rows); return run("import_units"); };
   return { root, bin, out, upstream, env, run, importRows, close: () => rmSync(root, { recursive: true, force: true }) };
 }
 function successful(result: SpawnSyncReturns<string>): void { assert.equal(result.status, 0, result.stderr); }
-function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; session?: string; provider?: string; model?: string; resolvedModel?: string; changes?: { id?: string; timestamp?: string; model?: string; resolvedModelIsFallback: boolean }[]; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
-  const sessions = join(f.root, ".omp", "agent", "sessions", "-primary", "date_owner-session");
+function coordinating(transcriptRoot: string): string { return JSON.stringify({ session: "owner-session", transcriptRoot }); }
+function transcript(f: Fixture, data: unknown = { verdict: "accept", findings: [] }, extra: { root?: string; owner?: string; parent?: string; timestamp?: string; agent?: string; marker?: string; last?: unknown; sessions?: number; inits?: number; session?: string; provider?: string; model?: string; resolvedModel?: string; changes?: { id?: string; timestamp?: string; model?: string; resolvedModelIsFallback: boolean }[]; refresh?: { agent?: string; task?: string; timestamp?: string } } = {}) {
+  const root = extra.root ?? join(f.root, ".omp", "agent", "sessions", "-primary");
+  mkdirSync(root, { recursive: true });
+  const parent = join(root, `date_${extra.owner ?? "owner-session"}.jsonl`);
+  jsonl(parent, [{ type: "session", id: extra.owner ?? "owner-session" }]);
+  const sessions = parent.slice(0, -".jsonl".length);
   mkdirSync(sessions, { recursive: true });
   const init = { type: "session_init", agent: extra.agent ?? "plan-reviewer", task: extra.marker ?? readFileSync(join(f.out, "generation"), "utf8").trim(), timestamp: extra.timestamp ?? "2026-10-17T00:00:01.001Z", ...(extra.resolvedModel ? { resolvedModel: extra.resolvedModel } : {}) };
   const changes = extra.changes ?? (extra.refresh ? [{ resolvedModelIsFallback: true }] : []);
   jsonl(join(sessions, "PlanReviewTest.jsonl"), [
-    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", id: extra.session ?? "reviewer-session", parentSession: extra.parent ?? `${sessions}.jsonl` })),
+    ...Array.from({ length: extra.sessions ?? 1 }, () => ({ type: "session", id: extra.session ?? "reviewer-session", parentSession: extra.parent ?? parent })),
     ...Array.from({ length: extra.inits ?? 1 }, () => init),
     ...changes.map(change => ({ type: "model_change", ...change })),
     ...(extra.refresh ? [{ ...init, ...extra.refresh }] : []),
@@ -283,8 +289,9 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
     });
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest", FAKE_ITERATION: "1" }).status, 0);
     const duplicate = join(f.root, ".omp", "agent", "sessions", "-primary", "other_owner-session");
+    writeFileSync(`${duplicate}.jsonl`, `${JSON.stringify({ type: "session", id: "owner-session" })}\n`);
     mkdirSync(duplicate); writeFileSync(join(duplicate, "PlanReviewTest.jsonl"), "{}\n");
-    assert.notEqual(check().status, 0); rmSync(duplicate, { recursive: true });
+    assert.notEqual(check().status, 0); rmSync(duplicate, { recursive: true }); rmSync(`${duplicate}.jsonl`);
     for (const data of [
       { verdict: "revise", findings: [] },
       { verdict: "accept", findings: [{ unit: "unit-feature", severity: "blocker", text: "Missing evidence" }] },
@@ -296,6 +303,40 @@ test("review binds parent, generation, agent, cutoff and final structured verdic
     assert.notEqual(f.run("materialize", { APPROVED: "all" }).status, 0, "completing approval cannot bypass revise");
     assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
     accepted(f, [unit("corrected")]); successful(f.run("materialize", { APPROVED: "corrected" }));
+  } finally { f.close(); }
+});
+
+test("review lookup follows the admitted coordinating profile root and fails closed otherwise", () => {
+  const f = fixture();
+  try {
+    successful(f.importRows([unit()])); successful(f.run("check_plan"));
+    const profile = join(f.root, ".omp", "profiles", "review", "agent", "sessions", "-primary");
+    const defaults = join(f.root, ".omp", "agent", "sessions", "-primary");
+    const check = (root: string | null, env: NodeJS.ProcessEnv = {}) => f.run("check_review", { REVIEW: "PlanReviewTest", COORDINATING_SESSION: root === null ? "null" : coordinating(root), ...env });
+    // A valid decoy in the service's default profile must never satisfy a profiled admission, nor the reverse.
+    transcript(f, undefined, { root: defaults });
+    for (const env of [{}, { OMP_PROFILE: "review" }, { PI_CODING_AGENT_DIR: join(f.root, "elsewhere") }]) {
+      const refused = check(profile, env);
+      assert.notEqual(refused.status, 0);
+      assert.match(refused.stderr, /Cannot read admitted coordinating transcript root|Missing or ambiguous coordinating transcript/);
+    }
+    transcript(f, undefined, { root: profile });
+    for (const env of [{}, { OMP_PROFILE: "other" }, { PI_PROFILE: "other" }, { PI_CONFIG_DIR: ".other" }, { PI_CODING_AGENT_DIR: join(f.root, "elsewhere") }]) {
+      successful(check(profile, env));
+      rmSync(join(f.out, "review-0.json"), { force: true });
+    }
+    const missing = check(null);
+    assert.notEqual(missing.status, 0);
+    assert.match(missing.stderr, /Missing admitted coordinating session\/transcript root/);
+    const absent = check(join(f.root, "absent"));
+    assert.notEqual(absent.status, 0);
+    assert.match(absent.stderr, /Cannot read admitted coordinating transcript root/);
+    const foreign = f.run("check_review", { REVIEW: "PlanReviewTest", COORDINATING_SESSION: JSON.stringify({ session: "other-session", transcriptRoot: profile }) });
+    assert.notEqual(foreign.status, 0);
+    jsonl(join(profile, "twice_owner-session.jsonl"), [{ type: "session", id: "owner-session" }]);
+    const ambiguous = check(profile);
+    assert.notEqual(ambiguous.status, 0);
+    assert.match(ambiguous.stderr, /Missing or ambiguous coordinating transcript/);
   } finally { f.close(); }
 });
 
@@ -419,7 +460,7 @@ test("native planning push-back and cancellation preserve guarded materializatio
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
   delete native.queue;
-  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "A4S_SERVICE_ENV", "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "PRIMARY"].includes(key))
+  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "A4S_SERVICE_ENV", "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "PRIMARY", "COORDINATING_SESSION"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
   native.steps.find((step: { id: string }) => step.id === "init").run =

@@ -196,7 +196,9 @@ An explicitly empty, relative, missing or invalid override fails closed without
 trying the default. Supply the same declaration to Dagu's service environment;
 it is not committed consumer workflow policy. Discovery never supplies missing
 JSON fields or expands their values. The declared scheduler PATH must resolve
-`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`; initial admission
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`; templates hash through the
+release executable (`a4s planning sha256 --file <path>`, Node crypto), so `shasum`
+and `sha256sum` are not required; initial admission
 also needs `a4s`. An interactive shell's PATH neither repairs nor invalidates
 the declared toolchain. Any explicitly selected home/endpoint must match.
 
@@ -530,7 +532,16 @@ a4s planning validate-planning-units --input "/absolute/path/to/units.jsonl" \
 
 Diagnostics collect all independent mechanical failures as deterministic JSONL (`line`, `field`, `rule`, `expected`, `observed`). A valid snapshot retains exact input bytes; completeness and judgment remain the independent reviewer's responsibility. See backlog-breakdown for the structured `relationships` and explicit `revision: {issue, fields}` contract.
 
-Planning review requires exactly one session with the expected coordinator parent
+Planning review locates its reviewer only inside the coordinating OMP session
+admitted with the run: enqueue from the coordinating session so admission records
+its session id and actual transcript root (including any named profile or
+`PI_CODING_AGENT_SESSION_DIR`). `check_review` lists that root for exactly one
+`*_<session>.jsonl` parent whose single `session` row has that id and reads
+`<parent stem>/<review>.jsonl`; it never searches `~/.omp/agent/sessions`, the
+service's own profile or another profile. Missing, unreadable or ambiguous
+coordinating evidence fails closed with a diagnostic, and the rendered DAG
+carries only the admitted `COORDINATING_SESSION` JSON, not the bootstrap
+caller's profile. Planning review requires exactly one session with the expected coordinator parent
 and one or more `session_init` rows sharing the `plan-reviewer` agent and identical
 task. The exact generation marker is the first line of the reviewer assignment's
 `task` field. `check_review` reads that line from `session_init.task`; placing the

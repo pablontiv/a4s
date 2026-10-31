@@ -3,7 +3,7 @@ import { preflightAdmission, enqueueArguments, loadedExtensionDigest } from "../
 
 // Rewrite before shell evaluation so loops and quoted variable expansions are
 // checked using their effective arguments immediately before Dagu creates a run.
-export function admissionDecision(event: Event, session?: { transcriptRoot: string }, cwd = process.cwd()): CallDecision {
+export function admissionDecision(event: Event, session?: { sessionId?: string; transcriptRoot: string }, cwd = process.cwd()): CallDecision {
   const field = event.toolName === "bash" ? "command" : event.toolName === "eval" ? "code" : undefined;
   const text = field ? event.input[field] : undefined;
   if (!field || typeof text !== "string" || !/\bdagu\s+enqueue\b/.test(text)) return undefined;

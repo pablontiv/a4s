@@ -21,6 +21,7 @@ env:
   - DAGU_HOME: __DAGU_HOME__
   - PATH: __SERVICE_PATH__
   - A4S_SERVICE_ENV: __A4S_SERVICE_ENV__
+  - COORDINATING_SESSION: __COORDINATING_SESSION__
   - PRIMARY: __PRIMARY__
   - RUN: ${context.run.id}
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
@@ -163,28 +164,10 @@ steps:
       iteration=$(jq -er '[.dagRunDetails.nodes[]? | select(.step.id == "review")] | select(length == 1) | .[0] | (if has("approvalIteration") then .approvalIteration else 0 end) | select(type == "number" and . >= 0 and floor == .)' <<<"$rest")
       marker="PLAN_REVIEW AGENT=plan-reviewer DAG=planning RUN=$RUN ITERATION=$iteration END"
       test "$(cat "$OUT_DIR/generation")" = "$marker"
-      canonical=$(cd "$PRIMARY" && pwd -P)
-      home=$(cd "$HOME" && pwd -P)
-      tmp=$(cd "${TMPDIR:-/tmp}" && pwd -P)
-      encode_relative() {
-        local prefix=$1 relative=$2 result
-        result=${relative//\//-}; result=${result//\\/-}; result=${result//:/-}
-        if [[ -z "$result" ]]; then printf '%s' "$prefix"
-        elif [[ "$prefix" == *- ]]; then printf '%s%s' "$prefix" "$result"
-        else printf '%s-%s' "$prefix" "$result"; fi
-      }
-      if [[ "$canonical" == "$tmp" ]]; then encoded=$(encode_relative -tmp '')
-      elif [[ "$canonical" == "$tmp/"* ]]; then encoded=$(encode_relative -tmp "${canonical#"$tmp/"}")
-      elif [[ "$canonical" == "$home" ]]; then encoded=$(encode_relative - '')
-      elif [[ "$canonical" == "$home/"* ]]; then encoded=$(encode_relative - "${canonical#"$home/"}")
-      else
-        encoded=${canonical#/}; encoded=${encoded//\//-}; encoded=${encoded//\\/-}; encoded=${encoded//:/-}; encoded="--${encoded}--"
-      fi
-      shopt -s nullglob
-      matches=("$HOME/.omp/agent/sessions/$encoded"/*_"$OMP_SESSION_ID"/"$REVIEW".jsonl)
-      test "${#matches[@]}" -eq 1
-      transcript=${matches[0]}
-      expected_parent="${transcript%/*}.jsonl"
+      location=$("$A4S_BIN" planning planning-reviewer-transcript \
+        --coordinator "$COORDINATING_SESSION" --session "$OMP_SESSION_ID" --review "$REVIEW")
+      transcript=$(jq -er '.transcript' <<<"$location")
+      expected_parent=$(jq -er '.parent' <<<"$location")
       jq -se --arg parent "$expected_parent" --arg marker "$marker" --arg cutoff "$cutoff" '
         def epoch:
           capture("^(?<base>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\\.(?<frac>[0-9]+))?(?<zone>Z|(?<sign>[+-])(?<hour>[0-9]{2}):(?<minute>[0-9]{2}))$") |

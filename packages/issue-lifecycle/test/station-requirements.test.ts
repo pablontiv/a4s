@@ -19,6 +19,8 @@ test("package exposes engine and stable launcher; bootstrap never installs stati
   assert.deepEqual(spec.steps.map(step => step.id), ["detect", "config", "worktrees", "write_config", "readiness", "github", "confirm"]);
   const detect = spec.steps.find(step => step.id === "detect")!.run!;
   assert.match(detect, /for tool in git gh jq curl dagu "\$A4S_BIN"; do/);
+  assert.match(detect, /"\$A4S_BIN" planning sha256 --file \/dev\/null/);
+  assert.doesNotMatch(detect, /shasum/);
   assert.match(detect, /"\$A4S_BIN" role-jobs detect/);
   assert.match(detect, /"\$A4S_BIN" queue --lane "\$repo"/);
   const scripts = spec.steps.map(step => step.run ?? "").join("\n");
