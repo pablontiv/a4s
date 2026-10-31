@@ -209,7 +209,7 @@ steps:
         and findings.md. An accepted independent review is required for publication.
         For corrections, edit UNITS_FROM upstream through refine/the coordinator,
         then explicitly push back to import_units for a fresh import and review.
-        Only the operator authorizes APPROVED=all or a comma-separated subset of ids.
+        The operator, or a coordinator under a recorded autonomous mandate permitting issue creation (see [sprint-planning §5](../sprint-planning/SKILL.md#5-autonomous-sprint)), authorizes APPROVED=all or a comma-separated subset of ids only after an accepted independent review of the unchanged validated units.
         GitHub issues are created only after this approval and an accepted review.
         Complete CANCEL=yes to cancel without APPROVED or GitHub writes.
         Normal publication requires CANCEL=no and APPROVED.

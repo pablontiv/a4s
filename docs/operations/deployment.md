@@ -311,6 +311,9 @@ already admitted runs and their successors stay on their original artifact.
 ### Install the stable launcher, tick DAG and release plugin
 
 These are separately authorized operator actions, never engine side effects.
+A recorded [autonomous sprint mandate](../../packages/issue-lifecycle/skills/sprint-planning/SKILL.md#5-autonomous-sprint)
+counts as that authorization for documented procedures, except provisioning,
+changing or rotating credentials.
 Use the canonical `DAGU_HOME`, reviewed platform launcher archive/checksum and
 trusted initial payload tuple from its immutable release. Follow the drained
 station policy above for initial/model-changing cutover; ordinary compatible
@@ -400,6 +403,9 @@ The station operator owns Dagu's configuration, capacity, service unit and
 activation. a4s never writes `$DAGU_HOME/config.yaml`, `base.yaml`, service
 declarations, launchd or systemd units. It never installs, activates, reloads or
 restarts Dagu. No service installer, unit generator or activation hook is shipped.
+A recorded [autonomous sprint mandate](../../packages/issue-lifecycle/skills/sprint-planning/SKILL.md#5-autonomous-sprint)
+supplies operator authorization for the documented procedures below, except
+provisioning, changing or rotating credentials.
 
 ### Declare the station service environment
 
@@ -607,8 +613,9 @@ current run-wide push-back iteration and pushes that checkpoint back through
 `implement_budget` to implementation in the same worktree, with SHA-bound gate
 failure evidence. Repeated failures exhaust the configured cycle, fingerprint
 or elapsed-time budget and wait at `escalation` for an owner decision. This is
-the unattended repair loop's stop, not an unbounded retry. Infrastructure
-checkpoints `recover_start_gate` and `recover_push` remain manual: repair lock,
+the default unattended repair loop's stop, not an unbounded retry. Under an
+operator mandate, follow [issue-execution's autonomous decision policy](../../packages/issue-lifecycle/skills/issue-execution/SKILL.md#decisions-under-an-autonomous-mandate).
+Infrastructure checkpoints `recover_start_gate` and `recover_push` remain manual: repair lock,
 network or other infrastructure causes, then push back the exact checkpoint
 with its observed iteration to retry its command, not implementation.
 

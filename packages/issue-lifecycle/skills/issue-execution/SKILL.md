@@ -186,6 +186,7 @@ a4s never creates, repairs or rewrites these files, installs/activates/reloads
 the service, or restarts it. The operator supplies Dagu 2.23.0 or newer, an
 unauthenticated loopback API, enabled queues/coordinator and the named global
 lane queue with operator-selected capacity.
+An autonomous mandate supplies that authorization only for documented [station procedures](../../../../docs/operations/deployment.md#operator-owned-station-configuration-and-readiness), never credential provisioning, changes or rotation; it does not make bootstrap repair the station.
 
 Place the operator's UTF-8 JSON object containing `DAGU_URL`, `DAGU_HOME`, and
 `PATH` at `$XDG_CONFIG_HOME/a4s/service-environment.json`. An unset, empty or
@@ -562,7 +563,7 @@ a4s enqueue \
   OMP_SESSION_ID="<dagu_session_id>"
 ```
 
-The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, `approve_cancellation`, and `materialize`. Independent `plan-reviewer` evidence precedes operator approval. Only the operator authorizes all or selected IDs at `approve`; approved subsets close every unit reference. Normal approval requires `CANCEL=no` and `APPROVED`; `CANCEL=yes` needs no approval and stops the resumed active gate as native Aborted before materialization or GitHub writes, retaining `out_dir/cancellation.json`. See [planning cancellation](../backlog-breakdown/SKILL.md#cancel-a-stale-approval) for commands and immutable-snapshot limits. `materialize` creates or reuses issue identities, revises only explicitly declared existing-issue fields, and applies native prerequisite/sub-issue relationships while preserving existing edges. Durable unit/field/edge progress and grouped complete remote readback accompany `issues.jsonl`; conflicting parents, ambiguous identities and mismatches fail with actionable findings. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
+The steps are `init`, `import_units`, `check_plan`, `review`, `check_review`, `approve`, `approve_cancellation`, and `materialize`. Independent `plan-reviewer` acceptance of unchanged units precedes approval by the operator or a coordinator under a recorded issue-creation mandate; [backlog-breakdown owns that authorization contract](../backlog-breakdown/SKILL.md#approval-and-corrections). Approved subsets close every unit reference. Normal approval requires `CANCEL=no` and `APPROVED`; `CANCEL=yes` needs no approval and stops the resumed active gate as native Aborted before materialization or GitHub writes, retaining `out_dir/cancellation.json`. See [planning cancellation](../backlog-breakdown/SKILL.md#cancel-a-stale-approval) for commands and immutable-snapshot limits. `materialize` creates or reuses issue identities, revises only explicitly declared existing-issue fields, and applies native prerequisite/sub-issue relationships while preserving existing edges. Durable unit/field/edge progress and grouped complete remote readback accompany `issues.jsonl`; conflicting parents, ambiguous identities and mismatches fail with actionable findings. Corrections remain in the upstream refinement source. After correcting it, explicitly push back from `review` or `approve` with the observed run-wide iteration to reimport at `import_units`.
 
 Sprint Planning in the session alone ranks and enqueues new work. Breakdown creates issues; lifecycle continuations between feature and PoC remain intact.
 
@@ -726,11 +727,11 @@ push-back iteration (default `0` when absent) and pushes it back through
 The returning role assignment receives eligible latest failed-gate evidence
 as described under [Implement](#implement). Repeated failures are bounded by
 the existing cycle, fingerprint and elapsed-time budgets: exhaustion waits at
-`escalation` for an owner decision rather than continuing unattended.
-Evidence handoff and automatic gate recovery do not authorize infrastructure
-or station changes.
+`escalation` for an owner decision under [Decisions under an autonomous mandate](#decisions-under-an-autonomous-mandate) or the attended procedure below.
+Evidence handoff and automatic gate recovery do not themselves authorize
+infrastructure or station changes.
 
-Infrastructure recovery stays operator-owned: after fixing the cause,
+Infrastructure recovery requires the station authorization described above: after fixing the cause,
 `recover_start_gate` retries `start_gate` and `recover_push` retries `push`.
 Neither checkpoint is automatically rewound into implementation. Inspect the
 named command's logs and read `dagu status --run-id <id> feature` immediately
@@ -899,7 +900,7 @@ A turn started by a `[DAGU STATE]` notice that only advances checkpoints complet
 | Blockers and decisions | Failed steps, `BLOCKED` and `ORPHAN` observations, push-backs, and every choice that belongs to the operator, each with its evidence (log path, comment URL, observation). |
 | Proposals | For each blocker or decision: the recommended action with the exact command or input that applies it, and the alternative with its tradeoff. |
 
-Every emitted report contains all four sections; a section with no entries says `none`. A turn that reaches a human task owned by the operator emits the report because it requires an operator decision.
+Every emitted report contains all four sections; a section with no entries says `none`. A turn that reaches a human task owned by the operator emits the report because it requires an operator decision. Distinguish **decided under mandate** (evidence and attribution, no reply awaited) from **pending operator action** (uncovered work skipped under the mandate).
 
 ## Triage
 
@@ -1233,7 +1234,7 @@ metadata is what the feature run applies.
 PASS with promote=no does not enqueue a feature run and does not carry a
 candidate. FAIL closes only an issue created by record as
 `not planned`; preexisting issues stay open. For INCONCLUSIVE, the operator
-chooses iteration or completion with promote=no.
+chooses iteration or completion with promote=no, subject to the mandate exception below.
 
 On failure the handler attempts publication from per-RUN files before exit
 cleanup. After validating the canonical managed worktree, branch and run
@@ -1749,6 +1750,28 @@ shows the rule, expected and observed values. Reset/historical human outputs are
 never reused as input. Admission requires resolver exit 0. Other resolver
 failures, cancellation and valid deferral do not trigger this correction loop;
 deferral still terminates Failed/77 with normal cleanup.
+
+### Decisions under an autonomous mandate
+
+Only a recorded [autonomous sprint mandate](../sprint-planning/SKILL.md#5-autonomous-sprint) delegates these owner decisions; attended operation remains the default.
+An **attempt** is a coordinator-issued remedy: `escalation`/`rebase_escalation` continuation with a new remedy, a PoC iteration, or a CI no-progress remedy.
+Automatic in-run push-backs (including `recover_gate`) and native run budgets are the run's own repair loop, not attempts.
+Allow at most **three attempts per issue across runs**, recorded in the sprint ledger; replacement runs never reset the count.
+Before each attempt, perform online research, consult a judge (`jev`) and an advisor, and record a remedy different from all prior ones.
+Consume the attempt in the ledger before dispatch and record its result afterward; native budgets, gates and review requirements still apply.
+
+Use the existing decision procedures above and the actual waiting snapshot, only for this coordinator's owned runs.
+Attribute decisions as `DECIDED_BY="coordinator:<OMP_SESSION_ID> under operator mandate <ledger path>"`;
+forms without `DECIDED_BY` carry the same attribution in `BASIS` when available and in the ledger, never undeclared inputs.
+CI no-progress remedies leave checkpoint transitions with the reconciler and never bypass `authorize_ci`.
+At `poc_scope_decision`, iterate within authorized scope/access while attempts remain; otherwise `defer`.
+For INCONCLUSIVE, iterate while attempts remain; otherwise defer further work by completing `decide` with `promote=no`, never treating it as PASS.
+Neither path authorizes provisioning, changing or rotating credentials.
+
+On exhaustion or a decision outside the mandate (including credentials or destructive actions), stop rather than spend another attempt.
+Use the declared `ACTION=stop`, deferral or [cancellation procedure](#cancel-a-waiting-checkpoint) as applicable; do not invent a transition for an unsupported wait.
+Comment on the issue with attempts, evidence, the stop reason and next steps, and hand the skip of the issue and its dependents back to `sprint-planning`.
+If commenting is blocked, retain the pending comment and failure evidence in the ledger, never claim publication.
 
 ## Reconcile `await_merge`
 
