@@ -8,7 +8,7 @@ import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderOffline, renderWidget, TOGGLE_COMMAND, topicFor, Transitions } from "./progress.ts";
 import { resolveRunPrimary, runParam } from "../run-primary.ts";
-import type { RunDetails, WidgetTheme } from "./progress.ts";
+import type { RunDetails } from "./progress.ts";
 import { readActiveProtection } from "../integration-protection.ts";
 import { readCiDiagnostic, readEscalationDiagnostic, readStallNotices, resolveRepository } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
@@ -17,6 +17,8 @@ import { EventLog } from "./event-log.ts";
 import { SESSION_ID_TOOL, WORKFLOWS_COMMAND } from "../registration.ts";
 import type { GenerationScope } from "@a4s/hot-reload";
 import type { TransitionStorage } from "./progress.ts";
+import { WorkflowsWidget } from "./widget.ts";
+import type { WidgetUI, WidgetView } from "./widget.ts";
 
 interface NoticeStorage {
   transitions: TransitionStorage;
@@ -43,9 +45,7 @@ interface Context {
   isIdle(): boolean;
   agent: { kind: "main" | "sub" };
   sessionManager: { getSessionId(): string; getSessionDir?(): string };
-  ui: {
-    readonly theme: WidgetTheme;
-    setWidget(key: string, lines: string[] | undefined, options?: { placement: "aboveEditor" }): void;
+  ui: WidgetUI & {
     notify(message: string, type: "info" | "warning" | "error"): void;
   };
 }
@@ -79,13 +79,6 @@ interface ExtensionAPI {
     handler: (args: string, ctx: Context) => Promise<void>;
   }): void;
   sendMessage(message: CustomMessage, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" }): void;
-}
-
-/** Widget view state shared by the observer and the `/workflows` command. */
-interface WidgetView {
-  expanded: boolean;
-  hidden: boolean;
-  render?: () => void;
 }
 
 async function discover(base: string, repo: string, signal: AbortSignal, history = false): Promise<RunDetails[]> {
@@ -289,23 +282,24 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
   let initialSweep = true;
   let offlineRetrySeconds: number | undefined;
   let slow = false;
+  const widget = new WorkflowsWidget();
   const render = (): void => {
     if (!ctx.hasUI || signal.aborted) return;
-    if (view.hidden) {
-      ctx.ui.setWidget("dagu-status", undefined);
-      return;
-    }
-    const runLines = renderWidget([...runs.values()].map(run => {
+    const entries = [...runs.values()].map(run => {
       const issue = issueNumber(run);
       const slug = issue ? titles.get(issue) : undefined;
       const activity = activities.get(topicFor(run));
       return { run, ...(slug ? { slug } : {}), ...(activity ? { activity } : {}) };
-    }), ctx.ui.theme, view.expanded);
+    });
+    const runLines = renderWidget(entries, ctx.ui.theme, view.expanded);
     const lines = offlineRetrySeconds === undefined ? runLines
       : slow
         ? [ctx.ui.theme.fg("dim", `dagu · lento · reintentando en ${offlineRetrySeconds}s`), ...(runLines ?? [])]
         : renderOffline(ctx.ui.theme, offlineRetrySeconds);
-    ctx.ui.setWidget("dagu-status", lines, { placement: "aboveEditor" });
+    widget.publish(ctx.ui, lines, {
+      entries, expanded: view.expanded, slow, now: Date.now(),
+      ...(offlineRetrySeconds === undefined ? {} : { retrySeconds: offlineRetrySeconds }),
+    }, view);
   };
   view.render = render;
   const stopActivity = (topic: string): void => {

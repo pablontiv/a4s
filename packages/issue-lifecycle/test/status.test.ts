@@ -1,3 +1,4 @@
+import { WidgetHost } from "./fixtures/widget-host.ts";
 import assert from "node:assert/strict";
 import { useDefaultStation, useStation } from "./fixtures/service-environment.ts";
 import { createServer } from "node:http";
@@ -120,6 +121,7 @@ test("coordinating status widget reads the default declaration without a host ov
     labels: ["workspace=a4s", `dagu-feature-bundle=${BUNDLE_VERSION}`], nodes: [],
   };
   const widgets: string[][] = [];
+  const widgetHost = new WidgetHost(lines => { if (lines) widgets.push(lines); });
   t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
     const url = new URL(String(input));
     assert.equal(url.origin, "http://127.0.0.1:18765");
@@ -135,7 +137,7 @@ test("coordinating status widget reads the default declaration without a host ov
     sessionManager: { getSessionId: () => "default-owner" },
     ui: {
       theme: { fg: (_color: string, text: string) => text, bold: (text: string) => text, tree: { branch: "", last: "" } },
-      setWidget(key: string, lines: string[] | undefined) { if (key === "dagu-status" && lines) widgets.push(lines); },
+      setWidget: widgetHost.setWidget,
       notify() {},
     },
   };

@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 import { BUNDLE_VERSION } from "../src/bundle.ts";
+import { WidgetHost } from "./fixtures/widget-host.ts";
 
 type Handler = (args: string, ctx: unknown) => Promise<void>;
 type Widget = string[] | undefined;
@@ -60,6 +61,7 @@ test("/workflows folds, hides and shows the widget while the observer keeps rend
   execFileSync("git", ["-C", cwd, "remote", "add", "origin", "https://example.com/acme/widget.git"]);
   const restoreStation = useStation(process.env.DAGU_HOME!, dagu.base);
   const widgets: Widget[] = [];
+  const widgetHost = new WidgetHost(lines => widgets.push(lines));
   const notices: string[] = [];
   let command: Handler | undefined;
   let start: ((event: unknown, ctx: unknown) => void) | undefined;
@@ -76,7 +78,7 @@ test("/workflows folds, hides and shows the widget while the observer keeps rend
   const ctx = {
     cwd, hasUI: true, agent: { kind: "main" },
     sessionManager: { getSessionId: () => "session", getSessionDir: () => undefined },
-    ui: { theme, setWidget: (_key: string, lines: Widget) => { widgets.push(lines); }, notify: (m: string) => { notices.push(m); } },
+    ui: { theme, setWidget: widgetHost.setWidget, notify: (m: string) => { notices.push(m); } },
   };
   const settle = async (predicate: () => boolean) => {
     for (let i = 0; i < 100 && !predicate(); i++) await delay(50);
@@ -87,6 +89,15 @@ test("/workflows folds, hides and shows the widget while the observer keeps rend
     await settle(() => widgets.at(-1)?.[0] === "<b><accent>Workflows</accent></b>");
     assert.equal(widgets.at(-1)!.length, 5);
     assert.equal(widgets.at(-1)!.at(-1), " <dim>… 1 more — /workflows</dim>");
+
+    assert.equal(widgetHost.component!.describe().p!.collapsed, true);
+    assert.equal(widgetHost.component!.describe().c![0]!.c!.length, 4, "native body includes every active run");
+    widgetHost.component!.handleNativeEvent({ type: "toggle", key: "" });
+    assert.equal(widgets.at(-1)!.length, 6);
+    assert.equal(widgetHost.component!.describe().p!.collapsed, false);
+    widgetHost.component!.handleNativeEvent({ type: "toggle", key: "", collapsed: true });
+    assert.equal(widgets.at(-1)!.length, 5);
+    assert.equal(widgetHost.component!.describe().p!.collapsed, true);
 
     await command!("", ctx);
     assert.equal(widgets.at(-1)!.length, 6);
