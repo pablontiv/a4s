@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Bound launcher station promote, rollback, initialization and GC decisions:
+  prepare Git/HTTP/process observations and reader verification outside
+  `.state.lock`, then re-derive current receipt, SQLite/WAL, lease and tick inputs
+  locally with a one-second decision budget. Observation/lease/job-row churn no
+  longer invalidates preparation. GC alone conservatively retains possible
+  readers and atomically detaches unreferenced builds with state-before-artifact
+  lock ordering and no publisher wait, releasing both locks before recursive
+  removal (#924).
 - Verify run receipts, station-tool hashes and cached artifacts outside
   `.state.lock` on observer dispatch. Recheck immutable receipt bindings and cache
   presence under the lock before publishing the run lease, so repeated per-run

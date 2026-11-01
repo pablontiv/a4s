@@ -93,12 +93,12 @@ test("an active binding omitted by the inventory snapshot is resolved through it
 });
 
 for (const incident of [false, true]) {
-  test(`pending ${incident ? "incident/ambiguous" : "unlisted"} admission expires at five minutes and leaves its receipt intact`, async t => {
+  test(`GC conservatively retains ${incident ? "incident/ambiguous" : "unlisted"} admission after five minutes and leaves its receipt intact`, async t => {
     const f = await gcFixture(t), path = f.receipt("pending", f.builds[0]!, 0, "feature", incident);
     const bytes = readFileSync(path, "utf8");
     const expiry = GC_NOW + 5 * 60 * 1000;
     assert.match((await gc(f.home, { ...f.dependencies, now: () => expiry - 1 })).retained.find(entry => entry.version === "r1")!.holders.join(), /pending admission/);
-    assert.ok((await gc(f.home, { ...f.dependencies, now: () => expiry })).removed.includes("r1"));
+    assert.match((await gc(f.home, { ...f.dependencies, now: () => expiry })).retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader/);
     assert.equal(readFileSync(path, "utf8"), bytes);
   });
 }
@@ -175,7 +175,7 @@ test("aggregate cursor inventory uses fixed date bounds and a full terminal page
   assert.equal(new Set(filters).size, 1);
 });
 
-for (const failure of ["repeated cursor", "later HTTP error", "later transport error", "malformed page", "empty cursor", "unknown status"]) {
+for (const failure of ["repeated cursor", "later HTTP error", "later transport error", "malformed page", "empty cursor"]) {
   test(`GC refuses partial cursor inventory on ${failure}`, async t => {
     const f = await gcFixture(t);
     let calls = 0;
@@ -184,11 +184,21 @@ for (const failure of ["repeated cursor", "later HTTP error", "later transport e
       if (failure === "later HTTP error") return Response.json({ code: "error" }, { status: 503 });
       if (failure === "later transport error") throw new TypeError("fetch failed");
       if (failure === "malformed page") return Response.json({ runs: [] });
-      if (failure === "unknown status") return Response.json({ dagRuns: [{ name: "dag", dagRunId: "id", statusLabel: "unrecognized" }] });
       return Response.json({ dagRuns: [], nextCursor: failure === "empty cursor" ? "" : "opaque" });
     });
-    const { listRuns: _, ...dependencies } = f.dependencies;
-    await assert.rejects(gc(f.home, dependencies));
+    await assert.rejects(gc(f.home, { ...f.dependencies, listRuns: () => listStationRuns(undefined, 100, true) }));
+    assert.ok(calls >= 2, "the native cursor inventory reaches the failing page");
     assert.ok(existsSync(join(stationRoot(f.home), "r4")));
   });
 }
+
+test("GC retains unknown-status readers from a complete native cursor inventory", async t => {
+  const f = await gcFixture(t); f.receipt("possible", f.builds[0]!);
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => ++calls === 1
+    ? Response.json({ dagRuns: [], nextCursor: "next" })
+    : Response.json({ dagRuns: [{ name: "feature", dagRunId: "possible", statusLabel: "unrecognized" }] }));
+  const report = await gc(f.home, { ...f.dependencies, listRuns: () => listStationRuns(undefined, 100, true) });
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader.*unrecognized/);
+  assert.ok(report.removed.includes("r4"));
+});
