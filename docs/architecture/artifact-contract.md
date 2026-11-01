@@ -262,12 +262,15 @@ not an automatic retry. New receipts, SQLite schema/payload versions and open
 bindings (including committed WAL frames), tick bindings and current leases are
 read locally at the final decision. Unrelated receipt/CI observations, lease
 turnover and role-job row churn do not invalidate preparation. The local decision
-has a 1-second fail-closed budget, checked before state publication or cache
-detach; there is no final HTTP recheck. Compatibility remains serialized with
-the commit. New readers publish a receipt, tick binding or lease under this lock
+has a 1-second fail-closed budget, checked between config/tick files and before
+state publication or cache detach; there is no final HTTP recheck. Compatibility
+remains serialized with the commit. New readers publish a receipt, tick binding or
+lease under this lock
 before using the cache and fail closed if it has disappeared. The triage
 run-guard's direct `run --artifact` handoff is a known exception: it does not
 publish a fresh launcher lease; this change does not add one.
+The committed-config proof conservatively includes Git HEAD/ref bindings, so an
+unrelated primary commit can require retrying promotion or GC.
 
 Every launcher `gh` metadata/checksum call has a 15-second timeout; the archive
 transfer has a five-minute timeout. Expiry kills the child with `SIGKILL` and
@@ -276,8 +279,9 @@ so the next scheduled tick can run. Per-artifact and station asynchronous lock
 acquisition have a ten-second deadline. A deadline error names the lock and its
 recorded holder (PID, host, command and acquisition time); it never breaks or
 removes a held lock. Closing the holder's descriptor releases the kernel lock.
-GC attempts per-artifact locks without waiting and retains a busy entry until a
-later pass, so out-of-lock preparation cannot indirectly stall the station lock.
+GC takes the state lock before attempting a per-artifact lock without waiting,
+matching admission's lock order. A busy entry is retained until a later pass,
+so a publisher cannot indirectly stall the station lock.
 State replacement writes a unique temporary regular file, fsyncs it, renames it
 to `state.json`, then fsyncs the containing directory. **Rename is the only commit point**:
 interruption before it leaves old state, after it leaves new state. A downloaded, verified but
@@ -322,12 +326,12 @@ All Dagu history pages are required; repeated cursors, unreadable sources or
 unresolved live readers abort before the first deletion. Native status changes
 after preparation do not require HTTP under the lock: a resumed/new reader must
 publish its local binding/lease before cache use. For each collection candidate,
-GC takes the artifact-publisher lock **outside** the state lock, re-derives the
-current local retention decision under the state lock, atomically renames the
-unreferenced directory out of the cache namespace, then removes it recursively
-after releasing the state lock. Busy publishers are retained, never waited on
-while holding the state lock. Receipts remain unchanged and exact tuples stay
-restorable. Tick files remain for every listed status and are removed only on
+GC takes the state lock, attempts the artifact-publisher lock with a zero wait,
+re-derives the current local retention decision while holding both locks, then
+atomically renames the unreferenced directory out of the cache namespace. It
+releases both locks before recursive removal. Busy publishers are retained,
+never waited on while holding the state lock. Receipts remain unchanged and exact
+tuples stay restorable. Tick files remain for every listed status and are removed only on
 the prepared exact native unknown response while the same binding still exists;
 new/changed bindings are retained. Run identity survives build pruning.
 

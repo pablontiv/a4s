@@ -130,12 +130,15 @@ export async function bindingRun(binding: TickBinding, conservativeGc = false): 
       value.message === `dag-run ID ${binding.dagRunId} not found for DAG ${TICK_DAG}`) return undefined;
   throw new Error(`Cannot establish tick binding history: HTTP ${response.status}`);
 }
-export function readTickBindings(home: string): Array<{ path: string; binding: TickBinding }> {
+export function readTickBindings(home: string, check?: () => void): Array<{ path: string; binding: TickBinding }> {
+  check?.();
   const directory = join(stationRoot(home), "ticks");
   return names(directory).map(name => {
+    check?.();
     if (!name.endsWith(".json")) throw new Error(`Unknown tick binding file ${name}`);
     const path = join(directory, name), value = readJsonFile(path);
     const binding = validateTickBinding(value, name.slice(0, -5));
+    check?.();
     return { path, binding };
   });
 }
@@ -264,7 +267,7 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       references.push({ artifact: receipt.artifact, holder: `open role job ${job.dag}/${job.run}` });
     }
     const expiredBindings: string[] = [];
-    for (const { path, binding } of readTickBindings(home)) {
+    for (const { path, binding } of readTickBindings(home, local?.check)) {
       local?.check();
       const listed = listedRuns.get(key(TICK_DAG, binding.dagRunId))?.[0];
       const run = listed ?? await (dependencies.bindingRun ? dependencies.bindingRun(binding) : bindingRun(binding, conservativeGc));
@@ -279,14 +282,17 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
 /** Content proof for Git's committed-config binding; no Git in the decision lock.
  * Index and directory timestamps are deliberately absent: staging unrelated work,
  * new receipts and observer writes must not invalidate a prepared decision. */
-function configProof(primary: string): Array<[string, string | null]> {
+function configProof(primary: string, check?: () => void): Array<[string, string | null]> {
+  check?.();
   const files = new Map<string, string | null>();
   const track = (path: string) => {
+    check?.();
     let value: string | null = null;
     try {
       if (!lstatSync(path).isFile()) throw new Error(`Config input must be a regular file: ${path}`);
       value = readFileSync(path, "utf8");
     } catch (error) { if (!missing(error)) throw error; }
+    check?.();
     files.set(path, value);
     return value;
   };
@@ -399,7 +405,7 @@ export async function prepareInventory(home: string, dependencies: InventoryDepe
       if (!isDeepStrictEqual(primaries, [...new Set((dependencies.primaries ?? registeredPrimaries)(home))].sort())) throw new Error("Registered primaries changed during preparation; retry");
       for (const [primary, proof] of proofs) {
         checkDeadline();
-        if (!isDeepStrictEqual(proof, configProof(primary))) throw Object.assign(new Error("Committed config changed during preparation; retry"), { code: "ESTALE" });
+        if (!isDeepStrictEqual(proof, configProof(primary, checkDeadline))) throw Object.assign(new Error("Committed config changed during preparation; retry"), { code: "ESTALE" });
       }
       const inventory = await inventoryStation(home, preparedDependencies, includeRuns, conservativeGc, local);
       checkDeadline();

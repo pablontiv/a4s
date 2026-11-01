@@ -7,9 +7,10 @@ import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
-import type { CachedArtifact } from "../src/artifact-cache.ts";
+import { artifactLock, type CachedArtifact } from "../src/artifact-cache.ts";
 import { registrationHash } from "../src/contracts.ts";
 import { CONFIG_PATH, exampleConfig } from "../src/config.ts";
+import { createLeaseLocked } from "../src/lease.ts";
 import { prepareInventory } from "../src/station-inventory.ts";
 import { gc, initializeStation, promote, rollback, type StationDependencies } from "../src/station.ts";
 import { stationRoot, stationTransaction } from "../src/station-state.ts";
@@ -142,6 +143,69 @@ for (const change of ["receipt artifact", "new receipt", "new lease", "new tick"
   });
 }
 
+test("GC follows admission's state-then-artifact order without a step-deadline stall", async t => {
+  const f = await holdFixture(t, "GC"), firstCollected = f.builds[3]!, tuple = firstCollected.record;
+  const statePath = join(stationRoot(f.home), ".state.lock"), artifactPath = artifactLock(f.home, tuple);
+  const contended = barrier(), admit = barrier();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let stateRequests = 0, admission: Promise<void> | undefined;
+  const collecting = gc(f.home, { ...f.dependencies, withFileLock: (path, body, options) => {
+    if (path === statePath && ++stateRequests === 2) {
+      // Match selectedAdmission: own state before attempting the artifact lock.
+      // GC has finished its initial plan, but has not acquired its next state hold.
+      admission = stationTransaction(f.home, async () => {
+        await admit.promise;
+        await f.lock.withFileLock(artifactPath, async () => {
+          assert.ok(existsSync(firstCollected.directory));
+          createLeaseLocked(f.home, tuple, f.state.generation, "engine", "contending admission");
+        });
+      }, f.dependencies);
+      contended.open();
+    }
+    return f.lock.withFileLock(path, body, options);
+  } });
+  await contended.promise;
+  const feature = stationTransaction(f.home, async () => {}, f.dependencies);
+  let completed = false;
+  const contenders = Promise.allSettled([collecting, admission!, feature]).then(results => {
+    completed = true; return results;
+  });
+  admit.open();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    assert.equal(completed, true, "GC, admission and the queued feature step finish before advancing the 10s deadline");
+    assert.ok((await contenders).every(result => result.status === "fulfilled"));
+    assert.ok(!(await collecting).removed.includes(tuple.version), "admission's new lease protects the build");
+    assert.ok(f.lock.holds.every(hold => hold.milliseconds < 10000));
+  } finally {
+    // Settle the deliberately inverted implementation too, so a RED run cannot hang.
+    t.mock.timers.tick(10001);
+    await contenders;
+  }
+});
+
+test("GC retains a busy artifact publisher without waiting under the state lock", async t => {
+  const f = await holdFixture(t, "GC"), tuple = f.builds[0]!.record;
+  const statePath = join(stationRoot(f.home), ".state.lock"), artifactPath = artifactLock(f.home, tuple);
+  const entered = barrier(), release = barrier();
+  const publisher = f.lock.withFileLock(artifactPath, async () => { entered.open(); await release.promise; });
+  await entered.promise;
+  try {
+    const report = await gc(f.home, { ...f.dependencies, withFileLock: (path, body, options) => {
+      if (path === artifactPath) {
+        assert.equal(f.lock.held(statePath), true, "GC preserves admission's state-then-artifact order");
+        assert.equal(options?.timeoutMs, 0, "a busy publisher is never waited on");
+      }
+      return f.lock.withFileLock(path, body, options);
+    } });
+    assert.ok(!report.removed.includes(tuple.version));
+    assert.match(report.retained.find(entry => entry.version === tuple.version)!.holders.join(), /artifact lock busy/);
+    assert.ok(existsSync(f.builds[0]!.directory));
+    assert.ok(report.removed.includes("r2"), "unrelated unreferenced builds are still collected");
+    assert.ok(f.lock.holds.filter(hold => hold.path === statePath).every(hold => hold.milliseconds < 1000));
+  } finally { release.open(); await publisher; }
+});
+
 for (const operation of ["promote", "GC"] as const) {
   for (const activity of ["observer leases", "CI observations", "role-job rows", "receipt observations"] as const) {
     test(`${operation} remains live with ${activity} during preparation`, async t => {
@@ -223,7 +287,14 @@ for (const operation of operations) {
     const exec = childProcess.execFileSync, hash = crypto.createHash, remove = fs.rmSync;
     t.mock.method(childProcess, "execFileSync", (...args: Parameters<typeof exec>) => { unlocked(); return exec(...args); });
     t.mock.method(crypto, "createHash", (...args: Parameters<typeof hash>) => { unlocked(); return hash(...args); });
-    t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => { if (args[1]?.recursive) unlocked(); return remove(...args); });
+    t.mock.method(fs, "rmSync", (...args: Parameters<typeof remove>) => {
+      if (args[1]?.recursive) {
+        unlocked();
+        const collected = f.builds.find(build => String(args[0]).startsWith(`${build.directory}.gc-`));
+        if (collected) assert.equal(f.lock.held(artifactLock(f.home, collected.record)), false, "recursive removal holds no artifact lock");
+      }
+      return remove(...args);
+    });
     t.mock.method(globalThis, "fetch", async () => { unlocked(); throw new Error("Unexpected HTTP endpoint"); });
     syncBuiltinESMExports();
     t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
@@ -288,3 +359,37 @@ test("the local decision deadline fails closed before publication or collection"
   assert.equal(f.bytes(), before);
   assert.ok(existsSync(f.builds[0]!.directory));
 });
+
+for (const input of ["config proof", "tick bindings"] as const) {
+  test(`${input} checks its deadline before reading another input`, async t => {
+    const f = await holdFixture(t, "GC");
+    commitConfig(f.primary);
+    const ticks = join(stationRoot(f.home), "ticks");
+    if (input === "tick bindings") {
+      mkdirSync(ticks, { recursive: true });
+      for (let id = 0; id < 3; id++) writeFileSync(join(ticks, `tick${id}.json`), JSON.stringify({
+        dagRunId: `tick${id}`, tuple: f.current.record, createdAt: new Date(NOW).toISOString(),
+      }));
+    }
+    const { configVersion: _config, gitPath: _git, ...native } = f.dependencies;
+    const prepared = await prepareInventory(f.home, { ...(input === "config proof" ? native : f.dependencies),
+      bindingRun: async binding => ({ name: "reconcile", dagRunId: binding.dagRunId, statusLabel: "succeeded" }),
+    }, true, true);
+    const original = fs.readFileSync;
+    let now = 0, expiredReads = 0, triggered = false;
+    t.mock.method(performance, "now", () => now);
+    t.mock.method(fs, "readFileSync", (...args: Parameters<typeof original>) => {
+      if (now > 1000) expiredReads++;
+      const result = original(...args), path = String(args[0]);
+      if (!triggered && (input === "config proof" ? path === join(f.primary, CONFIG_PATH) : path.startsWith(`${ticks}/`))) {
+        triggered = true; now = 1001;
+      }
+      return result;
+    });
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    await assert.rejects(prepared.readLocked(), /exceeded 1000ms/);
+    assert.equal(triggered, true);
+    assert.equal(expiredReads, 0, "stop inside the reader instead of finishing its remaining files after expiry");
+  });
+}

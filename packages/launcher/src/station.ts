@@ -235,11 +235,10 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
   const keep = initial.keep, removed: string[] = [];
   for (const entry of initial.entries) if (!keep.has(entry.version)) {
     try {
-      // Acquire the publisher's per-build lock outside .state.lock. The locked
-      // operation is only a fresh local decision and an atomic detach; recursive
-      // deletion cannot extend the station hold or race an admitted reader.
-      await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, { version: entry.version, commit: "0".repeat(40), digest: "0".repeat(64) }), async () => {
-        const trash = await stationTransaction(home, async () => {
+      // Match admission's state-then-artifact order, never waiting for a busy
+      // publisher. Only the fresh local decision and atomic detach hold locks.
+      const trash = await stationTransaction(home, () =>
+        (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, { version: entry.version, commit: "0".repeat(40), digest: "0".repeat(64) }), async () => {
           const current = await plan();
           const holders = current.keep.get(entry.version);
           if (holders) { keep.set(entry.version, holders); return undefined; }
@@ -248,9 +247,8 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
           const path = `${entry.path}.gc-${randomUUID()}`;
           renameSync(entry.path, path);
           return path;
-        }, dependencies);
-        if (trash) { rmSync(trash, { recursive: true }); removed.push(entry.version); }
-      }, { timeoutMs: 0 });
+        }, { timeoutMs: 0 }), dependencies);
+      if (trash) { rmSync(trash, { recursive: true }); removed.push(entry.version); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
       keep.set(entry.version, [`artifact lock busy: ${error instanceof Error ? error.message : String(error)}`]);

@@ -7,8 +7,9 @@
   `.state.lock`, then re-derive current receipt, SQLite/WAL, lease and tick inputs
   locally with a one-second decision budget. Observation/lease/job-row churn no
   longer invalidates preparation. GC alone conservatively retains possible
-  readers and atomically detaches unreferenced builds before recursive removal
-  outside the state lock (#924).
+  readers and atomically detaches unreferenced builds with state-before-artifact
+  lock ordering and no publisher wait, releasing both locks before recursive
+  removal (#924).
 - Make stale loaded extensions (`compat=stale`), required extension/OMP reloads,
   and exhausted context explicit autonomous coordinator handover triggers. Direct
   stale-extension warnings to the sprint handover rule rather than assuming a

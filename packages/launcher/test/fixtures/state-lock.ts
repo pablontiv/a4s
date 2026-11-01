@@ -8,6 +8,9 @@ export function stateLock() {
   const withFileLock: NonNullable<StateDependencies["withFileLock"]> = async (path, body, options) => {
     const lock = locks.get(path) ?? { held: false, queue: [] };
     locks.set(path, lock);
+    if (lock.held && options?.timeoutMs === 0) {
+      throw Object.assign(new Error(`Timed out acquiring ${path} after 0ms`), { code: "ETIMEDOUT" });
+    }
     if (lock.held) {
       const { promise, resolve, reject } = Promise.withResolvers<void>();
       const timeoutMs = options?.timeoutMs ?? 10000;
