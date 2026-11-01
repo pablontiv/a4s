@@ -60,7 +60,8 @@ pending incoming skills from available functionality.
 
 A coordinating session is a sprint. `refine` investigates needs;
 `backlog-breakdown` owns issue-creation review/approval through `planning.yaml`;
-`sprint-planning` alone selects, ranks and enqueues new work;
+`sprint-planning` alone selects, ranks and enqueues new work, with
+[autonomous sprint mode](packages/issue-lifecycle/skills/sprint-planning/SKILL.md#5-autonomous-sprint) explicitly activated by `/skill:sprint-planning auto <objective>`;
 `sprint-review` evaluates the agreed goal from delivery evidence;
 `sprint-retrospective` routes operator-authorized incidents through refinement.
 `repository-discovery` supplies evidence and units; `issue-execution` executes

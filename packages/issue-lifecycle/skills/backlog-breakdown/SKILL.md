@@ -4,7 +4,7 @@ description: Import prepared issue units into the planning backend, obtain indep
 ---
 # Backlog breakdown backend
 
-Use after refine, discovery or the coordinator has prepared self-contained units. Refinement belongs upstream: this skill operates the backend, rather than adding another need-to-unit or plan-writing task. Local acceptance authorizes a backend run; the operator separately authorizes GitHub issue publication. Sprint-planning owns ranking and enqueueing new feature/PoC work.
+Use after refine, discovery or the coordinator has prepared self-contained units. Refinement belongs upstream: this skill operates the backend, rather than adding another need-to-unit or plan-writing task. Local acceptance authorizes a backend run; GitHub issue publication requires the separate authorization described under Approval and corrections. Sprint-planning owns ranking and enqueueing new feature/PoC work.
 
 One coordinator owns canonical `units.jsonl` and integration. Preparation delegates only genuine unresolved questions with known source ranges and explicitly bounded outputs; the coordinator incorporates the evidence directly. Mechanical preparation may use the installed public API's role-scoped `AgentDefinition.thinkingLevel: low` or `@task:low`. Global model settings stay unchanged. Suffixes take precedence over agent defaults, and enabled caller model/effort overrides may supersede both; record the exercised dispatch's final native `resolvedModelIdentity`, `resolvedThinkingLevel` and transcript evidence. Unexpected native findings return to coordinator judgment. Preparation effort is distinct from semantic review.
 
@@ -95,7 +95,7 @@ push-back and fresh review.
 
 ## Approval and corrections
 
-At `approve`, present the units, their relationship intent and review to the operator. Obtain explicit authorization for all or the exact subset of IDs. An approved subset must include every same-snapshot target referenced by its units, transitively; external issue targets remain references rather than authorization to edit those issues. The CLI does not authenticate the operator: the coordinator owns this approval boundary.
+At `approve`, present the units, their relationship intent and review. The operator, or a coordinator under a recorded [autonomous mandate](../sprint-planning/SKILL.md#5-autonomous-sprint) permitting issue creation, authorizes `APPROVED=all` or a comma-separated subset of IDs only after an accepted independent `plan-reviewer` review of the unchanged validated units. Record mandate-based authorization and coordinator attribution in the sprint ledger. An approved subset must include every same-snapshot target referenced by its units, transitively; external issue targets remain references rather than authorization to edit those issues. The CLI does not authenticate the operator: the coordinator owns this approval boundary.
 
 ```sh
 dagu human-task complete planning --run-id <run> --step approve --input CANCEL=no --input APPROVED=all
@@ -141,7 +141,7 @@ Do not substitute `dagu stop` or selective retry for this guarded route.
 
 ## Created backlog
 
-After accepted review and operator approval, `materialize` creates approved new issues with their labels and `<!-- breakdown-unit: <run-id>/<id> -->`, reuses unambiguous marker identities, and applies only declared revisions. Discovery-sourced bodies carrying `<!-- discovery-unit: <id> -->` retain stable identity across backend runs. Full paginated repository issue reads and durable identity mappings resolve retries independently of GitHub search indexing. Ambiguous markers or conflicting identities fail closed before publication.
+After accepted review and [approval](#approval-and-corrections), `materialize` creates approved new issues with their labels and `<!-- breakdown-unit: <run-id>/<id> -->`, reuses unambiguous marker identities, and applies only declared revisions. Discovery-sourced bodies carrying `<!-- discovery-unit: <id> -->` retain stable identity across backend runs. Full paginated repository issue reads and durable identity mappings resolve retries independently of GitHub search indexing. Ambiguous markers or conflicting identities fail closed before publication.
 
 Declared `blocked_by` and `parent` relationships become native GitHub dependency and sub-issue edges after all approved identities are resolved. Existing edges are preserved. A different existing parent is a diagnosed conflict; coordinator judgment resolves it. External targets authorize the declared edge, while field edits require their own explicitly approved revision unit.
 

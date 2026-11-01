@@ -19,7 +19,7 @@ The invocation authorizes:
 - staging 1..N temporary backlog units;
 - offering the exact proposal for acceptance.
 
-Issue creation proceeds only after the operator accepts that proposal, through `backlog-breakdown` and its independent review and approval gate. Implementation and scheduling are separate decisions: `sprint-planning` alone ranks and enqueues new feature/PoC work.
+Issue creation proceeds only after proposal acceptance, through `backlog-breakdown` and its [independent review and approval gate](../backlog-breakdown/SKILL.md#approval-and-corrections). Implementation and scheduling are separate decisions: `sprint-planning` alone ranks and enqueues new feature/PoC work.
 
 Keep project content unchanged during refinement. Temporary evidence and units belong outside the repository. End the interaction after the accepted units are materialized, rejected, or abandoned; retain staged inputs while an active backend review needs them.
 
@@ -314,7 +314,7 @@ dagu-feature-bundle validate-planning-units --input "$REFINE_STAGE/units.jsonl" 
   --findings "$REFINE_STAGE/findings.md"
 ```
 
-Resolve its complete structured line/field/rule/expected/observed diagnostics in canonical `units.jsonl`. Native `check_plan` invokes the same validator after import. Mechanical validity is separate from independent semantic review and explicit operator authorization.
+Resolve its complete structured line/field/rule/expected/observed diagnostics in canonical `units.jsonl`. Native `check_plan` invokes the same validator after import. Mechanical validity is separate from independent semantic review and explicit publication authorization.
 
 Only the current user may read or write these files. Concurrent sessions use distinct directories. Keep the directory available while backlog-breakdown imports or reviews it, including correction cycles. Temporary input is session-scoped rather than a durable backlog; later sessions use published issue identifiers as their record.
 
@@ -332,11 +332,13 @@ Show the absolute `UNITS_FROM` path, `SOURCE=refine`, target repository, templat
 
 ### Accept
 
-After the operator accepts the exact proposal:
+Under a recorded [autonomous mandate](../sprint-planning/SKILL.md#5-autonomous-sprint) permitting issue creation, proposal acceptance comes from the mandate.
+
+After acceptance of the exact proposal:
 
 1. Invoke the `backlog-breakdown` skill with the staged absolute `UNITS_FROM`, `SOURCE=refine`, established absolute `PRIMARY`, and the coordinating `OMP_SESSION_ID`. Read and follow that skill's actual enqueue and human-task commands; it owns the backend invocation, review, approval, and issue creation.
-2. Keep staged inputs available. The backend deterministically imports them, validates them with `check_plan`, obtains independent `plan-reviewer` review, and waits for operator approval before materialization. Refinement acceptance starts that review; it is not a substitute for the backend's approval.
-3. If review requests correction, edit the upstream staged units, verify any new facts, and present the complete corrected proposal for acceptance. Only after the upstream correction is accepted does the coordinator rewind to `import_units`. This ensures the next import contains the corrected proposal. Invalid or revise review cannot materialize, even if someone completes the approval form.
+2. Keep staged inputs available. The backend deterministically imports them, validates them with `check_plan`, obtains independent `plan-reviewer` review, and waits for authorization under backlog-breakdown's approval gate before materialization. Refinement acceptance starts that review; it is not a substitute for the backend's approval.
+3. If review requests correction, edit the upstream staged units, verify any new facts, and present the complete corrected proposal for acceptance under the same boundary. Only after the upstream correction is accepted does the coordinator rewind to `import_units`. This ensures the next import contains the corrected proposal. Invalid or revise review cannot materialize, even if someone completes the approval form.
 4. Let backlog-breakdown create and verify issues and return its `issues.jsonl` mapping. Preserve its issue identifiers and `<!-- breakdown-unit: RUN/id -->` lineage markers. Scheduling new feature/PoC runs belongs to `sprint-planning`.
 5. Return the verified issue identifiers/locators and any declared relationships. Remove the temporary staging directory after the backend has finished using it.
 

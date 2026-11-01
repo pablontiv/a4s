@@ -2,7 +2,7 @@
 name: sprint-review
 metadata:
   author: pablontiv
-  updated: "2026-10-19"
+  updated: "2026-11-01"
 description: Sprint Review (Scrum Guide 2020) for an agent session. Re-runs the Sprint Goal checks and evaluates each Sprint Backlog issue using the acceptance and delivery evidence recorded in Sprint Planning. Use when the operator closes a session, asks "what blocks?" or "what is left?", or asks whether the sprint goal is met. Requires `gh` and `dagu`.
 ---
 
@@ -22,5 +22,5 @@ The Sprint Goal is met when every agreed goal check returns yes. Report that res
 
 ## Output
 
-- The operator accepts the result or changes the goal; a changed goal starts a new `sprint-planning`.
+- The operator accepts the result or changes the goal; a changed goal starts a new `sprint-planning`. Under an [autonomous mandate](../sprint-planning/SKILL.md#5-autonomous-sprint), record the outcome in the ledger without waiting for acceptance.
 - Continue with the `sprint-retrospective` skill.

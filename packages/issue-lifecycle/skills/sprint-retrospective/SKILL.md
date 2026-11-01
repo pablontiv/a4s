@@ -2,7 +2,7 @@
 name: sprint-retrospective
 metadata:
   author: pablontiv
-  updated: "2026-10-19"
+  updated: "2026-11-01"
 description: Sprint Retrospective (Scrum Guide 2020) for an agent session. Records process incidents and reports during the sprint and hands actionable evidence to refine in the repository that owns the component. Use when a process incident occurs, when a report arrives from another session, and after sprint-review.
 ---
 
@@ -25,6 +25,6 @@ Answer an operational question when one was asked, using the documented recovery
 ## At the end of the sprint
 
 1. List the incidents and reports in one table: incident or report, intent, evidence, component, owning repository, existing issue, responsible session/operator and next action.
-2. For each actionable need without an open issue that the operator selected for refinement, hand the incident/report and evidence to `refine` in the owning repository. Refine produces units for `backlog-breakdown`, which owns reviewed issue materialization. Existing issues receive the relevant evidence through the responsible session; FYI-only reports remain recorded observations.
+2. For each actionable need without an open issue that the operator selected for refinement, hand the incident/report and evidence to `refine` in the owning repository. Refine produces units for `backlog-breakdown`, which owns reviewed issue materialization. Existing issues receive the relevant evidence through the responsible session; FYI-only reports remain recorded observations. Under an [autonomous mandate](../sprint-planning/SKILL.md#5-autonomous-sprint), send every actionable, evidenced incident/report to `refine`.
 3. Return the resulting refinement or issue reference to the reporting session as appropriate within the operator's authorization. New issues return to `sprint-planning` for ranking and enqueue.
 4. Mark a repeated incident with both sets of evidence so the next `sprint-planning` can rank it P1.
