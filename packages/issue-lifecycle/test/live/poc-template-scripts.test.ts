@@ -226,6 +226,8 @@ for (const origin of ["backlog", "feature-triage"] as const) {
       writeFileSync(fixture.pages, JSON.stringify([comments]));
       fixture.save("verdict", "PASS\n");
       fixture.save("scope", "OK\n");
+      fixture.save("attempt", "1\n");
+      fixture.save("base.sha", "abc\n");
       writeFileSync(join(fixture.state, "full.patch"), "published candidate\n");
       const promoted = fixture.run("dispose", { PROMOTE: "yes" });
       assert.equal(promoted.status, 0, promoted.stderr);
@@ -469,7 +471,7 @@ test(`PoC publication checks result and patch before GitHub mutation (failure=${
 });
 }
 
-for (const outcome of ["PASS", "FAIL", "promote=no"]) {
+for (const outcome of ["FAIL", "promote=no"]) {
   test(`PoC cleanup removes published tracked and untracked binary probes after ${outcome}`, () => {
     const fixture = cleanupFixture();
     try {
@@ -500,7 +502,7 @@ for (const evidence of ["mutated tracked", "mutated untracked", "new untracked",
     const fixture = cleanupFixture();
     try {
       fixture.dirty();
-      if (evidence !== "unpublished") fixture.publish();
+      if (evidence !== "unpublished") fixture.publish("FAIL");
       if (evidence === "mutated tracked") writeFileSync(join(fixture.worktree, "tracked.bin"), Buffer.from([0, 10, 11]));
       if (evidence === "mutated untracked") writeFileSync(join(fixture.worktree, "untracked binary.bin"), Buffer.from([0, 12, 13]));
       if (evidence === "new untracked") writeFileSync(join(fixture.worktree, "later.txt"), "unpublished\n");
@@ -521,6 +523,80 @@ for (const evidence of ["mutated tracked", "mutated untracked", "new untracked",
     }
   });
 }
+
+test("PoC checks promotion before decide and retries dispose without losing the original PASS patch", () => {
+  const fixture = cleanupFixture();
+  try {
+    const question = "Can the real target run?";
+    fixture.dirty();
+    fixture.save("attempt", "1\n");
+    fixture.save("scope", "OK\n");
+    fixture.save("result.md", `VERDICT: PASS\n## Pregunta\n${question}\n## Proposición demostrada\nObserved target\n## Ruta ejercitada\nReal target release\n## Comandos y salida\ncommand: PASS\n## Después del PASS\nImplement the verified path.\n`);
+    assert.equal(fixture.run("publish", { WORKTREE: fixture.worktree }).status, 0);
+    const patch = readFileSync(join(fixture.state, "full.patch"));
+    const digest = readFileSync(join(fixture.state, "full.patch.sha256"), "utf8");
+    const pass = readFileSync(join(fixture.state, "comment-1.txt"), "utf8");
+    const base = readFileSync(join(fixture.state, "base.sha"), "utf8").trim();
+    // Historical failure markers and unrelated runs/attempts must not supersede this PASS.
+    writeFileSync(fixture.pages, JSON.stringify([[
+      { body: pass, html_url: "https://example.test/comments/9" },
+      { body: pass.replace("scope:OK", "scope:FAIL"), html_url: "https://example.test/comments/10" },
+      { body: pass.replace("run:existing-issue", "run:unrelated"), html_url: "https://example.test/comments/11" },
+      { body: pass.replace("attempt:1", "attempt:2"), html_url: "https://example.test/comments/12" },
+      { body: pass.replace(`base:${base}`, "base:other"), html_url: "https://example.test/comments/13" },
+    ]]));
+    const invalid = `## PoC\n${question}\n\n## Después del PASS\n \n`;
+    const valid = `${invalid}Implement the verified path.\n`;
+    fixture.body(invalid);
+    const admission = fixture.run("validate_promotion");
+    assert.notEqual(admission.status, 0, admission.stderr);
+    fixture.body(valid);
+    assert.equal(fixture.run("validate_promotion").status, 0);
+    // A correctable issue edit after decide still requires a safe dispose retry.
+    fixture.body(invalid);
+    for (let retry = 0; retry < 2; retry++) {
+      const failed = fixture.run("dispose", { PROMOTE: "yes" });
+      assert.notEqual(failed.status, 0, failed.stderr);
+      const handler = fixture.run("publish", { WORKTREE: fixture.worktree, PUBLICATION_FAILURE: "yes" });
+      assert.equal(handler.status, 0, handler.stderr);
+      const cleanup = fixture.exit();
+      assert.equal(cleanup.status, 0, cleanup.stderr);
+      assert.match(cleanup.stderr, /promotion pending or retryable/);
+      assert.ok(existsSync(fixture.worktree));
+      assert.ok(fixture.branchExists());
+      assert.deepEqual(readFileSync(join(fixture.state, "full.patch")), patch);
+      assert.equal(readFileSync(join(fixture.state, "full.patch.sha256"), "utf8"), digest);
+      assert.equal(readFileSync(fixture.published, "utf8").trim().split("\n").length, 1);
+      assert.equal(readFileSync(join(fixture.state, "verdict"), "utf8"), "PASS\n");
+    }
+    fixture.body(valid);
+    const promoted = fixture.run("dispose", { PROMOTE: "yes" });
+    assert.equal(promoted.status, 0, promoted.stderr);
+    assert.equal(JSON.parse(readFileSync(fixture.enqueues, "utf8").trim()).at(-1), "POC_BASIS=https://example.test/comments/9");
+    assert.deepEqual(readFileSync(join(fixture.state, "full.patch")), patch);
+    assert.equal(readFileSync(join(fixture.state, "full.patch.sha256"), "utf8"), digest);
+    assert.equal(fixture.exit().status, 0);
+    assert.equal(existsSync(fixture.worktree), false);
+    assert.equal(fixture.branchExists(), false);
+  } finally { fixture.cleanup(); }
+});
+
+test("PoC failure publication without a worktree retains the saved patch and diffstat", () => {
+  const fixture = cleanupFixture();
+  try {
+    fixture.dirty();
+    fixture.publish("FAIL");
+    const patch = readFileSync(join(fixture.state, "full.patch"));
+    const stat = readFileSync(join(fixture.state, "diffstat"));
+    const digest = readFileSync(join(fixture.state, "full.patch.sha256"), "utf8");
+    assert.equal(fixture.exit().status, 0);
+    const handler = fixture.run("publish", { WORKTREE: fixture.worktree, PUBLICATION_FAILURE: "yes" });
+    assert.equal(handler.status, 0, handler.stderr);
+    assert.deepEqual(readFileSync(join(fixture.state, "full.patch")), patch);
+    assert.deepEqual(readFileSync(join(fixture.state, "diffstat")), stat);
+    assert.equal(readFileSync(join(fixture.state, "full.patch.sha256"), "utf8"), digest);
+  } finally { fixture.cleanup(); }
+});
 
 test("PoC without promotion disposes a clean base-only worktree and branch", () => {
   const fixture = cleanupFixture();

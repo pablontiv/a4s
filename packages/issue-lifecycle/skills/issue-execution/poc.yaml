@@ -140,6 +140,30 @@ steps:
         split("\n")[0] | rtrimstr("\r") |
         capture("^<!-- poc-verdict:(?<verdict>PASS|FAIL|INCONCLUSIVE) scope:(?<scope>OK|FAIL) run:(?<run>[^\\s]+) attempt:(?<attempt>[1-9][0-9]*) base:(?<base>[^\\s]+) -->$");
       JQ
+      cat > "$STATE/promotion.jq" <<'JQ'
+      include "sections";
+      [ .[][] ] as $comments |
+      [$comments[] | . as $c | (.body|marker) as $m |
+        select($m.scope == "OK" and $m.run == $run and $m.attempt == $attempt and $m.base == $base) |
+        {comment:$c,marker:$m}] |
+      (.[-1] // error("No current scope:OK verdict marker")) as $last |
+      [$comments[] | .body | fromjson? | select(type == "object") |
+        select(.kind == "poc-evidence-base64" and .run == $last.marker.run
+          and (.attempt|tostring) == $last.marker.attempt)] as $chunks |
+      (if ($chunks|length) > 0 then
+        $chunks|sort_by(.index)|map(.data)|join("")|@base64d
+       else $last.comment.body end) as $result |
+      [$comments[] | select(.body|split("\n")[0]|test("^<!-- poc-triage:yes run:[^\\s]+ -->$"))] as $triages |
+      (if ($triages|length) > 0 then $triages[-1].body|section("## Pregunta")|norm
+       else $issue[0].body|section("## PoC")|norm end) as $question |
+      if $last.marker.verdict == "PASS"
+        and ($result|marker) == $last.marker
+        and $question != "" and $question == ($result|section("## Pregunta")|norm)
+        and (["## Pregunta","## Proposición demostrada","## Ruta ejercitada","## Comandos y salida","## Después del PASS"] |
+          all(.[]; . as $heading | ($result|section($heading)|norm|length) > 0))
+        and ($issue[0].body|section("## Después del PASS")|norm|length) > 0
+      then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
+      JQ
       gh repo view --json nameWithOwner --jq .nameWithOwner > "$STATE/repo"
       printf '%s\n' "$ISSUE" > "$STATE/issue.number"
       gh issue view "$ISSUE" --repo "$(cat "$STATE/repo")" --json body > "$STATE/record-body.json"
@@ -346,6 +370,7 @@ steps:
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      rm -f "$STATE/promotion.pending" "$STATE/disposition"
       printf 'FAIL\n' > "$STATE/scope"
       ATTEMPT=$(cat "$STATE/attempt" 2>/dev/null || printf 0)
       printf '%s\n' "$((ATTEMPT + 1))" > "$STATE/attempt"
@@ -426,6 +451,8 @@ steps:
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       if [[ -f "$STATE/cancellation.json" ]]; then exit 0; fi
+      # A published PASS is still authoritative when promotion/preconditions fail.
+      if [[ "${PUBLICATION_FAILURE:-}" == yes && -f "$STATE/promotion.pending" ]]; then exit 0; fi
       if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("A4S_PRIMARY") or has("BRANCH") or any(keys[]; startswith("ESCALATION_"))' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
       test -f "$STATE/issue.number" || exit 0
@@ -446,8 +473,8 @@ steps:
       case "$VERDICT" in PASS|FAIL|INCONCLUSIVE) ;; *) VERDICT=ORCHESTRATION_FAILURE ;; esac
       printf '%s\n' "$VERDICT" > "$STATE/verdict"
       rm -f "$STATE/comment.url"
-      : > "$STATE/full.patch"
-      : > "$STATE/diffstat"
+      # Retain the original evidence when a retry no longer has its worktree.
+      touch "$STATE/full.patch" "$STATE/diffstat"
       if [[ -d "$WORKTREE" && "$BASE_SHA" != unknown ]]; then
         git -C "$WORKTREE" diff --binary "$BASE_SHA" > "$STATE/full.patch"
         git -C "$WORKTREE" diff --stat "$BASE_SHA" > "$STATE/diffstat"
@@ -494,6 +521,10 @@ steps:
       fi
       printf '%s\n' "$URL" > "$STATE/comment.url"
       if [[ "$VERDICT" == PASS && "$SCOPE" == OK ]]; then
+        touch "$STATE/promotion.pending"
+        rm -f "$STATE/disposition"
+      fi
+      if [[ "$VERDICT" == PASS && "$SCOPE" == OK ]]; then
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/body.json"
         jq -er -L "$STATE" --rawfile result "$STATE/result-public.md" '
           include "sections";
@@ -504,8 +535,24 @@ steps:
         gh issue edit "$ISSUE" --repo "$REPO" --body-file "$STATE/disposed-body.txt"
       fi
 
-  - id: decide
+  - id: validate_promotion
     depends: publish
+    continue_on: skipped
+    preconditions:
+      - condition: "${steps.run_poc.outputs.decline}"
+        expected: "re:^$"
+    run: |
+      set -euo pipefail
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      [[ "$(cat "$STATE/verdict")" == PASS && "$(cat "$STATE/scope")" == OK ]] || exit 0
+      gh issue view "$(cat "$STATE/issue.number")" --repo "$(cat "$STATE/repo")" --json body > "$STATE/current-body.json"
+      gh api --paginate --slurp "repos/$(cat "$STATE/repo")/issues/$(cat "$STATE/issue.number")/comments?per_page=100" > "$STATE/pages.json"
+      jq -er -L "$STATE" --slurpfile issue "$STATE/current-body.json" \
+        --arg run "$RUN" --arg attempt "$(cat "$STATE/attempt")" --arg base "$(cat "$STATE/base.sha")" \
+        -f "$STATE/promotion.jq" "$STATE/pages.json" > "$STATE/promotion.url"
+
+  - id: decide
+    depends: validate_promotion
     continue_on: skipped
     preconditions:
       - condition: "${steps.run_poc.outputs.decline}"
@@ -558,28 +605,9 @@ steps:
         test "$(cat "$STATE/scope")" = OK
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/current-body.json"
         gh api --paginate --slurp "repos/$REPO/issues/$ISSUE/comments?per_page=100" > "$STATE/pages.json"
-        jq -er -L "$STATE" --slurpfile issue "$STATE/current-body.json" '
-          include "sections";
-          [ .[][] ] as $comments |
-          [$comments[] | . as $c | (.body|marker) as $m | {comment:$c,marker:$m}] |
-          (.[-1] // error("No verdict marker")) as $last |
-          [$comments[] | .body | fromjson? | select(type == "object") |
-            select(.kind == "poc-evidence-base64" and .run == $last.marker.run
-              and (.attempt|tostring) == $last.marker.attempt)] as $chunks |
-          (if ($chunks|length) > 0 then
-            $chunks|sort_by(.index)|map(.data)|join("")|@base64d
-           else $last.comment.body end) as $result |
-          [$comments[] | select(.body|split("\n")[0]|test("^<!-- poc-triage:yes run:[^\\s]+ -->$"))] as $triages |
-          (if ($triages|length) > 0 then $triages[-1].body|section("## Pregunta")|norm
-           else $issue[0].body|section("## PoC")|norm end) as $question |
-          if $last.marker.verdict == "PASS" and $last.marker.scope == "OK"
-            and ($result|marker) == $last.marker
-            and $question != "" and $question == ($result|section("## Pregunta")|norm)
-            and (["## Pregunta","## Proposición demostrada","## Ruta ejercitada","## Comandos y salida","## Después del PASS"] |
-              all(.[]; . as $heading | ($result|section($heading)|norm|length) > 0))
-            and ($issue[0].body|section("## Después del PASS")|norm|length) > 0
-          then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
-        ' "$STATE/pages.json" > "$STATE/promotion.url"
+        jq -er -L "$STATE" --slurpfile issue "$STATE/current-body.json" \
+          --arg run "$RUN" --arg attempt "$(cat "$STATE/attempt")" --arg base "$(cat "$STATE/base.sha")" \
+          -f "$STATE/promotion.jq" "$STATE/pages.json" > "$STATE/promotion.url"
         if [[ -f "$STATE/full.patch" && ! -s "$STATE/full.patch.sha256" ]]; then
           "$A4S_BIN" planning sha256 --file "$STATE/full.patch" > "$STATE/full.patch.sha256"
         fi
@@ -588,8 +616,10 @@ steps:
           ISSUE="$ISSUE" \
           OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
+        printf 'promoted\n' > "$STATE/disposition"
       else
         test "$PROMOTE" = no
+        printf 'declined\n' > "$STATE/disposition"
       fi
 
 handler_on:
@@ -638,6 +668,11 @@ handler_on:
       WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
       BRANCH="poc/$RUN"
       WT_REAL="$WT"
+      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      if [[ -f "$STATE/promotion.pending" && ! -f "$STATE/disposition" && ! -f "$STATE/cancellation.json" ]]; then
+        printf 'cleanup retained: PASS promotion pending or retryable; evidence %s\n' "$STATE" >&2
+        exit 0
+      fi
       if [[ -d "$WT" ]]; then
         WT_REAL=$(cd "$WT" && pwd -P)
         STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
