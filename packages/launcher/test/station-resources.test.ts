@@ -7,7 +7,7 @@ import type { CachedArtifact } from "../src/artifact-cache.ts";
 import { ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, registrationHash, type ArtifactIdentity, type ArtifactSupport } from "../src/contracts.ts";
 import type { ResolvedRelease } from "../src/release.ts";
 import { initializeStation, promote, rollback, type StationDependencies } from "../src/station.ts";
-import { readStationState, stationRoot, type StationState } from "../src/station-state.ts";
+import { readStateLocked, readStationState, stationRoot, stationTransaction, type StationState } from "../src/station-state.ts";
 
 const shippedSkills = ["issue-execution", "repository-discovery", "backlog-breakdown", "refine", "sprint-planning", "sprint-review", "sprint-retrospective"];
 const skillText = (version: string, name: string) => `---\nname: ${name}\ndescription: Resource discovery fixture\n---\n${version} ${name}\n`;
@@ -230,7 +230,7 @@ test("resource conflicts default to stderr diagnostics without failing initializ
   assert.ok(messages.some(message => message.includes(path)));
 });
 
-test("read-repair reconciles resources with an already-correct current pointer, then fixes a wrong pointer", async t => {
+test("locked resource repair reconciles an already-correct current pointer, then fixes a wrong pointer", async t => {
   const f = resourceFixture(t), current = f.release("r1", ["first", "second"]);
   await initializeStation(f.home, current, f.dependencies);
   const stateBytes = readFileSync(join(f.cache, "state.json"), "utf8");
@@ -241,17 +241,17 @@ test("read-repair reconciles resources with an already-correct current pointer, 
   rmSync(join(f.loader, "agents"));
   symlinkSync("../current/./agents", join(f.loader, "agents"));
   assert.equal(readlinkSync(f.current), "r1");
-  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assert.equal((await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies)).current.version, "r1");
   assertPublished(f, "r1", ["first", "second"]);
   assertMissing(join(f.skills, "stale-owned"));
   rmSync(f.current);
   symlinkSync("r999", f.current);
   rmSync(join(f.skills, "first"));
   rmSync(join(f.loader, "agents"));
-  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assert.equal((await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies)).current.version, "r1");
   assert.equal(readlinkSync(f.current), "r1");
   assertPublished(f, "r1", ["first", "second"]);
-  assert.equal(readFileSync(join(f.cache, "state.json"), "utf8"), stateBytes, "read-repair never rewrites station selection");
+  assert.equal(readFileSync(join(f.cache, "state.json"), "utf8"), stateBytes, "resource repair never rewrites station selection");
   assert.deepEqual(f.conflicts, []);
 });
 
@@ -264,7 +264,8 @@ for (const missing of ["skills", "active cache"] as const) {
     rmSync(missing === "skills" ? join(f.cache, "r2", "skills") : join(f.cache, "r2"), { recursive: true });
     symlinkSync(join(f.current, "skills", "not-yet-restored"), join(f.skills, "retain-until-restored"));
     rmSync(join(f.loader, "agents"));
-    assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r2");
+    assert.equal((await readStationState(f.home)).current.version, "r2");
+    await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies);
     for (const { name, target } of before) assert.equal(readlinkSync(join(f.skills, name)), target);
     assert.equal(readlinkSync(join(f.skills, "retain-until-restored")), join(f.current, "skills", "not-yet-restored"));
     assert.equal(readlinkSync(join(f.loader, "agents")), "../current/agents");
