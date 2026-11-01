@@ -27,7 +27,7 @@ test("receipt-bound recovery cancels a native Waiting run after OMP relocation w
   execFileSync("git", ["-C", primary, "-c", "user.name=Recovery", "-c", "user.email=recovery@example.test", "commit", "--allow-empty", "-qm", "initial"]);
   writeFileSync(join(old, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   mkdirSync(stable);
-  const cli = fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url));
+  const cli = fileURLToPath(import.meta.resolve("@a4s/launcher/cli"));
   writeFileSync(join(stable, "a4s"), `#!/bin/sh\nexec node --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o755 });
   const socket = createServer(), listening = Promise.withResolvers<void>();
   socket.listen(0, "127.0.0.1", listening.resolve); await listening.promise;

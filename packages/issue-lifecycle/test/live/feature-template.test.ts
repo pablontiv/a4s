@@ -2684,7 +2684,7 @@ test("release minimal live feature preserves JSON, locks ownership, gates and au
   // Replace fixture links, never write through the shared source executable.
   rmSync(join(bin, "a4s"));
   rmSync(join(bin, "dagu"));
-  const launcher = fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url));
+  const launcher = fileURLToPath(import.meta.resolve("@a4s/launcher/cli"));
   writeFileSync(join(bin, "a4s"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(launcher)} "$@"\n`, { mode: 0o755 });
   writeFileSync(join(bin, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const fixture = await recoveryFixture("", `${bin}:${process.env.PATH}`, 120_000);
