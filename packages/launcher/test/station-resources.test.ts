@@ -38,6 +38,8 @@ function resourceFixture(t: TestContext): ResourceFixture {
     inspect,
     ensure: inspect,
     inventory: async () => ({ formats: {}, references: [], expiredBindings: [] }),
+    primaries: () => [],
+    listRuns: async () => [],
     releases: async () => [],
     reportResourceConflict(message) {
       assert.ok(locked, "resource conflict callbacks run while the station state lock is held");

@@ -73,6 +73,23 @@ for (const statusLabel of ["queued", "waiting", "running", "recoverable", "retry
   });
 }
 
+test("a newly listed Dagu run between GC inventory and deletion keeps its only cache", async t => {
+  const f = await gcFixture(t);
+  f.receipt("old-run", f.builds[0]!, 40, "arbitrary-dag");
+  let listed = false, acquisitions = 0;
+  await assert.rejects(gc(f.home, { ...f.dependencies,
+    listRuns: async () => listed ? [{ name: "arbitrary-dag", dagRunId: "old-run", primary: f.primary, statusLabel: "running" }] : [],
+    async withFileLock<T>(path: string, body: () => Promise<T>, options?: { timeoutMs?: number }) {
+      // No lease or tick stamp changes: only a fresh native inventory can see it.
+      if (path.endsWith("/.state.lock") && ++acquisitions === 2) listed = true;
+      return f.dependencies.withFileLock!(path, body, options);
+    },
+  }), { code: "ESTALE", message: /inventory inputs changed.*retry/ });
+  assert.equal(listed, true);
+  assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")), "the sole cache for the newly visible reader survives");
+  assert.ok(existsSync(join(stationRoot(f.home), "r4")), "validation aborts before any eligible cache is deleted");
+});
+
 for (const statusLabel of ["waiting", "failed"]) {
   test(`an exited tick with ${statusLabel} retryable binding retains its exact build`, async t => {
     const f = await gcFixture(t), path = f.binding("tick", f.builds[0]!);
@@ -82,6 +99,23 @@ for (const statusLabel of ["waiting", "failed"]) {
     assert.ok(existsSync(path));
   });
 }
+
+test("GC keeps a failed tick binding that might resume without a list status change", async t => {
+  const f = await gcFixture(t), path = f.binding("tick", f.builds[0]!);
+  const report = await gc(f.home, { ...f.dependencies, listRuns: async () => [{ name: "reconcile", dagRunId: "tick", statusLabel: "failed" }] });
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /tick reconcile\/tick/);
+  assert.ok(existsSync(path));
+});
+
+test("GC keeps an ambiguous receipt when listed runs share DAG/run identifiers", async t => {
+  const f = await gcFixture(t); f.receipt("old-run", f.builds[0]!, 40);
+  const report = await gc(f.home, { ...f.dependencies, listRuns: async () => [
+    { name: "feature", dagRunId: "old-run", statusLabel: "succeeded" },
+    { name: "feature", dagRunId: "old-run", statusLabel: "failed" },
+  ] });
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader feature\/old-run/);
+  assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
+});
 
 test("an active binding omitted by the inventory snapshot is resolved through its exact detail endpoint", async t => {
   const f = await gcFixture(t); f.binding("tick", f.builds[0]!);
@@ -93,13 +127,24 @@ test("an active binding omitted by the inventory snapshot is resolved through it
 });
 
 for (const incident of [false, true]) {
-  test(`pending ${incident ? "incident/ambiguous" : "unlisted"} admission expires at five minutes and leaves its receipt intact`, async t => {
+  test(`GC keeps an unverified ${incident ? "incident/ambiguous" : "unlisted"} reader after the admission window and leaves its receipt intact`, async t => {
     const f = await gcFixture(t), path = f.receipt("pending", f.builds[0]!, 0, "feature", incident);
     const bytes = readFileSync(path, "utf8");
     const expiry = GC_NOW + 5 * 60 * 1000;
     assert.match((await gc(f.home, { ...f.dependencies, now: () => expiry - 1 })).retained.find(entry => entry.version === "r1")!.holders.join(), /pending admission/);
-    assert.ok((await gc(f.home, { ...f.dependencies, now: () => expiry })).removed.includes("r1"));
+    assert.match((await gc(f.home, { ...f.dependencies, now: () => expiry })).retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader feature\/pending unlisted/);
     assert.equal(readFileSync(path, "utf8"), bytes);
+  });
+}
+
+for (const statusLabel of ["failed", "aborted", "partially_succeeded", "succeeded", "cancelled", "rejected"]) {
+  test(`GC ${["failed", "aborted", "partially_succeeded"].includes(statusLabel) ? "keeps an ambiguous" : "can delete a verified terminal"} ${statusLabel} reader`, async t => {
+    const f = await gcFixture(t); f.receipt("old-run", f.builds[0]!, 40);
+    const report = await gc(f.home, { ...f.dependencies, listRuns: async () => [{ name: "feature", dagRunId: "old-run", statusLabel }] });
+    if (["failed", "aborted", "partially_succeeded"].includes(statusLabel)) {
+      assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader feature\/old-run/);
+      assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
+    } else assert.ok(report.removed.includes("r1"));
   });
 }
 

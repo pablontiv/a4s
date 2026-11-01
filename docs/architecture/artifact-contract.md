@@ -257,15 +257,36 @@ prepares the exact artifact, then reacquires the lock to reject changed station
 state/receipts and confirm the verified cache record still exists before publishing
 state or a lease. GC cannot delete an entry between that final check and publication.
 A changed selection fails closed with a retry diagnostic; it never commits stale state.
-Inventory and live-reader compatibility checks remain serialized with the commit.
+Inventory and live-reader analysis also run outside the lock. Before reading
+inventory, the caller captures its inputs: registered primaries; Git HEAD/ref,
+index and config file metadata; receipt/run-directory listings and file metadata;
+SQLite database, WAL, SHM and journal metadata; and the Dagu run-list set of
+`(dag, runId, status)`. File proofs include size, nanosecond mtime/ctime and inode.
+Initialization, promotion and rollback re-capture and compare this proof under
+the lock, together with station state and lease/tick stamps, before committing.
+GC makes the same comparison before **each** cache detach and before reference
+cleanup. Any changed input aborts with a retryable `ESTALE` diagnostic, so the next
+tick inventories afresh instead of committing stale formats or deleting a reader.
+
+The locked proof uses only Dagu's aggregate list endpoints, never per-run detail
+or spec requests, Git subprocesses, artifact restoration or executable hashing.
+Its one-second total recheck deadline covers all list pages and local stat work;
+an unavailable or slow scheduler causes a retry, not an extended lock hold.
+GC keeps an artifact named by a receipt unless the data in hand verifies its run
+terminal (or its admission has been explicitly released). Missing runs and
+failed/aborted/partially-succeeded runs that might have pending resumes remain
+possible readers even after the five-minute admission window. A retained cache
+is preferable to deleting a live reader's only copy.
 
 Every launcher `gh` metadata/checksum call has a 15-second timeout; the archive
 transfer has a five-minute timeout. Expiry kills the child with `SIGKILL` and
 reports `ETIMEDOUT`; a promotion timeout fails that tick without changing state,
 so the next scheduled tick can run. Per-artifact and station asynchronous lock
-acquisition have a ten-second deadline. A deadline error names the lock and its
-recorded holder (PID, host, command and acquisition time); it never breaks or
-removes a held lock. Closing the holder's descriptor releases the kernel lock.
+acquisition have a ten-second deadline. A deadline error reports elapsed wait,
+the lock, and every distinct acquisition record observed while polling (PID,
+host, command and acquisition time). These records are diagnostic: the last
+acquirer is not proof of the current holder. A timeout never breaks or removes
+a held lock. Closing the holder's descriptor releases the kernel lock.
 GC attempts per-artifact locks without waiting and retains a busy entry until a
 later pass, so out-of-lock preparation cannot indirectly stall the station lock.
 State replacement writes a unique temporary regular file, fsyncs it, renames it

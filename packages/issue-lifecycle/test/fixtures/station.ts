@@ -22,6 +22,8 @@ export function stationFixture(t: TestContext) {
     inspect: (home, tuple) => inspectArtifact(home, tuple, artifacts),
     ensure: (home, tuple) => ensureArtifact(home, tuple, artifacts),
     inventory: async () => ({ formats: {}, references: [], expiredBindings: [] }),
+    primaries: () => [],
+    listRuns: async () => [],
     releases: async () => [],
     probe: () => "alive",
   };

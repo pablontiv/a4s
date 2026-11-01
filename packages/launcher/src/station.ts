@@ -7,7 +7,7 @@ import { assertIdentityContracts, assertReadCoverage, formatSupport } from "./ar
 import { artifactToken, github, releaseRepository, resolveRelease, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
 import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, referenceStamp, readStationState, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
 import { readLeases, type LeaseDependencies } from "./lease.ts";
-import { inventoryStation, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
+import { inventoryStation, captureInventoryInputs, assertInventoryInputsCurrent, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
 import { withFileLockAsync } from "./file-lock.ts";
 import { isRecord } from "./type-guard.ts";
 import { SHARED_FORMATS, type ArtifactSupport } from "./contracts.ts";
@@ -72,6 +72,7 @@ export async function initializeStation(home: string, current: ArtifactTuple, de
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
     return referenceStamp(home);
   }, dependencies);
+  const inputs = await captureInventoryInputs(home, dependencies, false);
   const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
   const support = formatSupport(cached.identity.support);
   const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
@@ -79,6 +80,7 @@ export async function initializeStation(home: string, current: ArtifactTuple, de
   return stationTransaction(home, async () => {
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
     if (referenceStamp(home) !== stamp) throw new Error("Station references changed during initialization preparation; retry");
+    await assertInventoryInputsCurrent(home, inputs, "initialization", dependencies, false);
     assertCachedArtifactPresent(home, cached);
     const state: StationState = { schema: 1, generation: 0, current, previous: current, rejected: [], formats };
     commitStateLocked(home, state, dependencies);
@@ -112,8 +114,9 @@ export async function promote(home: string, dependencies: StationDependencies = 
       skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
       continue;
     }
-    // Inventory includes HTTP pagination, git, SQLite and per-run/lease probes.
-    // The lease/tick directory stamp closes races with new readers and admissions.
+    // Full inventory stays outside the state lock. Its complete input proof,
+    // not only leases/ticks, must still match at publication.
+    const inputs = await captureInventoryInputs(home, dependencies);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
     const { references } = liveReferences(home, inventory, dependencies);
     references.push({ artifact: snapshot.current, holder: "post-promotion previous" });
@@ -132,6 +135,7 @@ export async function promote(home: string, dependencies: StationDependencies = 
     }
     const result = await stationTransaction(home, async () => {
       const state = recheckStation(home, observed, "promotion", dependencies);
+      await assertInventoryInputsCurrent(home, inputs, "promotion", dependencies);
       try { assertCachedArtifactPresent(home, cached); }
       catch (error) { return error instanceof Error ? error.message : String(error); }
       // Commit errors must not be mistaken for a skipped candidate.
@@ -151,11 +155,13 @@ export async function rollback(home: string, dependencies: StationDependencies =
   const target = snapshot.previous;
   const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
   assertLauncher(cached.identity);
+  const inputs = await captureInventoryInputs(home, dependencies, false);
   const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
   const formats = mergeInventory(snapshot, inventory);
   assertReadCoverage(formatSupport(cached.identity.support), formats);
   return stationTransaction(home, async () => {
     const state = recheckStation(home, observed, "rollback", dependencies);
+    await assertInventoryInputsCurrent(home, inputs, "rollback", dependencies, false);
     if (!sameArtifact(cached.record, target)) throw new Error("Rollback verification returned a different tuple");
     assertCachedArtifactPresent(home, cached);
     if (sameArtifact(state.current, target)) return state;
@@ -167,7 +173,8 @@ export async function rollback(home: string, dependencies: StationDependencies =
 export interface GcReport { removed: string[]; retained: Array<{ version: string; holders: string[] }> }
 export async function gc(home: string, dependencies: StationDependencies = {}): Promise<GcReport> {
   const observed = await snapshotStation(home, dependencies), state = observed.state;
-  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
+  const inputs = await captureInventoryInputs(home, dependencies);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, true, true));
   const { references, dead } = liveReferences(home, inventory, dependencies);
   const keep = new Map<string, string[]>(), identities = new Map<string, string>();
   const retain = (tuple: ArtifactTuple, holder: string) => {
@@ -207,6 +214,7 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
       await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, tupleFromJson(entry.record)), async () => {
         await stationTransaction(home, async () => {
           recheckStation(home, observed, "GC", dependencies);
+          await assertInventoryInputsCurrent(home, inputs, "GC", dependencies);
           if (!lstatSync(entry.path).isDirectory() || !isDeepStrictEqual(readJsonFile(join(entry.path, "artifact.json")), entry.record)) throw new Error(`Cache build changed during GC preparation: ${entry.version}`);
           renameSync(entry.path, trash);
         }, dependencies);
@@ -221,6 +229,7 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
   }
   await stationTransaction(home, async () => {
     recheckStation(home, observed, "GC", dependencies);
+    await assertInventoryInputsCurrent(home, inputs, "GC", dependencies);
     for (const path of [...dead, ...inventory.expiredBindings]) rmSync(path, { force: true });
   }, dependencies);
   return { removed, retained: [...keep].map(([version, holders]) => ({ version, holders })) };

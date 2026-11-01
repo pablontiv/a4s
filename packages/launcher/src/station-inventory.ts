@@ -1,10 +1,10 @@
 import { readServiceEnvironment } from "./service-environment.ts";
-import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { DatabaseSync } from "node:sqlite";
-import { readCommittedConfig } from "./config.ts";
+import { CONFIG_PATH, readCommittedConfig } from "./config.ts";
 import { isRecord } from "./type-guard.ts";
 import { tupleFromJson, readJsonFile, stationRoot, type PersistedFormats } from "./station-state.ts";
 import type { ArtifactTuple } from "./release.ts";
@@ -42,21 +42,52 @@ export function registeredPrimaries(home: string): string[] {
   for (const name of names(join(home, "primaries"))) add(readFileSync(join(home, "primaries", name), "utf8"));
   return [...new Set(paths)];
 }
-function gitPath(primary: string): string {
-  return execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", "dagu-feature"], { encoding: "utf8", timeout: 10000 }).trim();
+/** Resolve native PRIMARY/worktree Git metadata without spawning under .state.lock. */
+function gitDirectories(primary: string, track: (path: string) => void = () => {}): { directory: string; common: string } {
+  for (const key of ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE"]) {
+    if (process.env[key] !== undefined) throw new Error(`Cannot establish inventory inputs with ${key} overridden; retry without Git path overrides`);
+  }
+  const dotGit = join(primary, ".git");
+  track(dotGit);
+  const stat = lstatSync(dotGit);
+  let directory = dotGit;
+  if (stat.isFile()) {
+    const match = /^gitdir: ([^\r\n\0]+)\n?$/.exec(readFileSync(dotGit, "utf8"));
+    if (!match) throw new Error(`Unreadable PRIMARY gitdir ${dotGit}`);
+    directory = resolve(primary, match[1]!);
+  } else if (!stat.isDirectory()) throw new Error(`PRIMARY gitdir must be real: ${dotGit}`);
+  directory = realpathSync(directory);
+  const commonFile = join(directory, "commondir");
+  track(commonFile);
+  let common = directory;
+  try {
+    const value = readFileSync(commonFile, "utf8").replace(/\n$/, "");
+    if (!value || /[\r\n\0]/.test(value)) throw new Error(`Unreadable PRIMARY commondir ${commonFile}`);
+    common = realpathSync(resolve(directory, value));
+  } catch (error) { if (!missing(error)) throw error; }
+  return { directory, common };
 }
+function gitPath(primary: string): string { return join(gitDirectories(primary).directory, "dagu-feature"); }
 const activeStatuses: Record<string, true> = { queued: true, waiting: true, running: true, recoverable: true, retrying: true, not_started: true };
 const terminalStatuses: Record<string, true> = { succeeded: true, failed: true, aborted: true, cancelled: true, partially_succeeded: true, rejected: true };
+const resumableStatuses: Record<string, true> = { failed: true, aborted: true, partially_succeeded: true };
 export function nonterminal(run: StationRun): boolean {
   const status = run.statusLabel.toLowerCase();
   if (!activeStatuses[status] && !terminalStatuses[status]) throw new Error(`Unknown Dagu status ${run.statusLabel}`);
   return !!activeStatuses[status] || run.retryable === true;
 }
-async function api(path: string): Promise<Response> {
-  return fetch(`${readServiceEnvironment().DAGU_URL}/api/v1/${path}`, { signal: AbortSignal.timeout(15000) });
+async function api(path: string, signal = AbortSignal.timeout(15000)): Promise<Response> {
+  return fetch(`${readServiceEnvironment().DAGU_URL}/api/v1/${path}`, { signal });
 }
 /** All DAGs, all history pages: page size is never a retention limit. */
 export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME, limit = 100): Promise<StationRun[]> {
+  return readStationRuns(home, limit, true);
+}
+/** Only aggregate list endpoints: safe for a bounded final inventory recheck. */
+export async function listStationRunSummaries(home = readServiceEnvironment().DAGU_HOME, limit = 1000, signal?: AbortSignal): Promise<StationRun[]> {
+  return readStationRuns(home, limit, false, signal);
+}
+async function readStationRuns(home: string, limit: number, details: boolean, signal?: AbortSignal): Promise<StationRun[]> {
   readServiceEnvironment({ ...process.env, DAGU_HOME: home });
   const runs: StationRun[] = [];
   const seen = new Set<string>();
@@ -67,7 +98,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
   for (;;) {
     const params = new URLSearchParams({ fromDate: "0", toDate, limit: String(limit) });
     if (cursor) params.set("cursor", cursor);
-    const response = await api(`dag-runs?${params}`);
+    const response = await api(`dag-runs?${params}`, signal);
     if (!response.ok) throw new Error(`Dagu inventory HTTP ${response.status}`);
     const page: unknown = await response.json();
     if (!isRecord(page) || !Array.isArray(page.dagRuns)) throw new Error("Malformed Dagu inventory page");
@@ -77,7 +108,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
       const workspace = typeof row.workspace === "string" && row.workspace ? `?workspace=${encodeURIComponent(row.workspace)}` : "";
       // Dagu 2.24 exposes pending resumes only in details, not in list summaries.
       // Failed/aborted/partial runs may therefore still be recoverable readers.
-      if (["failed", "aborted", "partially_succeeded"].includes(run.statusLabel.toLowerCase())) {
+      if (details && resumableStatuses[run.statusLabel.toLowerCase()]) {
         const detailResponse = await api(`dag-runs/${encodeURIComponent(run.name)}/${encodeURIComponent(run.dagRunId)}${workspace}`);
         if (!detailResponse.ok) throw new Error(`Dagu recovery inventory HTTP ${detailResponse.status}`);
         const detail: unknown = await detailResponse.json();
@@ -88,7 +119,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
           (typeof row.autoRetryCount !== "number" || row.autoRetryCount < row.autoRetryLimit);
       }
       // Resolve from the immutable spec, not from today's DAG file or a label guess.
-      if (nonterminal(run)) {
+      if (details && nonterminal(run)) {
         const specResponse = await api(`dag-runs/${encodeURIComponent(run.name)}/${encodeURIComponent(run.dagRunId)}/spec${workspace}`);
         if (!specResponse.ok) throw new Error(`Dagu spec inventory HTTP ${specResponse.status}`);
         const spec: unknown = await specResponse.json();
@@ -141,7 +172,7 @@ interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: s
 const PENDING_ADMISSION_WINDOW_MS = 5 * 60 * 1000;
 export interface StationInventory { formats: Partial<PersistedFormats>; references: BuildReference[]; expiredBindings: string[] }
 /** Read-only inventory; every error propagates before the caller can delete anything. */
-export async function inventoryStation(home: string, dependencies: InventoryDependencies = {}, includeRuns = true): Promise<StationInventory> {
+export async function inventoryStation(home: string, dependencies: InventoryDependencies = {}, includeRuns = true, conservativeGc = false): Promise<StationInventory> {
   const versions = Object.fromEntries(SHARED_FORMATS.map(name => [name, new Set<number>()])) as Record<SharedFormat, Set<number>>;
   const add = (name: SharedFormat, value: unknown) => {
     if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`Unrecognized persisted ${name} version`);
@@ -213,6 +244,15 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
         references.push({ artifact: receipt.artifact, holder: `pending admission ${receipt.dag}/${receipt.run}` });
       }
     }
+    if (conservativeGc) for (const receipt of receipts) {
+      if (receipt.cancelled || !receipt.artifact) continue;
+      const matching = runs.filter(run => run.name === receipt.dag && run.dagRunId === receipt.run && (!run.primary || run.primary === receipt.primary));
+      // Absence is not terminal proof. Failed/aborted/partial summaries also
+      // cannot prove that native pending-resume flags will remain clear.
+      if (!matching.length || matching.some(run => nonterminal(run) || resumableStatuses[run.statusLabel.toLowerCase()])) {
+        references.push({ artifact: receipt.artifact, holder: `possible reader ${receipt.dag}/${receipt.run} ${matching.map(run => run.statusLabel).join(",") || "unlisted"}` });
+      }
+    }
     for (const job of openJobs) {
       const receipt = receipts.find(receipt => receipt.primary === job.repo && receipt.run === job.run && receipt.dag === job.dag);
       if (!receipt?.artifact) throw new Error(`Unresolved open role job ${job.dag}/${job.run}`);
@@ -223,9 +263,105 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       const listed = runs.find(run => run.name === TICK_DAG && run.dagRunId === binding.dagRunId);
       const run = listed ?? await (dependencies.bindingRun ?? bindingRun)(binding);
       if (!run) expiredBindings.push(path);
-      else if (nonterminal(run)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
+      else if (nonterminal(run) || conservativeGc && resumableStatuses[run.statusLabel.toLowerCase()]) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
     }
     return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings };
   }
   return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings: [] };
+}
+
+export interface InventoryInputs {
+  primaries: string[];
+  files: Array<[string, string | null]>;
+  listings: Array<[string, string[]]>;
+  configs: Array<[string, number]>;
+  runs?: string[];
+}
+/** Capture before reading inventory. Re-capture, never re-interpret/hash artifacts,
+ * under the final state lock. Nanosecond ctime also detects replace-and-restore. */
+export async function captureInventoryInputs(home: string, dependencies: InventoryDependencies = {}, includeRuns = true, signal?: AbortSignal, deadline = Infinity): Promise<InventoryInputs> {
+  const checkDeadline = () => {
+    if (deadline !== Infinity && performance.now() >= deadline) throw new Error("Inventory input capture deadline exceeded");
+  };
+  let runs: string[] | undefined;
+  if (includeRuns) {
+    const summaries = await (dependencies.listRuns ? dependencies.listRuns() : listStationRunSummaries(home, 1000, signal));
+    runs = [...new Set(summaries.map(run => {
+      checkDeadline();
+      if (!run.name || !run.dagRunId) throw new Error("Malformed Dagu run input");
+      nonterminal(run);
+      return JSON.stringify([run.name, run.dagRunId, run.statusLabel]);
+    }))].sort();
+  }
+  const files = new Map<string, string | null>(), listings = new Map<string, string[]>(), configs: Array<[string, number]> = [];
+  const track = (path: string) => {
+    checkDeadline();
+    const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
+    if (stat && !stat.isFile() && !stat.isDirectory()) throw new Error(`Inventory input must be a real file or directory: ${path}`);
+    files.set(path, stat ? `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}` : null);
+  };
+  const listing = (path: string) => {
+    track(path);
+    const entries = names(path).sort();
+    listings.set(path, entries);
+    return entries;
+  };
+  const primaries = [...new Set((dependencies.primaries ?? registeredPrimaries)(home))].sort();
+  for (const primary of primaries) {
+    if (dependencies.configVersion) configs.push([primary, dependencies.configVersion(primary)]);
+    else {
+      const { directory, common } = gitDirectories(primary, track);
+      track(join(primary, CONFIG_PATH));
+      track(join(directory, "index"));
+      track(join(directory, "packed-refs")); track(join(common, "packed-refs"));
+      track(join(common, "config")); track(join(directory, "config.worktree"));
+      for (const base of new Set([common, directory])) {
+        for (const name of listing(join(base, "reftable"))) track(join(base, "reftable", name));
+      }
+      for (const name of listing(join(common, "refs", "replace"))) track(join(common, "refs", "replace", name));
+      let ref = "HEAD";
+      const seen = new Set<string>();
+      for (;;) {
+        if (seen.has(ref)) throw new Error(`Cyclic PRIMARY git ref ${primary}`);
+        seen.add(ref);
+        const path = join(ref === "HEAD" || /^(?:refs\/(?:worktree|bisect|rewritten)\/)/.test(ref) ? directory : common, ref);
+        track(path);
+        let value: string;
+        try { value = readFileSync(path, "utf8").trim(); } catch (error) { if (missing(error)) break; throw error; }
+        if (!value.startsWith("ref: ")) {
+          if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw new Error(`Unreadable PRIMARY git ref ${path}`);
+          break;
+        }
+        ref = value.slice(5);
+        if (!/^refs\/[A-Za-z0-9._/-]+$/.test(ref) || ref.split("/").some(part => !part || part === "." || part === "..")) throw new Error(`Invalid PRIMARY git ref ${path}`);
+      }
+    }
+    const directory = (dependencies.gitPath ?? gitPath)(primary);
+    listing(directory);
+    for (const run of listing(join(directory, "runs"))) {
+      const runDirectory = join(directory, "runs", run);
+      listing(runDirectory);
+      track(join(runDirectory, "receipt.json"));
+      track(join(runDirectory, "cancellation.json"));
+    }
+  }
+  for (const suffix of ["", "-wal", "-shm", "-journal"]) track(join(home, `role-jobs.sqlite${suffix}`));
+  return { primaries, files: [...files].sort(([a], [b]) => a.localeCompare(b)), listings: [...listings].sort(([a], [b]) => a.localeCompare(b)), configs, ...(runs ? { runs } : {}) };
+}
+export async function assertInventoryInputsCurrent(home: string, expected: InventoryInputs, operation: string, dependencies: InventoryDependencies = {}, includeRuns = true): Promise<void> {
+  // Bound the entire list-only recheck, not each page. A slow scheduler must
+  // cause a retry, never recreate the original multi-second lock monopoly.
+  const started = performance.now(), signal = AbortSignal.timeout(1000);
+  let current: InventoryInputs;
+  try { current = await captureInventoryInputs(home, dependencies, includeRuns, signal, started + 1000); }
+  catch (error) {
+    const message = signal.aborted || performance.now() - started >= 1000
+      ? `Station inventory recheck exceeded 1000ms during ${operation}; retry`
+      : `Station inventory inputs unavailable during ${operation} preparation; retry`;
+    throw Object.assign(new Error(message), { code: "ESTALE", cause: error });
+  }
+  if (performance.now() - started >= 1000) throw Object.assign(new Error(`Station inventory recheck exceeded 1000ms during ${operation}; retry`), { code: "ESTALE" });
+  if (!isDeepStrictEqual(expected, current)) {
+    throw Object.assign(new Error(`Station inventory inputs changed during ${operation} preparation; retry`), { code: "ESTALE" });
+  }
 }

@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { initializeStation, promote, rollback, gc } from "@a4s/launcher/station";
 import { selectPayload } from "@a4s/launcher/select";
 import { createLeaseLocked, prepareLease, selectStationBuild } from "@a4s/launcher/lease";
 import type { ArtifactTuple } from "@a4s/launcher/release";
-import { stationRoot, stationTransaction } from "@a4s/launcher/station-state";
+import { stationRoot, stationTransaction, writeJsonDurable } from "@a4s/launcher/station-state";
 import { leaseSelection, stationSelection } from "../../loader/src/station.ts";
-import { stationFixture } from "./fixtures/station.ts";
+import { configSupport, stationFixture } from "./fixtures/station.ts";
 import { deferred, inProcessLock } from "./fixtures/state-lock.ts";
 
 test("listing, acquisition and verification stay outside the station lock for every activation path", async t => {
@@ -115,6 +116,71 @@ for (const operation of ["promotion", "rollback", "GC"] as const) {
       for (const gate of release) gate.resolve();
       await reconciliation.catch(() => {});
     }
+  });
+}
+
+for (const operation of ["initialization", "promotion", "rollback"] as const) {
+  test(`config formats changed after inventory cannot be committed by ${operation}`, async t => {
+    const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), next = await f.release("r2", configSupport([1], 1));
+    if (operation !== "initialization") await initializeStation(f.home, old, f.dependencies);
+    if (operation === "rollback") f.setState({ ...f.state(), current: next, previous: old });
+    const before = operation === "initialization" ? undefined : f.stateBytes();
+    const { inventory: _, ...base } = f.dependencies;
+    let schemaVersion = 1, acquisitions = 0;
+    const dependencies = { ...base, primaries: () => [f.root], gitPath: () => join(f.root, "inventory"),
+      configVersion: () => schemaVersion, listRuns: async () => [], releases: async () => [next],
+      async withFileLock<T>(path: string, body: () => Promise<T>) {
+        // On the old path this is after the inventory and before its commit.
+        // The authoritative final input proof must instead see schema 2.
+        if (path.endsWith("/.state.lock") && ++acquisitions === 2) schemaVersion = 2;
+        return base.withFileLock!(path, body);
+      },
+    };
+    await assert.rejects(operation === "initialization" ? initializeStation(f.home, old, dependencies)
+      : operation === "promotion" ? promote(f.home, dependencies) : rollback(f.home, dependencies),
+    { code: "ESTALE", message: /inventory inputs changed.*retry/ });
+    assert.equal(schemaVersion, 2, "the config changed at the final state-lock acquisition");
+    if (before === undefined) assert.equal(existsSync(join(stationRoot(f.home), "state.json")), false);
+    else assert.equal(f.stateBytes(), before);
+  });
+}
+
+for (const source of ["receipt", "SQLite", "SQLite WAL"] as const) {
+  test(`a ${source} stat change after inventory aborts promotion before commit`, async t => {
+    const f = stationFixture(t), old = await f.release("r1"), next = await f.release("r2");
+    await initializeStation(f.home, old, f.dependencies);
+    const before = f.stateBytes(), directory = join(f.root, "repo", ".git", "dagu-feature"), run = join(directory, "runs", "old");
+    mkdirSync(run, { recursive: true });
+    const receipt = { schemaVersion: 2, artifact: old, initial: { admittedAt: "2026-10-01T00:00:00Z" }, runReceipt: { dag: "feature", run: "old" } };
+    writeJsonDurable(join(run, "receipt.json"), receipt);
+    const database = join(f.home, "role-jobs.sqlite");
+    let writer: DatabaseSync | undefined;
+    if (source !== "receipt") {
+      writer = new DatabaseSync(database);
+      if (source === "SQLite WAL") writer.exec("PRAGMA journal_mode=WAL");
+      writer.exec("CREATE TABLE jobs(document TEXT, result TEXT)");
+      if (source === "SQLite") { writer.close(); writer = undefined; }
+    }
+    const { inventory: _, ...base } = f.dependencies;
+    let acquisitions = 0;
+    try {
+      await assert.rejects(promote(f.home, { ...base, primaries: () => [f.root], gitPath: () => directory, configVersion: () => 2,
+        releases: async () => [next], listRuns: async () => [{ name: "feature", dagRunId: "old", statusLabel: "succeeded" }],
+        async withFileLock<T>(path: string, body: () => Promise<T>) {
+          if (path.endsWith("/.state.lock") && ++acquisitions === 2) {
+            if (source === "receipt") writeFileSync(join(run, "receipt.json"), `${JSON.stringify(receipt)}\n\n`);
+            else if (writer) writer.exec("PRAGMA user_version=2");
+            else {
+              const db = new DatabaseSync(database);
+              try { db.exec("PRAGMA user_version=2"); } finally { db.close(); }
+            }
+          }
+          return base.withFileLock!(path, body);
+        },
+      }), { code: "ESTALE", message: /inventory inputs changed.*retry/ });
+      assert.equal(acquisitions, 2);
+      assert.equal(f.stateBytes(), before);
+    } finally { writer?.close(); }
   });
 }
 
