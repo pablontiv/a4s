@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, ftruncateSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
+import { hostname } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 
 const EXCLUSIVE = 2;
@@ -56,7 +57,12 @@ export function openLock(path: string): number {
   return openSync(path, "a+", 0o600);
 }
 export function acquireLock(fd: number, nonblocking = false): boolean {
-  return flock(fd, EXCLUSIVE | (nonblocking ? NONBLOCKING : 0));
+  if (!flock(fd, EXCLUSIVE | (nonblocking ? NONBLOCKING : 0))) return false;
+  try {
+    ftruncateSync(fd, 0);
+    writeFileSync(fd, `${JSON.stringify({ pid: process.pid, host: hostname(), command: process.argv, acquiredAt: new Date().toISOString() })}\n`);
+    return true;
+  } catch (error) { flock(fd, UNLOCK); throw error; }
 }
 export function releaseLock(fd: number): void { flock(fd, UNLOCK); }
 export function withFileLock<T>(path: string, body: () => T): T {
@@ -64,10 +70,26 @@ export function withFileLock<T>(path: string, body: () => T): T {
   try { acquireLock(fd); return body(); }
   finally { closeSync(fd); }
 }
-export async function withFileLockAsync<T>(path: string, body: () => Promise<T>): Promise<T> {
+export interface LockOptions { timeoutMs?: number }
+export async function withFileLockAsync<T>(path: string, body: () => Promise<T>, options: LockOptions = {}): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 10000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new Error("Lock timeout must be nonnegative");
+  const deadline = performance.now() + timeoutMs;
   const fd = openLock(path);
+  let attempted = false;
   try {
-    while (!acquireLock(fd, true)) await delay(25);
+    for (;;) {
+      if (attempted && performance.now() >= deadline) {
+        let holder: string;
+        try { holder = readFileSync(path, "utf8").trim() || "unknown (no holder metadata)"; }
+        catch { holder = "unknown (holder metadata unreadable)"; }
+        throw Object.assign(new Error(`Lock acquisition timed out after ${timeoutMs}ms: ${path}; holder=${holder}`), { code: "ETIMEDOUT" });
+      }
+      attempted = true;
+      if (acquireLock(fd, true)) break;
+      const remaining = deadline - performance.now();
+      if (remaining > 0) await delay(Math.min(25, remaining));
+    }
     return await body();
   }
   finally { closeSync(fd); }

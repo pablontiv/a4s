@@ -251,7 +251,23 @@ a4s-owned: reconciliation removes stale owned links, preserves all non-owned
 entries and reports name conflicts. Neither ignored `omp.skills`/`omp.agents`
 manifest fields nor a second loader `skills/` root are used for discovery.
 The launcher, plugin loader, promotion, rollback, admission handoff and GC share
-`.state.lock`; selection and lease publication occur in the same transaction.
+`.state.lock`. Release listing/resolution, archive download, extraction and full
+cache verification MUST run outside that lock. A caller snapshots selection,
+prepares the exact artifact, then reacquires the lock to reject changed station
+state/receipts and confirm the verified cache record still exists before publishing
+state or a lease. GC cannot delete an entry between that final check and publication.
+A changed selection fails closed with a retry diagnostic; it never commits stale state.
+Inventory and live-reader compatibility checks remain serialized with the commit.
+
+Every launcher `gh` metadata/checksum call has a 15-second timeout; the archive
+transfer has a five-minute timeout. Expiry kills the child with `SIGKILL` and
+reports `ETIMEDOUT`; a promotion timeout fails that tick without changing state,
+so the next scheduled tick can run. Per-artifact and station asynchronous lock
+acquisition have a ten-second deadline. A deadline error names the lock and its
+recorded holder (PID, host, command and acquisition time); it never breaks or
+removes a held lock. Closing the holder's descriptor releases the kernel lock.
+GC attempts per-artifact locks without waiting and retains a busy entry until a
+later pass, so out-of-lock preparation cannot indirectly stall the station lock.
 State replacement writes a unique temporary regular file, fsyncs it, renames it
 to `state.json`, then fsyncs the containing directory. **Rename is the only commit point**:
 interruption before it leaves old state, after it leaves new state. A downloaded, verified but
@@ -318,10 +334,11 @@ Under `.state.lock`, argv determines selection:
 
 Unknown state schema fails closed before current is loaded. An unsupported
 payload launcher protocol fails closed with `reinstall a4s-launch`.
-The launcher restores a missing exact immutable tuple or fails closed, verifies
-its structure/digest/protocol, publishes a process lease under the same lock,
-then `execve`s the canonical cached binary. The lease remains live through
-receipt/snapshot writes, `dagu enqueue`, and all other payload work until exit.
+The launcher restores a missing exact immutable tuple or fails closed, and verifies
+its structure/digest/protocol outside the station lock. It then rechecks selection
+and cache metadata and publishes a process lease under the lock before `execve` of
+the canonical cached binary. The lease remains live through receipt/snapshot
+writes, `dagu enqueue`, and all other payload work until exit.
 The payload rechecks its explicit tuple; it never resolves a default again.
 
 The selected executable MUST materialize templates only from its cache entry and

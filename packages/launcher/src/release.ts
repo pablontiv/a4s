@@ -25,7 +25,18 @@ export function releaseTag(version: string): string {
 }
 export function archiveName(version: string, platform = nativePlatform()): string { return `a4s-${version.startsWith("r") ? version : `v${version}`}-${platform}.tar.gz`; }
 export type Github = (args: string[]) => string;
-export const github: Github = args => execFileSync("gh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+/** Metadata/checksum calls are short; archive transfers get a separate budget. */
+export function github(args: string[], timeoutMs = 15000): string {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("GitHub timeout must be positive");
+  try {
+    return execFileSync("gh", args, { encoding: "utf8", timeout: timeoutMs, killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+      throw Object.assign(new Error(`gh ${args.join(" ")} timed out after ${timeoutMs}ms`, { cause: error }), { code: "ETIMEDOUT" });
+    }
+    throw error;
+  }
+}
 function api(gh: Github, path: string): unknown { return JSON.parse(gh(["api", path])); }
 function tagCommit(repository: string, tag: string, gh: Github): string {
   let ref = api(gh, `repos/${repository}/git/ref/tags/${tag}`);

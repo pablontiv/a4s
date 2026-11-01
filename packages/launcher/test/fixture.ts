@@ -28,7 +28,11 @@ export function fixture(t: TestContext) {
     async confirm() { return "first"; },
     async restore(home, tuple): Promise<CachedArtifact> {
       restored.push(tuple.version);
-      return { directory: join(stationRoot(home), tuple.version), executable: join(stationRoot(home), tuple.version, "a4s"), executableDigest: "f".repeat(64), identity: { ...identity, ...tuple }, record: { ...tuple, verifiedAt: new Date().toISOString() } };
+      const directory = join(stationRoot(home), tuple.version);
+      const record = { ...tuple, verifiedAt: new Date().toISOString() };
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "artifact.json"), JSON.stringify(record));
+      return { directory, executable: join(directory, "a4s"), executableDigest: "f".repeat(64), identity: { ...identity, ...tuple }, record };
     },
   };
   const state: StationState = { schema: 1, current: a, previous: a, generation: 0, rejected: [], formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [support[name].write]])) as StationState["formats"] };

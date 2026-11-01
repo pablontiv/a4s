@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { cachePath, inspectArtifact } from "../../launcher/src/artifact-cache.ts";
+import { cachePath, inspectArtifact, assertCachedArtifactPresent } from "../../launcher/src/artifact-cache.ts";
 import { createLeaseLocked } from "../../launcher/src/lease.ts";
 import { readJsonFile, readStateLocked, stationRoot, stationTransaction } from "../../launcher/src/station-state.ts";
 import { assertIdentityContracts } from "../../launcher/src/artifact-support.ts";
@@ -21,12 +21,19 @@ export function stationSelection(home: string, dependencies: StateDependencies =
     return { generation: state.generation, directory, identity: identity as unknown as ArtifactIdentity, state };
   }, dependencies);
 }
-export function leaseSelection(home: string, selection: Selection, dependencies: StateDependencies & { inspect?: typeof inspectArtifact } = {}): Promise<Lease> {
+export async function leaseSelection(home: string, selection: Selection, dependencies: StateDependencies & { inspect?: typeof inspectArtifact } = {}): Promise<Lease> {
   let acquired: Lease | undefined;
-  return stationTransaction(home, async () => {
+  const checkGeneration = () => {
     const state = readStateLocked(home, dependencies);
     if (state.generation !== selection.generation || !sameArtifact(state.current, selection.state.current)) throw new Error("Station generation changed before lease; retry at idle");
-    await (dependencies.inspect ?? inspectArtifact)(home, state.current);
+    return state;
+  };
+  await stationTransaction(home, async () => { checkGeneration(); }, dependencies);
+  const cached = await (dependencies.inspect ?? inspectArtifact)(home, selection.state.current);
+  if (!sameArtifact(cached.record, selection.state.current)) throw new Error("Loader verification returned a different tuple");
+  return stationTransaction(home, async () => {
+    const state = checkGeneration();
+    assertCachedArtifactPresent(home, cached);
     const lease = createLeaseLocked(home, state.current, state.generation, "plugin", "@a4s/loader");
     let released = false;
     const release = () => {
