@@ -264,7 +264,7 @@ test("notices distinguish release pending from a deferred switch and refresh sta
   mkdirSync(join(primary, "packages/issue-lifecycle"), { recursive: true });
   const loadedCommit = "a".repeat(40);
   const transitions = new Transitions("session-a", "0.7.4", loadedCommit);
-  const warning = "The selected a4s build differs from this extension generation. If the loader reports a registration/resource or protocol change, restart OMP; otherwise it switches after the current turn. In-flight runs keep their admitted snapshots.";
+  const warning = "Stale a4s extension (compat=stale): it either switches after this turn or requires a restart or handover. Under an autonomous mandate, follow the sprint-planning handover rule; do not wait for the operator. In-flight runs keep their admitted snapshots.";
   const candidate = {
     ...waitingAt("feature", "implement"),
     params: "ISSUE=176 OMP_SESSION_ID=session-a",
