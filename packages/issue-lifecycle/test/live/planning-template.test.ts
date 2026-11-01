@@ -13,7 +13,9 @@ import { nativeEvidence } from "../../src/role-runtime.ts";
 import { planningReviewer } from "../../src/transcript-identity.ts";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
-import { compiledA4sBin } from "../fixtures/admission.ts";
+import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
+import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
+import { artifactToken } from "../../../launcher/src/release.ts";
 
 const a4sBin = compiledA4sBin();
 
@@ -88,37 +90,20 @@ function accepted(f: Fixture, rows: unknown[] = [unit()]): void {
   successful(f.run("check_review", { REVIEW: "PlanReviewTest" }));
 }
 
-test("planning approval cancellation stops writes and CANCEL=no preserves approved publication", () => {
-  for (const CANCEL of ["yes", "no"]) {
-    const f = fixture();
-    try {
-      accepted(f);
-      if (CANCEL === "yes") executable(join(f.bin, "dagu"), `#!/usr/bin/env bash
-[[ "$*" == "stop --run-id $RUN planning" ]] || exit 1
-printf '%s\\n' "$*" > "$OUT_DIR/stop-request"
-exit 77
-`);
-      const result = f.run("approve_cancellation", { CANCEL, APPROVED: "all" });
-      assert.equal(result.status, CANCEL === "yes" ? 77 : 0, result.stderr);
-      if (CANCEL === "yes") {
-        assert.deepEqual(JSON.parse(readFileSync(join(f.out, "cancellation.json"), "utf8")), {
-          run: f.env.RUN, checkpoint: "approve", outcome: "cancelled", nativeExpected: "aborted",
-        });
-        assert.equal(readFileSync(join(f.out, "stop-request"), "utf8"), `stop --run-id ${f.env.RUN} planning\n`);
-        assert.deepEqual(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")), []);
-        assert.throws(() => readFileSync(join(f.root, "github.log")), { code: "ENOENT" });
-      } else {
-        successful(f.run("materialize", { APPROVED: "all" }));
-        assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 1);
-        assert.throws(() => readFileSync(join(f.out, "cancellation.json")), { code: "ENOENT" });
-        for (const APPROVED of ["", "${steps.approve.outputs.APPROVED}"]) {
-          const missing = f.run("approve_cancellation", { CANCEL, APPROVED });
-          assert.equal(missing.status, 1);
-          assert.match(missing.stderr, /Normal completion requires APPROVED/);
-        }
-      }
-    } finally { f.close(); }
-  }
+test("planning CANCEL=no preserves approved publication and requires APPROVED", () => {
+  const f = fixture();
+  try {
+    accepted(f);
+    successful(f.run("approve_cancellation", { CANCEL: "no", APPROVED: "all" }));
+    successful(f.run("materialize", { APPROVED: "all" }));
+    assert.equal(JSON.parse(readFileSync(join(f.root, "issues.json"), "utf8")).length, 1);
+    assert.throws(() => readFileSync(join(f.out, "cancellation.json")), { code: "ENOENT" });
+    for (const APPROVED of ["", "${steps.approve.outputs.APPROVED}"]) {
+      const missing = f.run("approve_cancellation", { CANCEL: "no", APPROVED });
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr, /Normal completion requires APPROVED/);
+    }
+  } finally { f.close(); }
 });
 
 test("import consumes only an explicit absolute upstream JSONL snapshot and reimports corrected units", () => {
@@ -455,12 +440,15 @@ test("native planning push-back and cancellation preserve guarded materializatio
   const httpPort = await port(), schedulerPort = await port();
   Object.assign(f.env, { DAGU_HOME: home, DAGU_CONFIG: join(home, "config.yaml"), DAGU_PORT: String(httpPort), DAGU_COORDINATOR_ENABLED: "false" });
   Object.assign(f.env, stationEnvironment(f.env));
+  execFileSync("git", ["init", "-q", f.env.PRIMARY!]);
+  const tuple = compiledArtifact(home), cached = await inspectArtifact(home, tuple);
+  Object.assign(f.env, { A4S_BIN: cached.executable, A4S_ARTIFACT: artifactToken(tuple) });
   writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${httpPort}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: ${schedulerPort}\n`);
   jsonl(f.upstream, [{ ...unit("consumer"), relationships: [{ kind: "blocked_by", target: { unit: "contract" } }] }, unit("contract")]);
   const native = structuredClone(definition);
   native.labels = ["workspace=planning-regression"];
   delete native.queue;
-  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "HOME", "TMPDIR", "PATH", "A4S_SERVICE_ENV", "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "PRIMARY", "COORDINATING_SESSION"].includes(key))
+  native.env = Object.entries(f.env).filter(([key]) => ["A4S_BIN", "A4S_ARTIFACT", "HOME", "TMPDIR", "PATH", "A4S_SERVICE_ENV", "DAGU_URL", "DAGU_HOME", "DAGU_PORT", "PRIMARY", "COORDINATING_SESSION"].includes(key))
     .map(([key, value]) => ({ [key]: value }));
   native.env.push({ RUN: "${context.run.id}" }, { FEEDBACK: "" });
   native.steps.find((step: { id: string }) => step.id === "init").run =
@@ -536,7 +524,7 @@ test("native planning push-back and cancellation preserve guarded materializatio
     assert.equal(readFileSync(join(f.out, "validated-units.jsonl"), "utf8"), readFileSync(f.upstream, "utf8"));
     const cutoff = reviewNode(current).startedAt;
     transcript(f, undefined, { timestamp: cutoff, refresh: { timestamp: new Date().toISOString() } });
-    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "review", "--input", "REVIEW=PlanReviewTest");
+    dagu("human-task", "complete", "planning", "--run-id", f.env.RUN!, "--step", "review", "--input", "CANCEL=no", "--input", "REVIEW=PlanReviewTest");
     const verifying = await state("check_review", "running");
     mechanical(verifying, "check_review", 1);
     assert.notEqual(f.run("check_review", { REVIEW: "PlanReviewTest" }).status, 0, "current marker cannot admit a transcript at the current cutoff");
@@ -573,7 +561,7 @@ test("native planning push-back and cancellation preserve guarded materializatio
       rmSync(join(f.out, "cancellation.json"), { force: true });
       dagu("enqueue", "--run-id", f.env.RUN, path, "--", `UNITS_FROM=${missingInput ? join(f.root, "missing-units.jsonl") : f.upstream}`, "SOURCE=refine", `OMP_SESSION_ID=${f.env.OMP_SESSION_ID}`);
       await state("review", "waiting");
-      dagu("human-task", "complete", "planning", "--run-id", f.env.RUN, "--step", "review", "--input", "REVIEW=UnknownReviewer");
+      dagu("human-task", "complete", "planning", "--run-id", f.env.RUN, "--step", "review", "--input", "CANCEL=no", "--input", "REVIEW=UnknownReviewer");
       await state("approve", "waiting");
       assert.equal(existsSync(join(f.out, "review-accepted")), false, "rejected handoff cannot authorize publication");
       dagu("human-task", "complete", "planning", "--run-id", f.env.RUN, "--step", "approve", "--input", "CANCEL=yes", ...(approved ? ["--input", "APPROVED=all"] : []));
@@ -591,9 +579,9 @@ test("native planning push-back and cancellation preserve guarded materializatio
       assert.equal(cancelled.nodes.find(node => node.step.id === "approve_cancellation")?.statusLabel, "aborted");
       assert.equal(cancelled.nodes.find(node => node.step.id === "materialize")?.statusLabel, "not_started");
       assert.equal(readFileSync(join(f.root, "github.log"), "utf8"), published, "cancellation performs no GitHub writes");
-      assert.deepEqual(JSON.parse(readFileSync(join(f.out, "cancellation.json"), "utf8")), {
-        run: f.env.RUN, checkpoint: "approve", outcome: "cancelled", nativeExpected: "aborted",
-      });
+      const cancellation = JSON.parse(readFileSync(join(f.out, "cancellation.json"), "utf8"));
+      assert.equal(cancellation.schemaVersion, 1); assert.equal(cancellation.run, f.env.RUN);
+      assert.equal(cancellation.checkpoint, "approve"); assert.equal(cancellation.outcome, "cancelled"); assert.equal(cancellation.nativeExpected, "aborted");
       t.diagnostic(JSON.stringify({ version: liveDaguVersion, run: f.env.RUN, CANCEL: "yes", APPROVED: approved ? "all" : "omitted", missingInput, native: cancelled.statusLabel, materialize: "not_started", githubWrites: 0 }));
     }
   } finally {

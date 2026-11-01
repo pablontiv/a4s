@@ -11,6 +11,7 @@ import { Transitions, type CiDiagnostic, type RunDetails } from "../src/status/p
 import { observeRequiredCheckPolicy, requiredCheckBinding } from "../src/required-check-policy.ts";
 import { observeRequiredChecks, type CheckResult } from "../src/required-check-results.ts";
 import { readCiDiagnostic, readEscalationDiagnostic } from "../src/status/repository.ts";
+import { saveCancellation, type Cancellation } from "../src/cancellation.ts";
 
 const root = mkdtempSync(join(tmpdir(), "a4s-reconcile-unit-"));
 const primary = join(root, "primary");
@@ -42,7 +43,7 @@ function waiting(run = "ci226", steps = ["await_ci", "await_merge"], iteration =
 function inspectFixture(status = "Waiting - fixture\n├─await_ci [waiting]\n│ └─push-back iteration: 3\n", repo = "example/repo") {
   const calls: { command: string; args: string[]; timeout: number | undefined }[] = [];
   const dependencies: ReconcileRunDependencies = {
-    env, executingRunArtifact: () => true, now: () => 1000,
+    env, executingRunArtifact: () => true, now: () => 1000, runArtifactState: () => statePath(row.RUN),
     spawnSync(command, args, options) {
       calls.push({ command, args, timeout: options.timeout });
       if (command === "git") return { status: 0, stdout: "git@github.com:example/repo.git\n" };
@@ -53,6 +54,21 @@ function inspectFixture(status = "Waiting - fixture\n├─await_ci [waiting]\n�
   };
   return { dependencies, calls, inspect: (changes: Record<string, string> = {}) => inspectRun({ ...row, ...changes }, dependencies) };
 }
+
+test("cancelled native absence and durable dequeue intent never restart or count as missing-run failures", () => {
+  const state = statePath(row.RUN);
+  try {
+    for (const outcome of ["cancelled", "pending"] as const) {
+      const cancellation: Cancellation = { schemaVersion: 1, run: row.RUN, dag: "feature", checkpoint: "queue", iteration: 0, requester: "operator", requestedAt: "2026-11-01T00:00:00Z", outcome, nativeExpected: "not_found", ...(outcome === "cancelled" ? { nativeObserved: "not_found" } : {}), unexecutedEffects: ["push"], retained: [{ location: "retained-candidate", owner: row.RUN, kind: "candidate" }] };
+      saveCancellation(state, cancellation);
+      const f = inspectFixture(), item = f.inspect();
+      assert.equal(item.action, "NONE"); assert.equal(item.calls, 0); assert.equal(item.worktree, "retained-candidate");
+      assert.equal(item.class, outcome === "cancelled" ? "CANCELLED" : "CANCELLATION_PENDING");
+      assert.deepEqual(f.calls, []);
+      finishRun(item, null, { ...f.dependencies, recordNoProgress: () => { throw new Error("Cancellation must not consume the CI failure budget"); }, error: () => {} });
+    }
+  } finally { rmSync(join(state, "cancellation.json"), { force: true }); }
+});
 
 // The corresponding YAML/compiled/Dagu boundary assertions live in test/live/reconcile-ci.test.ts.
 test("waiting checkpoints parse both tree connectors in-process", () => {

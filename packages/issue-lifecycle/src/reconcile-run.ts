@@ -6,6 +6,7 @@ import { packageRoot } from "./executable.ts";
 import { executingRunArtifact, runArtifactState } from "./run-artifact.ts";
 import { writeAtomicJson } from "./atomic-json.ts";
 import { recordNoProgress } from "./ci-no-progress.ts";
+import { readCancellation } from "./cancellation.ts";
 
 export interface Routed {
   run: string; issue: string; primary: string; branch: string; pr: string; repo: string; step: string; iteration: number;
@@ -44,6 +45,11 @@ export function inspectRun(row: Record<string, string>, dependencies: ReconcileR
     return result.status === 0 ? result.stdout.trimEnd() : "";
   }
   const primary = env.PRIMARY!, run = env.RUN!;
+  const cancellation = readCancellation((dependencies.runArtifactState ?? runArtifactState)());
+  if (cancellation?.outcome === "cancelled" || cancellation?.nativeExpected === "not_found") return { run, issue: row.ISSUE || "", primary, branch: row.BRANCH || "", pr: row.PR_NUMBER || "", repo: row.REPO || "",
+    step: cancellation.checkpoint, iteration: cancellation.iteration, class: cancellation.outcome === "cancelled" ? "CANCELLED" : "CANCELLATION_PENDING", action: "NONE", observation: `${cancellation.outcome}/${cancellation.nativeObserved || `expected:${cancellation.nativeExpected}`}`,
+    cause: `Retained: ${cancellation.retained.map(item => item.location).join(", ")}`, route: "root", worktree: cancellation.retained.find(item => item.kind === "candidate")?.location || "",
+    calls: 0, skipped: 1, started, deadline: 0 };
   let repo = row.REPO || "";
   const skipped = Number(Boolean(repo));
   if (!repo) {
@@ -74,7 +80,7 @@ export function finishRun(item: Routed, issue: { state: string; closed_at?: stri
   mkdirSync(state, { recursive: true });
   writeAtomicJson(join(state, "ci-observation.json"), { repo: item.repo, run: item.run, pr: "", worktree: item.worktree,
     step: item.step, iteration: item.iteration, sha: "", class: item.class, action: item.action, check: "", log: "", cause: item.cause, retry_run: "", findings: [] });
-  (dependencies.recordNoProgress ?? recordNoProgress)(state, env.CI_OBSERVATION_ID!, env.ESCALATION_CI_BLOCKED || "2");
+  if (!["CANCELLED", "CANCELLATION_PENDING"].includes(item.class)) (dependencies.recordNoProgress ?? recordNoProgress)(state, env.CI_OBSERVATION_ID!, env.ESCALATION_CI_BLOCKED || "2");
   const error = dependencies.error ?? console.error;
   error(`reconcile-metric ${JSON.stringify({ phase: "observe", run: item.run, class: item.class, action: item.action, calls: item.calls,
     skippedRepoLookup: item.skipped === 1, latencyMs: (dependencies.now ?? Date.now)() - item.started, deadline: item.deadline === 1,

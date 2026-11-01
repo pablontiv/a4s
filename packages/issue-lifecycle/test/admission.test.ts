@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
 import { runA4s } from "./fixtures/compiled-cli.ts";
@@ -121,6 +122,15 @@ test("hard cutover rejects missing tuples, declarations, and unsupported contrac
     assert.throws(() => assertArtifactReceipt(futureBoundary, "fixture"), /dispatch boundary: required a4s-run\/1.*a4s-run\/2/);
     const config = clone(); delete config.initial.deployment.config.digest;
     assert.throws(() => assertArtifactReceipt(config, "fixture"), /config/);
+    const bootstrap = clone();
+    bootstrap.runReceipt.dag = "dagu-feature-bootstrap";
+    const bootstrapDeployment = { bootstrap: { snapshotDigest: createHash("sha256").update(bootstrap.initial.execution.dagSnapshot).digest("hex") } };
+    bootstrap.initial.deployment = bootstrapDeployment;
+    assertArtifactReceipt(bootstrap, "bootstrap");
+    const changedBootstrap = clone(); changedBootstrap.runReceipt.dag = "dagu-feature-bootstrap"; changedBootstrap.initial.deployment = bootstrapDeployment; changedBootstrap.initial.execution.dagSnapshot += "\n# changed";
+    assert.throws(() => assertArtifactReceipt(changedBootstrap, "bootstrap"), /config/);
+    const wrongDag = clone(); wrongDag.initial.deployment = bootstrapDeployment;
+    assert.throws(() => assertArtifactReceipt(wrongDag, "bootstrap"), /config/);
   } finally { fixture.dispose(); }
 });
 test("fresh receipt station values cannot be reinterpreted and validation does not rewrite old receipts", () => {

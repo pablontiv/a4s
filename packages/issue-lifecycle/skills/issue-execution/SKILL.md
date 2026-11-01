@@ -516,7 +516,7 @@ check plus tests. `REQUIRED_CHECK` is the aggregate CI job:
 ```sh
 dagu status --run-id "bootstrap-<repo>-<id>" dagu-feature-bootstrap
 dagu human-task complete --run-id "bootstrap-<repo>-<id>" --step config \
-  --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
+  --input CANCEL=no --input GATE='<current gate>' --input REQUIRED_CHECK='<current check>' \
   --input TEST_PATHS='<current Bash ERE>' --input REBASE_RESOLVER='<current command or empty>' \
   --input VALIDATION='' dagu-feature-bootstrap
 ```
@@ -1952,13 +1952,45 @@ and removes the managed worktree and branches.
 
 Closed `triage` or `implement` issues are reported by the root `classify` step as `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>`. The run is left unchanged. A `reconcile-run` child still has an `orphan` step for an observation that matches that same pattern. Inspect the scheduled `reconcile` history for root classifications and orphan reports, and its sub-run logs for protected-checkpoint transitions and diagnosed waits.
 
-## Cancel a waiting checkpoint
+## Cancel a lifecycle run
 
-Cancellation-capable feature, PoC and discovery snapshots declare `CANCEL`
-(`yes|no`) on every lifecycle human task and route each through an immediate
-`<step>_cancellation` gate. Verify those declarations and routes in the actual
-snapshot. The authorized coordinator/operator selects the actual waiting step,
-retaining its run ID and ownership:
+The authorized operator or coordinator uses one receipt-bound command from the
+consumer repository (or one of its linked worktrees):
+
+```sh
+a4s cancel --run '<run>'
+```
+
+The receipt selects the exact executable artifact, repository and station. The
+command observes native state and the immutable snapshot before choosing:
+
+- **Never-started queued:** capture run/receipt/snapshot identity and cleanup
+  inputs, then `dagu dequeue <queue> --dag-run <dag>:<run>`. Verify queue/active
+  absence and native `not_found`. This is domain **cancelled/native not_found**:
+  dequeue removes native history, not a native terminal state. Native onExit
+  does not run, so the command invokes the same maintained cancellation
+  finalizer itself. A durable intent permits safe retry after interruption.
+- **Waiting:** complete the snapshot-declared current wait with only
+  `CANCEL=yes`. Feature, PoC, discovery, planning (`review` and `approve`) and
+  bootstrap (`config`) maintain immediate `<step>_cancellation` gates.
+  Historical snapshots lacking both interface and routing are rejected without
+  mutation. Native completion acknowledges only queued resume; the command then
+  observes the terminal gate and native onExit before finalizing the record.
+- **Running:** write a durable **pending** cancellation request only. Do not
+  stop, signal or mutate the native run. Safe-point execution is issue #886.
+
+Canonical `cancellation.json` lives in
+`<git-dir>/dagu-feature/runs/<run>`, outside editable candidate work. It binds
+run, DAG, checkpoint, approval iteration, requester, expected/observed native
+outcome, unexecuted effects, retained ownership/locations and verified cleanup.
+The immutable receipt is retained for audit and idempotent dispatch; its active
+admission is released. Application dispatch and reconciliation reject re-admission
+of cancelled runs even though native Dagu still permits direct reuse of old IDs.
+Cancellation neither approves anything nor transfers ownership. Future effects
+are withdrawn; effects already published remain historical.
+
+The lower-level native commands below are useful for inspecting a declared
+waiting route; prefer the receipt-bound command for supported cancellation.
 
 New feature snapshots dispatch `triage` and `implement` as
 native role-job command stages, rather than waiting human tasks. This form
@@ -1975,7 +2007,8 @@ dagu human-task complete feature --run-id '<run>' --step '<waiting-step>' --inpu
 
 Cancellation needs only `CANCEL=yes`; SUMMARY, MESSAGE, IMPLEMENTER,
 REVIEW, approval and promotion fields are unnecessary. Normal completions retain
-their existing fields; CANCEL may be omitted or set to `no`. Dagu supports
+their existing fields; supply `CANCEL=no` where the form requires it (other forms
+allow omission). Dagu supports
 static forms, so supplied values retain their native type/enum/pattern/length
 validation and the cancellation gate enforces normal required fields before
 any successor. Missing normal fields fail that gate with `Normal completion
@@ -2013,8 +2046,11 @@ human task waits. Both routes execute `onExit`. The record's domain
 `outcome=cancelled` and `nativeExpected` explain the deliberate terminal state;
 there is no native status named cancelled. Every downstream effecting/recovery/
 promotion step remains unexecuted.
-The native terminal notification and ordinary terminal filtering remove the
-run from active widget/reconciler work.
+The widget, terminal notices and reconciler show the domain/native pair and
+retained recovery locations. Cancelled runs leave active work, including queued
+runs whose native detail now returns expected HTTP 404 `not_found`. Node labels
+are not rewritten: a sibling may still be Waiting and a successor Not Started
+inside a terminal Aborted run.
 
 Confirm native terminal state and the actual `onExit` result with `dagu status`;
 inspect the gate and exit logs, `cancellation.json`, cleanup diagnostics, retained
@@ -2025,13 +2061,15 @@ evidence under its snapshot output directory. PoC failure publication recognizes
 the cancellation record and exits without publishing a verdict or promoting.
 Cancellation withdraws future effects; already published effects stay historical.
 
-Exit cleanup retains ownership, candidate and audit evidence. Feature cleanup
-removes only registered, clean, integrated resources; an unpublished candidate
-or uncertain integration keeps its branch/worktree and durable recovery diagnostic.
-Preserve those resources, staged/unstaged/untracked files and candidate records
-for an authorized continuation/handoff. PoC cancellation retains unpublished
-commits and dirty work; a clean base-only worktree/branch is disposable. Discovery
-removes only its verified clean detached snapshot, retaining findings and evidence.
+The shared cancellation exit finalizer releases only the matching admission and
+retains candidate ownership, unpublished commits, staged/unstaged/untracked work
+and audit evidence. It never fetches, changes primary files/index/branch/HEAD,
+changes remote refs, or mutates PRs. All candidate worktrees are conservatively
+retained, even if clean: cleanliness does not establish publication or authorize
+discarding commits. Discovery removes only its owned, detached snapshot with
+unchanged recorded HEAD and clean contents; changed snapshots remain recoverable.
+Every removal is verified and recorded. Preserve retained locations for an
+authorized continuation or handoff; cancellation itself grants neither.
 
 Stored snapshots are immutable: normal bootstrap adoption enables this procedure
 for newly enqueued snapshots only. Inspect the original snapshot for its CANCEL

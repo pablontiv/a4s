@@ -13,11 +13,13 @@ import { WORKFLOWS_COMMAND } from "../registration.ts";
 import type { StallNotice } from "../long-computation.ts";
 import { runParam } from "../run-primary.ts";
 import { stationRoot, validateState } from "../../../launcher/src/station-state.ts";
+import type { Cancellation } from "../cancellation.ts";
 
 export interface RunDetails {
   name: string;
   dagRunId: string;
   statusLabel: string;
+  cancellation?: Cancellation;
   labels?: string[];
   startedAt?: string;
   params?: string;
@@ -36,7 +38,7 @@ export interface RunNode {
 }
 
 export const isActive = (run: RunDetails): boolean =>
-  ["running", "queued", "waiting"].includes(run.statusLabel);
+  run.cancellation?.outcome !== "cancelled" && ["running", "queued", "waiting"].includes(run.statusLabel);
 
 export const topicFor = (run: RunDetails): string => `dagrun:${run.name}/${run.dagRunId}`;
 
@@ -169,7 +171,10 @@ export function renderRun(run: RunDetails, slug?: string, activity?: string): st
   const bar = "▰".repeat(filled) + "▱".repeat(6 - filled);
   const step = currentStep(run);
   const type = plain(workflowTypes[run.name] ?? run.name);
-  const status = `${type} ${identity(run, slug)} ${bar} ${done}/${total}${step ? ` ${plain(step)}` : ""} ${plain(run.statusLabel)}`;
+  const domain = run.cancellation?.outcome;
+  const outcome = domain === "cancelled" ? `cancelled/${run.statusLabel}` : domain === "pending" ? `${run.statusLabel} cancellation pending` : run.statusLabel;
+  const retained = run.cancellation?.retained.map(item => plain(item.location)).join(", ");
+  const status = `${type} ${identity(run, slug)} ${bar} ${done}/${total}${step ? ` ${plain(step)}` : ""} ${plain(outcome)}${retained ? ` retained=${retained}` : ""}`;
   const compatibility = run.artifactError ? `${status} [unsupported: ${plain(run.artifactError)}]` : status;
   return activity ? `${compatibility} · ${plain(activity)}` : compatibility;
 }
@@ -199,10 +204,10 @@ const title = (theme: WidgetTheme): string => theme.bold(theme.fg("accent", "Wor
 const treeRows = (lines: string[], theme: WidgetTheme): string[] => lines.map((line, index) =>
   ` ${theme.fg("dim", index === lines.length - 1 ? theme.tree.last : theme.tree.branch)} ${line}`);
 
-// Runs closest to finishing come first; equal completion keeps discovery order.
+// Active work precedes retained cancellations; equal completion keeps discovery order.
 export function renderWidget(entries: WidgetRun[], theme: WidgetTheme, expanded = false): string[] | undefined {
   if (!entries.length) return undefined;
-  const sorted = [...entries].sort((a, b) => completion(b.run) - completion(a.run));
+  const sorted = [...entries].sort((a, b) => Number(a.run.cancellation?.outcome === "cancelled") - Number(b.run.cancellation?.outcome === "cancelled") || completion(b.run) - completion(a.run));
   const shown = sorted.slice(0, expanded ? EXPANDED_ROWS : COLLAPSED_ROWS);
   const hidden = sorted.length - shown.length;
   const more = hidden ? `… ${hidden} more` : "…";
@@ -271,13 +276,15 @@ export class Transitions {
   } = {}): TransitionEffects {
     const key = topicFor(run);
     const previous = this.states.get(key);
+    const cancelled = run.cancellation?.outcome === "cancelled";
+    const effectiveStatus = cancelled ? `cancelled/${run.statusLabel}` : run.statusLabel;
     const terminalNode = run.nodes?.find(node => node.statusLabel === run.statusLabel);
     const terminalStep = terminalNode?.step.name;
-    this.states.set(key, { status: run.statusLabel, step: currentStep(run) });
+    this.states.set(key, { status: effectiveStatus, step: currentStep(run) });
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
     const owned = this.sessionId !== undefined && runParam(run, "OMP_SESSION_ID") === this.sessionId;
-    const supported = ["feature", "poc", "discovery", "planning"].includes(run.name);
+    const supported = ["feature", "poc", "discovery", "planning", "dagu-feature-bootstrap"].includes(run.name);
     const bundle = runBundleState(run, this.extensionVersion, this.extensionCommit);
     const identity = issue ? ` issue=${issue}` : ` dag=${plain(run.name)}`;
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} main=${plain(bundle.mainVersion)} compat=${bundle.compat} installed=${plain(bundle.installedVersion)}`;
@@ -312,7 +319,7 @@ export class Transitions {
           + " options=continue with a renewed budget; change scope or delivery route; stop. Reconciler retains transition ownership.");
       }
       for (const node of run.nodes ?? []) {
-        if (!["waiting", "running"].includes(run.statusLabel) || !node.step.humanTask || node.statusLabel !== "waiting") continue;
+        if (cancelled || !["waiting", "running"].includes(run.statusLabel) || !node.step.humanTask || node.statusLabel !== "waiting") continue;
         const step = node.step.id ?? node.step.name;
         const iteration = node.approvalIteration ?? 0;
         const ci = options.ciDiagnostic;
@@ -343,17 +350,17 @@ export class Transitions {
         notice(JSON.stringify(noticeKey),
           `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${plain(step)}${identity}${bundleNotice} iteration=${iteration}${cause}${validationNotice}`);
       }
-      if (["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
+      if (cancelled || ["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
         const step = terminalStep ?? previous?.step;
         const cause = run.statusLabel === "failed" ? failureCause(terminalNode) : undefined;
-        notice(JSON.stringify([key, run.statusLabel]),
-          `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel}${run.statusLabel !== "succeeded" && step ? ` step=${plain(step)}` : ""}${identity}${bundleNotice}${cause ? ` cause=${plain(cause)}` : ""}`);
+        notice(JSON.stringify([key, effectiveStatus]),
+          `[DAGU STATE] run=${plain(run.dagRunId)} status=${plain(effectiveStatus)}${run.statusLabel !== "succeeded" && step ? ` step=${plain(step)}` : ""}${identity}${bundleNotice}${cause ? ` cause=${plain(cause)}` : ""}${cancelled ? ` retained=${run.cancellation!.retained.map(item => plain(item.location)).join(",")}` : ""}`);
       }
     }
-    if (previous && previous.status !== run.statusLabel
-      && ["succeeded", "failed", "aborted"].includes(run.statusLabel)) {
+    if (previous && previous.status !== effectiveStatus
+      && (cancelled || ["succeeded", "failed", "aborted"].includes(run.statusLabel))) {
       effects.notification = {
-        message: `dagu · ${runLabel(run, options.slug)} ${run.statusLabel}`,
+        message: `dagu · ${runLabel(run, options.slug)} ${effectiveStatus}${cancelled ? ` retained=${run.cancellation!.retained.map(item => plain(item.location)).join(",")}` : ""}`,
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
     }

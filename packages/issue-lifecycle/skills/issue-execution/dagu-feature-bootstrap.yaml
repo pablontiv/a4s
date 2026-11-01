@@ -23,6 +23,7 @@ steps:
       DAGU_HOME=$(jq -er '.DAGU_HOME' <<<"$service_environment")
       PATH=$(jq -er '.PATH' <<<"$service_environment")
       export DAGU_URL DAGU_HOME PATH
+      "$A4S_BIN" bootstrap-receipt
       for tool in git gh jq curl dagu "$A4S_BIN"; do
         command -v "$tool" >/dev/null || { printf 'bootstrap detect: required command not found: %s\n' "$tool" >&2; exit 1; }
       done
@@ -174,6 +175,7 @@ steps:
         type: object
         additionalProperties: false
         properties:
+          CANCEL: {type: string, enum: [yes, no]}
           GATE:
             type: string
             minLength: 1
@@ -209,10 +211,32 @@ steps:
           ESCALATION_SECONDS: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_CI_BLOCKED: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
           ESCALATION_POC_INCONCLUSIVE: {type: string, pattern: '^$|^[1-9][0-9]*$', default: ""}
-        required: [GATE, REQUIRED_CHECK, TEST_PATHS, REBASE_RESOLVER]
+        required: [CANCEL]
+
+  - id: config_cancellation
+    depends: config
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.config.outputs.CANCEL}
+      - RUN: ${DAG_RUN_ID}
+      - GATE: ${steps.config.outputs.GATE}
+      - REQUIRED_CHECK: ${steps.config.outputs.REQUIRED_CHECK}
+      - TEST_PATHS: ${steps.config.outputs.TEST_PATHS}
+    run: |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        "$A4S_BIN" cancellation record dagu-feature-bootstrap config aborted
+        dagu stop --run-id "$DAG_RUN_ID" dagu-feature-bootstrap
+        sleep 30
+        exit 77
+      fi
+      for field in GATE REQUIRED_CHECK TEST_PATHS; do
+        value=${!field}
+        [[ -n "$value" && "$value" != '${steps.'* ]] || { printf 'Normal config completion requires %s\n' "$field" >&2; exit 1; }
+      done
 
   - id: worktrees
-    depends: config
+    depends: config_cancellation
     run: |
       set -euo pipefail
       if ! git -C "$PRIMARY" check-ignore -q "$PRIMARY/.workspace/worktrees/issue-1"; then
@@ -363,3 +387,6 @@ steps:
       printf 'config=%s\n' "$STAGE"
       printf 'scheduler=ok\nrepo=%s\nbase_branch=%s\nrequired_check=%s\nstage=%s\n' \
         "$NWO" "$BASE_BRANCH" "$REQUIRED_CHECK" "$STAGE"
+handler_on:
+  exit:
+    run: '"$A4S_BIN" cancellation finalize'

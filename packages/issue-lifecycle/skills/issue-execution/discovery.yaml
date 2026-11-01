@@ -51,6 +51,8 @@ steps:
       git -C "$PRIMARY" fetch origin "$BASE_BRANCH"
       SHA=$(git -C "$PRIMARY" rev-parse "origin/$BASE_BRANCH^{commit}")
       git -C "$PRIMARY" worktree add --detach "$SNAPSHOT" "$SHA"
+      jq -n --arg run "$RUN" --arg primary "$PRIMARY" --arg snapshot "$SNAPSHOT" --arg sha "$SHA" \
+        '{run:$run,primary:$primary,snapshot:$snapshot,sha:$sha}' > "$OUT_DIR/snapshot-resource.json"
       chmod -R a-w "$SNAPSHOT"
       IFS=',' read -r -a lenses <<<"$LENSES"
       for lens in "${lenses[@]}"; do
@@ -106,8 +108,7 @@ steps:
     run: &cancellation_gate |
       set -euo pipefail
       if [[ "$CANCEL" == yes ]]; then
-        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" \
-          '{run:$run,checkpoint:$checkpoint,outcome:"cancelled",nativeExpected:"failed"}' > "$OUT_DIR/cancellation.json"
+        "$A4S_BIN" cancellation record discovery "$CHECKPOINT" failed
         printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$OUT_DIR"
         exit 77
       fi
@@ -367,13 +368,4 @@ handler_on:
       - SNAPSHOT: ${steps.snapshot.outputs.SNAPSHOT}
     run: |
       set -euo pipefail
-      # Cancellation disposes its immutable snapshot while preserving findings and audit evidence.
-      if [[ -f "$OUT_DIR/cancellation.json" && "$SNAPSHOT" == "$OUT_DIR/snapshot" && -d "$SNAPSHOT" ]]; then
-        [[ "$(git -C "$SNAPSHOT" rev-parse --show-toplevel)" == "$SNAPSHOT" &&
-           "$(git -C "$SNAPSHOT" rev-parse --path-format=absolute --git-common-dir)" == "$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-common-dir)" &&
-           -z "$(git -C "$SNAPSHOT" status --porcelain --untracked-files=all)" &&
-           -z "$(git -C "$SNAPSHOT" branch --show-current)" ]]
-        chmod -R u+w "$SNAPSHOT"
-        git -C "$PRIMARY" worktree remove "$SNAPSHOT"
-        printf 'cleanup snapshot=%s evidence=%s\n' "$SNAPSHOT" "$OUT_DIR"
-      fi
+      "$A4S_BIN" cancellation finalize

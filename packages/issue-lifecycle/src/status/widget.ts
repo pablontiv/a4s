@@ -97,10 +97,17 @@ function elapsed(startedAt: string | undefined, now: number): string {
 
 function describe(presentation: Presentation): NativeNode {
   const { entries, expanded, retrySeconds, slow, now } = presentation;
-  const active = entries.filter(({ run }) => isActive(run));
-  const running = active.filter(({ run }) => run.statusLabel === "running").length;
-  const waiting = active.filter(({ run }) => run.statusLabel === "waiting").length;
-  const queued = active.length - running - waiting;
+  const visible: WidgetRun[] = [];
+  let running = 0, waiting = 0, queued = 0;
+  for (const entry of entries) {
+    if (isActive(entry.run)) {
+      if (entry.run.statusLabel === "running") running++;
+      else if (entry.run.statusLabel === "waiting") waiting++;
+      else queued++;
+      visible.push(entry);
+    } else if (entry.run.cancellation?.outcome === "cancelled") visible.push(entry);
+  }
+  const activeCount = running + waiting + queued;
   const offline = retrySeconds !== undefined && !slow;
   const state = [running && `${running} running`, waiting && `${waiting} waiting`, queued && `${queued} queued`]
     .filter(Boolean).join(" · ");
@@ -109,17 +116,17 @@ function describe(presentation: Presentation): NativeNode {
   const tone = offline ? "error" : retry || waiting ? "warning" : "accent";
   return node("card", {
     role: "a4s.widget.workflows", collapsible: true, collapsed: !expanded, preview: { lines: 3 },
-    status: offline ? "error" : slow || waiting ? "pending" : running ? "running" : "pending", tone,
+    ...(activeCount || offline || slow ? { status: offline ? "error" : slow || waiting ? "pending" : running ? "running" : "pending" } : {}), tone,
     head: [{ t: "\uf126", s: "icon accent" }, { t: "Workflows", s: "strong" },
-      { t: ` · ${active.length} active`, s: "num" },
-      { t: offline ? "\uf12a" : running ? "\uf110" : "\uf04c", s: `icon ${tone}` },
+      { t: ` · ${activeCount} active`, s: "num" },
+      { t: offline ? "\uf12a" : running ? "\uf110" : activeCount ? "\uf04c" : "\uf05e", s: `icon ${tone}` },
       { t: retry ?? state, s: tone }],
     ...(retry ? { title: retry } : {}),
-  }, [node("col", { gap: "xs" }, active.map(({ run, slug, activity }) => node("row", {
+  }, [node("col", { gap: "xs" }, visible.map(({ run, slug, activity }) => node("row", {
     role: "a4s.widget.workflows.run", gap: "sm", align: "center",
   }, [run.statusLabel === "running"
     ? node("spinner", { style: "dots", label: "running" }, undefined, "state")
-    : node("icon", { name: run.statusLabel === "waiting" ? "pause" : "clock", tone: "warning", aria: run.statusLabel }, undefined, "state"),
+    : node("icon", { name: run.statusLabel === "waiting" || run.cancellation?.outcome === "cancelled" ? "pause" : "clock", tone: run.cancellation?.outcome === "cancelled" ? "muted" : "warning", aria: run.cancellation?.outcome === "cancelled" ? "cancelled" : run.statusLabel }, undefined, "state"),
   node("text", { text: stripVTControlCharacters(renderRun(run, slug, activity)), wrap: "none", truncate: "end", grow: 1 }, undefined, "text"),
   node("text", { text: elapsed(run.startedAt, now), tone: "muted" }, undefined, "elapsed"),
   ], topicFor(run))), "runs")]);

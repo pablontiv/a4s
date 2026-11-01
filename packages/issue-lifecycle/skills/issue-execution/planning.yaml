@@ -131,10 +131,11 @@ steps:
         type: object
         additionalProperties: false
         properties:
+          CANCEL: {type: string, enum: [yes, no]}
           REVIEW:
             type: string
             minLength: 1
-        required: [REVIEW]
+        required: [CANCEL]
       push_back:
         rewind_to: import_units
         form:
@@ -144,8 +145,25 @@ steps:
             FEEDBACK:
               type: string
 
-  - id: check_review
+  - id: review_cancellation
     depends: review
+    signal_on_stop: SIGINT
+    env:
+      - CANCEL: ${steps.review.outputs.CANCEL}
+      - REVIEW: ${steps.review.outputs.REVIEW}
+      - OUT_DIR: ${steps.init.outputs.OUT_DIR}
+    run: |
+      set -euo pipefail
+      if [[ "$CANCEL" == yes ]]; then
+        "$A4S_BIN" cancellation record planning review aborted
+        dagu stop --run-id "$RUN" planning
+        sleep 30
+        exit 77
+      fi
+      [[ -n "$REVIEW" && "$REVIEW" != '${steps.'* ]]
+
+  - id: check_review
+    depends: review_cancellation
     continue_on:
       failure: true
       mark_success: true
@@ -233,6 +251,7 @@ steps:
 
   - id: approve_cancellation
     depends: approve
+    signal_on_stop: SIGINT
     env:
       - CANCEL: ${steps.approve.outputs.CANCEL}
       - APPROVED: ${steps.approve.outputs.APPROVED}
@@ -240,8 +259,7 @@ steps:
     run: |
       set -euo pipefail
       if [[ "$CANCEL" == yes ]]; then
-        jq -n --arg run "$RUN" \
-          '{run:$run,checkpoint:"approve",outcome:"cancelled",nativeExpected:"aborted"}' > "$OUT_DIR/cancellation.json"
+        "$A4S_BIN" cancellation record planning approve aborted
         printf 'Cancellation requested at approve; terminating before materialize; evidence=%s/cancellation.json\n' "$OUT_DIR"
         # Stop this resumed active gate, not the waiting human task. A failed
         # gate would mark its pending materialize descendant aborted.
@@ -565,3 +583,6 @@ steps:
       project
       test "$(jq length "$OUT_DIR/materialization-diagnostics.json")" -eq 0 || reject remote-state-mismatch "$(jq -c . "$OUT_DIR/materialization-diagnostics.json")"
 
+handler_on:
+  exit:
+    run: '"$A4S_BIN" cancellation finalize'

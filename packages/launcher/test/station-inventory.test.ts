@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test, { type TestContext } from "node:test";
 import { registrationHash } from "../src/contracts.ts";
@@ -92,6 +92,19 @@ test("receiptCreatedAt takes precedence over historical admittedAt", async t => 
   assert.deepEqual((await inventoryStation(f.home, f.dependencies)).references, []);
   f.receipt({ age: FIVE_MINUTES, artifact: f.legacy, receiptCreatedAt: new Date(NOW).toISOString() });
   assert.equal((await inventoryStation(f.home, f.dependencies)).references[0]?.holder, "pending admission planning/abandoned");
+});
+
+test("verified cancellation releases absent admissions and native-retryable readers without deleting receipt history", async t => {
+  const f = await admissionFixture(t), path = f.receipt({ schemaVersion: 2, artifact: f.legacy }), before = readFileSync(path, "utf8");
+  const record = { schemaVersion: 1, run: "abandoned", dag: "planning", checkpoint: "queue", iteration: 0, requester: "operator", requestedAt: new Date(NOW).toISOString(), outcome: "cancelled", nativeExpected: "not_found", nativeObserved: "not_found", unexecutedEffects: [], retained: [{ location: "candidate", owner: "abandoned", kind: "candidate" }] };
+  const cancellationPath = join(dirname(path), "cancellation.json");
+  writeFileSync(cancellationPath, JSON.stringify(record));
+  assert.match((await inventoryStation(f.home, f.dependencies)).references[0]!.holder, /pending admission/);
+  writeFileSync(cancellationPath, JSON.stringify({ ...record, cleanup: { completedAt: new Date(NOW).toISOString(), disposed: [], admissionReleased: true, receiptRetained: true } }));
+  assert.deepEqual((await inventoryStation(f.home, f.dependencies)).references, []);
+  f.runs.push({ name: "planning", dagRunId: "abandoned", primary: f.primary, statusLabel: "failed", retryable: true });
+  assert.deepEqual((await inventoryStation(f.home, f.dependencies)).references, []);
+  assert.equal(readFileSync(path, "utf8"), before);
 });
 
 test("artifact-less modern receipts fail closed while fresh, but not after the pending window", async t => {

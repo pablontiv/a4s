@@ -441,8 +441,7 @@ steps:
         STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
         mkdir -p "$STATE"
         terminal=${NATIVE_TERMINAL:-failed}
-        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" --arg worktree "$WORKTREE" --arg native "$terminal" \
-          '{run:$run,checkpoint:$checkpoint,worktree:$worktree,outcome:"cancelled",nativeExpected:$native}' > "$STATE/cancellation.json"
+        "$A4S_BIN" cancellation record feature "$CHECKPOINT" "$terminal"
         printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
         if [[ "$terminal" == aborted ]]; then
           # A sibling human task may still wait. Stop only this resumed active,
@@ -1814,6 +1813,10 @@ steps:
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || exit 1
       mkdir -p "$STATE"
+      if [[ -f "$STATE/cancellation.json" ]]; then
+        "$A4S_BIN" cancellation finalize
+        exit 0
+      fi
       phase=identify
       diagnostic() {
         cleanup_diagnosed=true

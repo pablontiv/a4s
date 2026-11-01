@@ -133,7 +133,7 @@ export function readTickBindings(home: string): Array<{ path: string; binding: T
     return { path, binding };
   });
 }
-interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number }
+interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number; cancelled: boolean }
 // Covers receipt publication before enqueue becomes visible. Live admission
 // processes also hold leases; absent history alone must not pin builds for days.
 const PENDING_ADMISSION_WINDOW_MS = 5 * 60 * 1000;
@@ -161,7 +161,10 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       if (contracts) for (const name of SHARED_FORMATS) if (contracts[name] !== undefined) add(name, contracts[name]);
       const created = Date.parse(String(value.receiptCreatedAt ?? value.initial.admittedAt));
       if (!Number.isFinite(created)) throw new Error(`Missing receipt creation time ${run}`);
-      receipts.push({ value, primary, dag: value.runReceipt.dag, run, created, ...(value.artifact ? { artifact: tupleFromJson(value.artifact) } : {}) });
+      let cancellation: unknown;
+      try { cancellation = readJsonFile(join(directory, "runs", run, "cancellation.json")); } catch (error) { if (!missing(error)) throw error; }
+      const cancelled = isRecord(cancellation) && cancellation.run === run && cancellation.outcome === "cancelled" && isRecord(cancellation.cleanup) && cancellation.cleanup.admissionReleased === true;
+      receipts.push({ value, primary, dag: value.runReceipt.dag, run, created, cancelled, ...(value.artifact ? { artifact: tupleFromJson(value.artifact) } : {}) });
       // PR checkpoint protocol 1 used unversioned marker files; never rewrite them.
       if (names(join(directory, "runs", run)).some(name => /^(?:pr|checkpoint|publication)(?:[.-]|$)/.test(name))) add("prCheckpoint", 1);
     }
@@ -193,13 +196,14 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       const matching = receipts.filter(receipt => receipt.run === run.dagRunId && receipt.dag === run.name && (!run.primary || receipt.primary === run.primary));
       if (!matching.length && run.primary && primaries.includes(run.primary)) throw new Error(`Nonterminal run has no receipt: ${run.name}/${run.dagRunId}`);
       for (const receipt of matching) {
+        if (receipt.cancelled) continue;
         if (!receipt.artifact) throw new Error(`Unresolved nonterminal artifact ${receipt.run}`);
         references.push({ artifact: receipt.artifact, holder: `run ${run.name}/${run.dagRunId} ${run.statusLabel}` });
       }
     }
     const now = (dependencies.now ?? Date.now)();
     for (const receipt of receipts) {
-      if (!runs.some(run => run.name === receipt.dag && run.dagRunId === receipt.run) && now - receipt.created < PENDING_ADMISSION_WINDOW_MS) {
+      if (!receipt.cancelled && !runs.some(run => run.name === receipt.dag && run.dagRunId === receipt.run) && now - receipt.created < PENDING_ADMISSION_WINDOW_MS) {
         // Pre-launcher receipts cannot name a cache reader. Existing runs and
         // open role jobs still require resolvable artifacts above and below.
         if (receipt.value.schemaVersion === 1 && !receipt.artifact) continue;

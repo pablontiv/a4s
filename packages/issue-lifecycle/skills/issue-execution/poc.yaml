@@ -226,8 +226,7 @@ steps:
       if [[ "$CANCEL" == yes ]]; then
         STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
         mkdir -p "$STATE"
-        jq -n --arg run "$RUN" --arg checkpoint "$CHECKPOINT" --arg worktree "$WORKTREE" \
-          '{run:$run,checkpoint:$checkpoint,worktree:$worktree,outcome:"cancelled",nativeExpected:"failed"}' > "$STATE/cancellation.json"
+        "$A4S_BIN" cancellation record poc "$CHECKPOINT" failed
         printf 'Cancellation requested at %s; terminating before successors; evidence=%s\n' "$CHECKPOINT" "$STATE"
         exit 77
       fi
@@ -662,6 +661,11 @@ handler_on:
     run: |
       set -euo pipefail
       if jq -e 'has("GATE") or has("REBASE_RESOLVER") or has("REQUIRED_CHECK") or has("PRIMARY") or has("A4S_PRIMARY") or has("BRANCH")' <<<"${DAGU_PARAMS_JSON:-"{}"}" >/dev/null; then exit 0; fi
+      CANCELLATION_STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+      if [[ -f "$CANCELLATION_STATE/cancellation.json" ]]; then
+        "$A4S_BIN" cancellation finalize
+        exit 0
+      fi
       eval "$DAGU_RESOURCE_GUARD"
       resource_lock
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]

@@ -9,6 +9,7 @@ import { type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
 import { restoreArtifact } from "../../launcher/src/select.ts";
 import { formatSupport, assertProtocols } from "../../launcher/src/artifact-support.ts";
 import { SHARED_FORMATS } from "../../launcher/src/contracts.ts";
+import { createHash } from "node:crypto";
 
 export interface UsedContracts { dispatch: string; config: number; receipt: number; roleJobStore: number; roleJobPayload?: number; runState?: number; prCheckpoint?: number; protocols: typeof identity.protocols }
 export const USED_CONTRACTS: UsedContracts = { dispatch: identity.dispatch, config: identity.support.config.write, receipt: identity.support.receipt.write, roleJobStore: identity.support.roleJobStore.write, roleJobPayload: identity.support.roleJobPayload.write, runState: identity.support.runState.write, prCheckpoint: identity.support.prCheckpoint.write, protocols: identity.protocols };
@@ -36,7 +37,11 @@ export function assertArtifactReceipt(value: unknown, path: string): asserts val
   if (!isRecord(value.sourceVersion) || value.sourceVersion.version !== artifact.version || value.sourceVersion.commit !== artifact.commit) throw new Error(`Receipt artifact/source identity mismatch: ${path}`);
   const initial = value.initial;
   const config = isRecord(initial) && isRecord(initial.deployment) ? initial.deployment.config : undefined;
-  if (!isRecord(config) || !identity.support.config.read.some(version => version === config.schemaVersion) || typeof config.commit !== "string" || !/^[a-f0-9]{40}$/.test(config.commit) || typeof config.digest !== "string" || !/^[a-f0-9]{64}$/.test(config.digest)) throw new Error(`Receipt lacks committed config identity: ${path}`);
+  const bootstrap = isRecord(initial) && isRecord(initial.deployment) ? initial.deployment.bootstrap : undefined;
+  const bootstrapSnapshot = isRecord(initial) && isRecord(initial.execution) ? initial.execution.dagSnapshot : undefined;
+  const bootstrapBound = isRecord(value.runReceipt) && value.runReceipt.dag === "dagu-feature-bootstrap" && isRecord(bootstrap) &&
+    typeof bootstrapSnapshot === "string" && bootstrap.snapshotDigest === createHash("sha256").update(bootstrapSnapshot).digest("hex");
+  if (!bootstrapBound && (!isRecord(config) || !identity.support.config.read.some(version => version === config.schemaVersion) || typeof config.commit !== "string" || !/^[a-f0-9]{40}$/.test(config.commit) || typeof config.digest !== "string" || !/^[a-f0-9]{64}$/.test(config.digest))) throw new Error(`Receipt lacks committed config identity: ${path}`);
   const station = isRecord(initial) && isRecord(initial.runtimeAndModels) ? initial.runtimeAndModels.station : undefined;
   if (station !== undefined) {
     if (!isRecord(station)) throw new Error(`Receipt station contract is malformed: ${path}`);

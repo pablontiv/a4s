@@ -48,8 +48,8 @@ test("planning approval guards cancellation and normal materialization as separa
   const gate = source.steps.find(step => step.id === "approve_cancellation")!;
   assert.equal(gate.depends, "approve");
   assert.equal(gate.continue_on, undefined, "cancellation failure must stop materialization");
-  assert.match(gate.run!, /if \[\[ "\$CANCEL" == yes \]\]; then[\s\S]*outcome:"cancelled"[\s\S]*exit 77/);
-  assert.match(gate.run!, /nativeExpected:"aborted"[\s\S]*dagu stop --run-id "\$RUN" planning/);
+  assert.match(gate.run!, /if \[\[ "\$CANCEL" == yes \]\]; then[\s\S]*cancellation record planning approve aborted[\s\S]*exit 77/);
+  assert.match(gate.run!, /cancellation record planning approve aborted[\s\S]*dagu stop --run-id "\$RUN" planning/);
   assert.match(gate.run!, /Normal completion requires APPROVED/);
   assert.deepEqual(source.steps.filter(step => step.depends === "approve").map(step => step.id), ["approve_cancellation"]);
   const materialize = source.steps.find(step => step.id === "materialize")!;

@@ -1,3 +1,4 @@
+import { assertNotCancelled } from "./cancellation.ts";
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -137,11 +138,13 @@ async function selectParent(options: AdmissionOptions, context: AdmissionContext
   const run = receipt.runReceipt;
   const initial = receipt.initial;
   if (!isRecord(run) || typeof run.dag !== "string" || typeof run.run !== "string" || !isRecord(initial) || !isRecord(initial.execution) || initial.execution.primary !== context.primary || initial.execution.ompSession !== context.owner || realpathSync(receiptPath(context.primary, run.run)) !== path) throw new Error("Invalid parent receipt lineage/owner/consumer");
+  assertNotCancelled(dirname(path));
   const transitions: Record<string, string> = { feature: "poc.yaml", poc: "feature.yaml", discovery: "planning.yaml" };
   if (transitions[run.dag] !== context.name || run.run === options.run) throw new Error(`Invalid successor transition ${run.dag} -> ${context.name}`);
   if (options.artifact && !sameArtifact(parseArtifact(options.artifact), receipt.artifact)) throw new Error("Child artifact differs from parent receipt");
   return { receipt: path, dag: run.dag, run: run.run, artifact: receipt.artifact };
 }
+// A cancelled parent cannot publish successors even though native dequeue permits reuse.
 function createReceipt(options: AdmissionOptions, context: AdmissionContext, cached: CachedArtifact, parent: ArtifactReceiptFields["parent"], persist: boolean): { path: string; receipt: Receipt } {
   const { name, owner, primary, repo, committed } = context;
   const path = receiptPath(primary, options.run);

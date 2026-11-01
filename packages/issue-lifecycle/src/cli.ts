@@ -5,7 +5,7 @@ import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
 import { readServiceEnvironment, serviceEnvironmentCommand } from "../../launcher/src/service-environment.ts";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|tick|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|cancel|tick|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
 // package's filesystem closure and station imports SQLite at import time.
 // Static command imports would make `version` depend on those runtime assets.
@@ -31,6 +31,9 @@ export async function main(argv: string[]): Promise<void> {
       console.log(JSON.stringify(identity));
       return;
     case "native": return executeNative(args);
+    case "cancel": return (await import("./cancellation.ts")).main(args);
+    case "cancellation": return (await import("./cancellation.ts")).main(args);
+    case "bootstrap-receipt": return (await import("./bootstrap-receipt.ts")).bindBootstrapReceipt();
     case "tick": return (await import("./tick.ts")).tick(args);
     case "gate": return runGate(args);
     case "pr-body": return (await import("./commands/pr-body.ts")).main(args);
