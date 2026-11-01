@@ -113,7 +113,10 @@ The objective alone grants the default mandate below; extra operator wording may
   continue manually in a separate worktree from the base, run the repository's full declared gate/checks,
   open a PR using the repository template with `Closes #N`, and merge only after required checks pass.
   Record this fallback as an incident for the retrospective; credential and destructive-action exclusions still apply.
-- If a restart is needed, start a new session with a handover containing the ledger and verbatim mandate; the report MUST name its new session id and session path.
+- If the loaded extension is stale (`compat=stale` or another stale-extension condition), an extension or OMP reload is required,
+  or context is exhausted, perform a coordinator handover without waiting for the operator.
+  Write the [ledger](#first-report-and-ledger), then start a new coordinator session with a handover containing the ledger
+  and verbatim mandate; the report MUST name the new session id and session path.
   Existing run ownership remains governed by [issue-execution](../issue-execution/SKILL.md#enqueue-an-issue).
 
 ### First report and ledger

@@ -271,7 +271,12 @@ is re-read through `~/.omp/plugins/node_modules/@a4s/issue-lifecycle` so replaci
 the managed release link is visible to an already-running OMP process. One-off
 package loads without that registration use their own on-disk manifest.
 Only an installed version newer than the loaded extension produces `compat=stale`
-and the restart warning. Main ahead of the installed release is release-pending,
+and the restart warning. The extension either switches after the turn or requires
+a restart or handover; switching after the turn is not guaranteed. A coordinator
+under an autonomous mandate follows the [sprint-planning handover rule](skills/sprint-planning/SKILL.md#activation-and-default-mandate)
+without waiting for the operator: write the ledger, hand over the verbatim mandate
+to a new coordinator session, and report its session id and session path.
+Main ahead of the installed release is release-pending,
 not restart-pending, and produces no restart warning; publishing, installing and
 re-pinning that release remain operator actions. Consumer repositories without
 the lifecycle manifest continue to report `main=n/a`. Unknown manifest versions
