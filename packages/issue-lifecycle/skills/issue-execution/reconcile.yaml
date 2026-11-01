@@ -270,6 +270,7 @@ steps:
         OBSERVATION=NOT_WAITING
       elif [[ "$STEP" == await_ci || "$STEP" == await_merge ]]; then
         pr_ref=${PR_NUMBER:-$BRANCH}
+        if [[ -f "$STATE/pr-number" ]]; then pr_ref=$(cat "$STATE/pr-number"); fi
         CLASS=BLOCKED
         CAUSE="GitHub observation unavailable; check repository permissions and authentication"
         if bounded gh pr view "$pr_ref" -R "$REPO" --json number,state,mergeStateStatus,autoMergeRequest,headRefOid,statusCheckRollup >"$TMP/pr"; then
