@@ -85,6 +85,11 @@ queue capacity. PRIMARY resolves from `$DAGU_HOME/primaries/<lane>`, then
 `A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary`. It must be a canonical independent
 clone. The resource guard protects the bound PRIMARY only when its config is
 committed at HEAD; an identical-config unbound clone is not protected.
+Feature resource checks and reconciliation call `a4s primary-binding <value>
+[workspace]` through their receipt-selected `$A4S_BIN`; the TypeScript resolver
+owns the lookup rules. Binding files accept a single absolute path with an
+optional LF terminator, not CRLF. Invalid workspace labels fail rather than
+falling back to `A4S_PRIMARY`; an omitted or empty CLI workspace means no label.
 
 
 ## Versioned source, configuration and runtime state
