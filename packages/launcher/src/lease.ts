@@ -4,7 +4,8 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { leaseProcessStart, probeProcess, type ProcessProbe } from "./process-identity.ts";
-import { readJsonFile, readStateLocked, realDirectory, stationRoot, stationTransaction, tupleFromJson, writeJsonDurable, assertLauncher, type StateDependencies } from "./station-state.ts";
+import { readJsonFile, readStateLocked, realDirectory, stationRoot, stationTransaction, tupleFromJson, assertLauncher, type StateDependencies } from "./station-state.ts";
+import { writeAtomicJson } from "./runtime.cjs";
 import { sameArtifact, type ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
 import { inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "./artifact-cache.ts";
@@ -39,7 +40,7 @@ export function createLeaseLocked(home: string, artifact: ArtifactTuple, generat
   if (!processStartedAt) throw new Error("Cannot lease build: process identity unknown");
   const lease: BuildLease = { schema: 1, id: randomUUID(), artifact, host: hostname(), pid: process.pid, processStartedAt, generation, kind, holder };
   const directory = join(stationRoot(home), "leases"); realDirectory(directory);
-  writeJsonDurable(join(directory, `${lease.id}.json`), lease);
+  writeAtomicJson(join(directory, `${lease.id}.json`), lease);
   return lease;
 }
 /** Verification is optimistic; generation/cache checks and lease publication are

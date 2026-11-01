@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import { approvedPocScope, assessPocScope, decidePocScope, pocScopeRequest, pocScopeRejection, PocScopeRejection, recordPocScopeRejection, requirePocScope, scopeTargets, type PocScopeDecision, type PocScopeDecisionInput, type PocScopeInput } from "../poc-scope.ts";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
 const env = process.env;
 const primary = env.PRIMARY || ".";
@@ -43,7 +44,7 @@ try {
         authorizedTargets: decisionTargets("POC_AUTHORIZED_TARGETS"), basis: answer("POC_SCOPE_BASIS"),
       };
       decidePocScope(primary, issue, id, choice as PocScopeDecision["action"], value, env.USER || "operator", answer("POC_SCOPE_BASIS") || "");
-      if (choice === "defer") process.exit(77);
+      if (choice === "defer") process.exit(EXIT_CODES.cancelled);
     }
     const approved = approvedPocScope(primary, issue, id);
     emit("POC_QUESTION", approved.question);

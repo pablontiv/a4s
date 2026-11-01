@@ -5,6 +5,7 @@ import { appendFileSync, closeSync, ftruncateSync, readSync, writeSync } from "n
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { acquireLock, openLock, releaseLock } from "@a4s/launcher/file-lock";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
 function acquired(gate: boolean): void {
   if (gate && process.env.A4S_GATE_JOURNAL) appendFileSync(process.env.A4S_GATE_JOURNAL,
@@ -47,7 +48,7 @@ export async function main(args: string[]): Promise<void> {
       const child = spawnSync(body[0]!, body.slice(1), { stdio: ["inherit", "inherit", "inherit", fd], env: { ...process.env, A4S_HEAVY_SLOT_HELD: "1" } });
       if (child.error) throw child.error;
       const code = child.status ?? (128 + (constants.signals[child.signal!] ?? 0));
-      if (!gate || code !== 86) { process.exitCode = code; return; }
+      if (!gate || code !== EXIT_CODES.integrationHold) { process.exitCode = code; return; }
       releaseLock(fd);
       const configured = Number(process.env.A4S_INTEGRATION_POLL_SEC ?? "1");
       await sleep((Number.isFinite(configured) && configured >= 0 ? configured : 1) * 1000);

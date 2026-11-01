@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { atomicJson, jobId, type JobBinding, type JobResult } from "../../src/role-jobs.ts";
+import { jobId, type JobBinding, type JobResult } from "../../src/role-jobs.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { nativeEvidence } from "../../src/role-runtime.ts";
 
 export { fixture };
@@ -24,7 +25,7 @@ function fixture(iteration = 0) {
   };
   const result: JobResult = { schemaVersion: 1, id, binding, executor: { host: "fixture-host", pid: 123, processStartedAt: "fixture-process-start" }, state: "completed", readyAt: new Date().toISOString(), startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), readyToStartMs: 0, output, native: seal() };
   const path = join(directory, "result.json");
-  const save = () => atomicJson(path, result);
+  const save = () => writeAtomicJson(path, result);
   save();
   return { root, id, path, result, transcript, rows, seal, save, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }

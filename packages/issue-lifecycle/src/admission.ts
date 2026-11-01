@@ -3,7 +3,7 @@ import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { stationBinding } from "@a4s/launcher/station-binding";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "@a4s/launcher/config";
@@ -24,15 +24,9 @@ import { stationTransaction, readStationState, readStateLocked } from "@a4s/laun
 import { handoff } from "@a4s/launcher/select";
 import { createLeaseLocked } from "@a4s/launcher/lease";
 import { admittedCoordinator } from "./planning-transcript.ts";
-import { writeAtomicJson } from "./atomic-json.ts";
-
-export function canonical(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
-}
+import { canonicalJson, writeAtomicJson } from "@a4s/launcher/runtime";
 export function sha256(value: string | Buffer): string { return createHash("sha256").update(value).digest("hex"); }
-export function deploymentFingerprint(components: unknown): string { return sha256(canonical(components)); }
+export function deploymentFingerprint(components: unknown): string { return sha256(canonicalJson(components)); }
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim(); }
 function pending(cause: string): { state: "pending"; cause: string } { return { state: "pending", cause }; }
 function fields(names: string, cause: string): Record<string, unknown> { return Object.fromEntries(names.split(" ").map(name => [name, pending(cause)])); }
@@ -195,7 +189,7 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     return { path, receipt };
   }
   mkdirSync(dirname(path), { recursive: true });
-  try { writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
+  try { writeAtomicJson(path, receipt, { exclusive: true }); }
   catch (error) {
     if (!isRecord(error) || error.code !== "EEXIST") throw error;
     throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
@@ -231,9 +225,7 @@ export function appendObservation(path: string, observation: Omit<Observation, "
     const receipt = readReceipt(path);
     if (observation.dag !== receipt.runReceipt.dag || observation.run !== receipt.runReceipt.run || !Number.isSafeInteger(observation.attempt) || observation.attempt < 1) throw new Error("Receipt observation DAG/run/attempt mismatch");
     receipt.runReceipt.observations.push({ at: new Date().toISOString(), ...observation });
-    const temp = `${path}.${process.pid}.tmp`;
-    writeFileSync(temp, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temp, path);
+    writeAtomicJson(path, receipt);
   });
 }
 export function enqueueArguments(args: string[], cwd: string): AdmissionOptions {
@@ -332,7 +324,7 @@ export function observeRunReceipt(run: RunDetails, cwd: string, kind = "runtime"
   const incident = error || run.receiptEvent?.cursorReset || ["failed", "aborted", "cancelled"].includes(run.statusLabel);
   const resolvedKind = run.receiptEvent?.cursorReset ? "incident:cursor-reset" : incident ? `incident:${kind}` : kind;
   const prior = receipt.runReceipt.observations.at(-1);
-  if (prior?.kind === resolvedKind && canonical(prior.data) === canonical(data)) return;
+  if (prior?.kind === resolvedKind && canonicalJson(prior.data) === canonicalJson(data)) return;
   if (run.receiptEvent && receipt.runReceipt.observations.some(observation => {
     const previous = observation.data;
     return isRecord(previous) && isRecord(previous.run) && isRecord(previous.run.receiptEvent) && previous.run.receiptEvent.id === run.receiptEvent?.id;

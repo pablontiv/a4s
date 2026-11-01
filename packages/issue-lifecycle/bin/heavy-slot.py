@@ -28,6 +28,8 @@ def main():
     service = json.loads(subprocess.check_output(
         [*reader, "service-environment"], cwd=package, text=True))
     os.environ.update(service)
+    hold_exit = int(subprocess.check_output(
+        [*reader, "exit-code", "integrationHold"], cwd=package, text=True)) if gate else None
     home = service["DAGU_HOME"]
     if os.environ.get("A4S_HEAVY_SLOT_HELD") == "1":
         print("slot: reenter marker=A4S_HEAVY_SLOT_HELD", file=sys.stderr, flush=True)
@@ -57,7 +59,7 @@ def main():
         print(f"gate: acquired lock={path} holder={owner}", file=sys.stderr, flush=True)
         env = {**os.environ, "A4S_HEAVY_SLOT_HELD": "1"}
         status = subprocess.run(body, pass_fds=(fd,), env=env).returncode
-        if not gate or status != 86:
+        if not gate or status != hold_exit:
             raise SystemExit(status if status >= 0 else 128 - status)
         # Integration protection must not monopolize the station while waiting.
         fcntl.flock(fd, fcntl.LOCK_UN)

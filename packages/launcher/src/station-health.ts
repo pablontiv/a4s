@@ -5,6 +5,7 @@ import { probeProcess } from "./process-identity.ts";
 import { github, releaseRepository } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
 import { stationCacheRoot } from "./station-paths.ts";
+import { canonicalJson } from "./runtime.cjs";
 
 export interface HealthOptions { home: string; url: string; now: string; from?: string; cpuMeasurement?: string }
 export interface HealthDependencies {
@@ -28,12 +29,7 @@ function quantile(sorted: number[], fraction: number): number {
 }
 /** Canonical JSON uses Unicode code-unit key order, not environment-dependent locale sorting. */
 export function healthJson(value: unknown): string {
-  function sorted(input: unknown): unknown {
-    if (Array.isArray(input)) return input.map(sorted);
-    if (isRecord(input)) return Object.fromEntries(Object.keys(input).sort().map(key => [key, sorted(input[key])]));
-    return input;
-  }
-  return `${JSON.stringify(sorted(value), null, 2)}\n`;
+  return `${canonicalJson(value, true)}\n`;
 }
 function tickMetrics(runs: Row[]) {
   const ticks = runs.filter(row => row.name === "reconcile");

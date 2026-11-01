@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "yaml";
 import type { Job } from "./role-jobs.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 interface Definition { name: string; source: string; model?: string | string[]; systemPrompt: string; [key: string]: unknown }
 interface Settings { [key: string]: unknown }
@@ -27,9 +28,7 @@ const hostLoader: HostLoader = id => {
   }
 };
 function save(directory: string, name: string, value: unknown): void {
-  const path = join(directory, name);
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
+  writeAtomicJson(join(directory, name), value);
 }
 /** Dynamic external imports let export-surface failures name the exact host module. */
 export async function runRoleRunner(directory: string, load: HostLoader = hostLoader): Promise<void> {

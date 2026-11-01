@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeAtomicJson } from "./atomic-json.ts";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 import { withFileLock } from "@a4s/launcher/file-lock";
 
 interface Observation {

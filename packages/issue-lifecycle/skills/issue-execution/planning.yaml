@@ -158,7 +158,7 @@ steps:
         "$A4S_BIN" cancellation record planning review aborted
         dagu stop --run-id "$RUN" planning
         sleep 30
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
       [[ -n "$REVIEW" && "$REVIEW" != '${steps.'* ]]
 
@@ -266,7 +266,7 @@ steps:
         dagu stop --run-id "$RUN" planning
         sleep 30
         printf 'Native stop did not terminate the active cancellation gate\n' >&2
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
       [[ -n "$APPROVED" && "$APPROVED" != '${steps.'* ]] ||
         { printf 'Normal completion requires APPROVED at approve\n' >&2; exit 1; }

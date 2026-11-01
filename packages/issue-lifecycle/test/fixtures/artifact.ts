@@ -10,6 +10,11 @@ import { cachePath } from "@a4s/launcher/artifact-cache";
 
 export const packageDirectory = fileURLToPath(new URL("../../", import.meta.url));
 export const repository = "pablontiv/a4s";
+/** Mirror release-local helper imports without depending on a source checkout. */
+export function runtimeHelper(name: string): string {
+  if (name === "runtime.cjs") return readFileSync(new URL(import.meta.resolve("@a4s/launcher/runtime")), "utf8");
+  return readFileSync(join(packageDirectory, "bin", name), "utf8").replaceAll("@a4s/launcher/runtime", "./runtime.cjs");
+}
 export function makeArchive(directory: string, version = "0.6.0", commit = "a".repeat(40)): ResolvedRelease {
   mkdirSync(directory, { recursive: true });
   const stage = mkdtempSync(join(tmpdir(), "a4s-fixture-stage-"));
@@ -22,7 +27,7 @@ export function makeArchive(directory: string, version = "0.6.0", commit = "a".r
       omp: { extensions: ["./src/status/reloadable.ts", "./src/triage/reloadable.ts", "./src/primary-guard/reloadable.ts"] } }));
     for (const entry of ["agents", "skills"]) cpSync(join(packageDirectory, entry), join(stage, entry), { recursive: true });
     mkdirSync(join(stage, "bin"));
-    for (const entry of ["gate-cache.cjs", "dagu-gate.cjs", "gate-cache-run.cjs"]) copyFileSync(join(packageDirectory, "bin", entry), join(stage, "bin", entry));
+    for (const entry of ["gate-cache.cjs", "dagu-gate.cjs", "gate-cache-run.cjs", "runtime.cjs"]) writeFileSync(join(stage, "bin", entry), runtimeHelper(entry));
     for (const entry of ["status/reloadable.ts", "status/index.ts", "triage/reloadable.ts", "triage/native.ts", "primary-guard/reloadable.ts", "primary-guard/native.ts"]) {
       const path = join(stage, "src", entry);
       mkdirSync(dirname(path), { recursive: true });

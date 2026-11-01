@@ -87,7 +87,7 @@ test("release archives and the compiled engine work from an extracted root", {
       const names = execFileSync("tar", ["-tzf", path], { encoding: "utf8" }).trim().split("\n");
       assert.deepEqual(names, [...names].sort());
       assert.deepEqual([...new Set(names.map(name => name.split("/")[0]))].sort(), ["a4s", "agents", "bin", "identity.json", "package.json", "role-runner.ts", "skills", "src"]);
-      assert.deepEqual(names.filter(name => name.startsWith("bin/")), ["bin/", "bin/dagu-gate.cjs", "bin/gate-cache-run.cjs", "bin/gate-cache.cjs"]);
+      assert.deepEqual(names.filter(name => name.startsWith("bin/")), ["bin/", "bin/dagu-gate.cjs", "bin/gate-cache-run.cjs", "bin/gate-cache.cjs", "bin/runtime.cjs"]);
       for (const file of ["role-runner.ts", "agents/plan-reviewer.md", "agents/triage-reviewer.md", "src/status/reloadable.ts", "src/status/index.ts", "src/triage/reloadable.ts", "src/triage/native.ts",
         "src/primary-guard/reloadable.ts", "src/primary-guard/native.ts",
         ...["feature", "poc", "discovery", "planning", "reconcile"].map(name => `skills/issue-execution/${name}.yaml`),

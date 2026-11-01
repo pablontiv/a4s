@@ -6,7 +6,8 @@ import { HELPER_API_VERSION } from "@a4s/hot-reload";
 import { parse } from "yaml";
 import { identity } from "../src/identity.ts";
 import { assertReadCoverage, formatSupport } from "@a4s/launcher/artifact-support";
-import { canonicalJson, registrationHash } from "@a4s/launcher/contracts";
+import { registrationHash } from "@a4s/launcher/contracts";
+import { canonicalJson } from "@a4s/launcher/runtime";
 import { registrationManifest } from "../src/registration.ts";
 import status from "../src/status/index.ts";
 

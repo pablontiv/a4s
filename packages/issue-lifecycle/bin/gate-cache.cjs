@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { canonicalJson, writeAtomicJson } = require('@a4s/launcher/runtime');
 
 // Station-local content-addressed cache for gate test and typecheck tasks.
 // Remote caching is intentionally unsupported: entries with `remote: true` are
@@ -54,13 +55,6 @@ function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-function stable(value) {
-  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
 
 function relPosix(root, file) {
   return path.relative(root, file).split(path.sep).join('/');
@@ -338,7 +332,7 @@ function dependencyMaterial(repoRoot, workspaceDir) {
 }
 
 function cacheKey(material) {
-  return sha256(stable(material));
+  return sha256(canonicalJson(material));
 }
 
 function expandFiles(workspace, runner) {
@@ -497,7 +491,7 @@ function cacheDirectory(worktree) {
   fs.mkdirSync(dir, { recursive: true });
   const config = path.join(dir, 'config.json');
   try {
-    fs.writeFileSync(config, `${JSON.stringify({ schemaVersion: 1, remote: false })}\n`, { flag: 'wx' });
+    writeAtomicJson(config, { schemaVersion: 1, remote: false }, { exclusive: true });
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
   }
@@ -524,9 +518,7 @@ function storePass(cacheDir, record) {
   if (!record || record.result !== 'PASS' || record.exitCode !== 0 || record.remote || !record.key) return;
   fs.mkdirSync(cacheDir, { recursive: true });
   const target = entryPath(cacheDir, record.key);
-  const temporary = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify({ ...record, remote: false })}\n`);
-  fs.renameSync(temporary, target);
+  writeAtomicJson(target, { ...record, remote: false });
 }
 
 function forget(cacheDir, key) {

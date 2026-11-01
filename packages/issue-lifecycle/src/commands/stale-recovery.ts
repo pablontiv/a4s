@@ -1,6 +1,6 @@
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeSync } from "node:fs";
 
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import { invokeRun, executingRunArtifact } from "../run-artifact.ts";
 import { primaryFromSpec } from "@a4s/launcher/primary";
 import { STALE_PROCESS_ERROR } from "../stale-recovery.ts";
 import { withFileLock } from "@a4s/launcher/file-lock";
+import { writeAtomicJson } from "@a4s/launcher/runtime";
 
 function stationHome(): string {
   return readServiceEnvironment().DAGU_HOME;
@@ -24,9 +25,7 @@ function loadLedger(path: string): RecoveryLedger {
 }
 
 function storeLedger(path: string, ledger: RecoveryLedger): void {
-  const temporary = `${path}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(ledger, null, 2)}\n`);
-  renameSync(temporary, path);
+  writeAtomicJson(path, ledger);
 }
 
 function log(line: string): void {

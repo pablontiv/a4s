@@ -228,7 +228,7 @@ steps:
         "$A4S_BIN" cancellation record dagu-feature-bootstrap config aborted
         dagu stop --run-id "$DAG_RUN_ID" dagu-feature-bootstrap
         sleep 30
-        exit 77
+        exit "$("$A4S_BIN" exit-code cancelled)"
       fi
       for field in GATE REQUIRED_CHECK TEST_PATHS; do
         value=${!field}

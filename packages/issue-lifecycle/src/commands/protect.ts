@@ -1,5 +1,4 @@
 import {
-  INTEGRATION_HOLD_EXIT,
   admit,
   protectCandidate,
   readProtection,
@@ -9,6 +8,7 @@ import {
   type ReleaseReason,
 } from "../integration-protection.ts";
 import { executingRunArtifact } from "../run-artifact.ts";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
 const BOOLEAN = new Set(["held-lock"]);
 const ALLOWED: Record<string, readonly string[]> = {
@@ -96,7 +96,7 @@ try {
     });
     if (result.action === "hold") {
       if (result.line) console.error(result.line);
-      process.exitCode = INTEGRATION_HOLD_EXIT;
+      process.exitCode = EXIT_CODES.integrationHold;
     }
   } else {
     const record = readProtection(primary);

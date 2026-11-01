@@ -19,8 +19,8 @@ test("issue-lifecycle consumes only exported launcher package subpaths", () => {
   for (const directory of ["src", "test", "bin"]) {
     for (const path of sources(resolve(lifecycle, directory))) {
       const source = readFileSync(path, "utf8");
-      // Include type-only imports, re-exports, dynamic imports and fixture scripts.
-      for (const match of source.matchAll(/\b(?:import|export)\s*(?:\([^)]*?|\s+[^;]*?\bfrom\s*)?["']([^"']+)["']/g)) {
+      // Include type-only imports, re-exports, dynamic imports, CommonJS and fixture scripts.
+      for (const match of source.matchAll(/\b(?:require\s*\(\s*|(?:import|export)\s*(?:\([^)]*?|\s+[^;]*?\bfrom\s*)?)["']([^"']+)["']/g)) {
         const specifier = match[1]!;
         if (specifier.startsWith(".")) {
           const target = relative(launcher, resolve(dirname(path), specifier));
@@ -35,6 +35,7 @@ test("issue-lifecycle consumes only exported launcher package subpaths", () => {
   }
   assert.ok(consumed.has("@a4s/launcher/artifact-cache"));
   assert.ok(consumed.has("@a4s/launcher/service-environment"));
+  assert.ok(consumed.has("@a4s/launcher/runtime"));
   assert.throws(() => import.meta.resolve("@a4s/launcher/src/artifact-cache.ts"), { code: "ERR_PACKAGE_PATH_NOT_EXPORTED" });
 });
 

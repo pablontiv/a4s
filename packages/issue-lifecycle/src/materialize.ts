@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import type { LifecycleConfig } from "@a4s/launcher/config";
 import type { CoordinatingSession } from "./planning-transcript.ts";
 import { isScalar, parseAllDocuments, Scalar, visit } from "yaml";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
 export const LIFECYCLE_DAGS = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"] as const;
 export type LifecycleDag = (typeof LIFECYCLE_DAGS)[number];
@@ -25,6 +26,7 @@ function quoted(value: string | number): string {
 
 function replacements(config: LifecycleConfig, identity: { version: string; source: string; coordinator?: CoordinatingSession }, station: ServiceEnvironment): Record<string, string> {
   return {
+    __RETRY_EXIT__: String(EXIT_CODES.retry),
     __DAGU_URL__: JSON.stringify(station.DAGU_URL),
     __DAGU_HOME__: JSON.stringify(station.DAGU_HOME),
     __SERVICE_PATH__: JSON.stringify(station.PATH),

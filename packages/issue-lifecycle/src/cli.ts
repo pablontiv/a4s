@@ -4,8 +4,9 @@ import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
 import { readServiceEnvironment, serviceEnvironmentCommand } from "@a4s/launcher/service-environment";
+import { EXIT_CODES } from "@a4s/launcher/runtime";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|cancel|tick|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <exit-code|gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|cancel|tick|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
 // package's filesystem closure and station imports SQLite at import time.
 // Static command imports would make `version` depend on those runtime assets.
@@ -25,6 +26,10 @@ export async function main(argv: string[]): Promise<void> {
     Object.assign(process.env, readServiceEnvironment());
   }
   switch (command) {
+    case "exit-code":
+      if (args.length !== 1 || !Object.hasOwn(EXIT_CODES, args[0]!)) throw new Error("Usage: a4s exit-code integrationHold|retry|cancelled");
+      console.log(EXIT_CODES[args[0] as keyof typeof EXIT_CODES]);
+      return;
     case "service-environment": return serviceEnvironmentCommand(args);
     case "version":
       if (args.length) throw new Error("Usage: a4s version");

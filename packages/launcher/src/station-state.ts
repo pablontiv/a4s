@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { withFileLockAsync } from "./file-lock.ts";
 import { SHARED_FORMATS, LAUNCHER_PROTOCOL, STATE_SCHEMAS, type ArtifactSupport, type SharedFormat } from "./contracts.ts";
@@ -7,6 +7,7 @@ import { artifactToken, parseArtifact, type ArtifactTuple } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
 import { reconcileResources } from "./station-resources.ts";
 import { stationCacheRoot } from "./station-paths.ts";
+import { writeAtomicJson } from "./runtime.cjs";
 export type PersistedFormats = Record<SharedFormat, number[]>;
 export interface StationState {
   schema: 1; generation: number; current: ArtifactTuple; previous: ArtifactTuple;
@@ -77,22 +78,9 @@ function refreshResourcePointer(home: string, state: StationState, dependencies:
   realDirectory(join(root, "loader"));
   reconcileResources(root, dependencies);
 }
-export function writeJsonDurable(path: string, value: unknown, fault?: StateDependencies["fault"]): void {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    const fd = openSync(temporary, "wx", 0o600);
-    try { writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`); fsyncSync(fd); }
-    finally { closeSync(fd); }
-    fault?.("before-rename");
-    renameSync(temporary, path); // The sole state commit point.
-    const directory = openSync(dirname(path), "r");
-    try { fsyncSync(directory); } finally { closeSync(directory); }
-    fault?.("after-rename");
-  } finally { rmSync(temporary, { force: true }); }
-}
 export function commitStateLocked(home: string, state: StationState, dependencies: StateDependencies = {}): void {
   validateState(state);
-  writeJsonDurable(join(stationRoot(home), "state.json"), state, dependencies.fault);
+  writeAtomicJson(join(stationRoot(home), "state.json"), state, { fault: dependencies.fault });
   refreshResourcePointer(home, state, dependencies);
 }
 export async function stationTransaction<T>(home: string, body: () => Promise<T>, dependencies: StateDependencies = {}): Promise<T> {
