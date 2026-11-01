@@ -447,6 +447,8 @@ cp "$STATE/triage.md" "$PUBLISHED"`);
       writeFileSync(gh, `#!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2" in
+  "pr list")
+    printf '{"number":117,"state":"CLOSED","headRefName":"%s","baseRefName":"main"}\\n' "$BRANCH" | jq -s . ;;
   "pr view")
     case "$*" in
       *"--json state"*) echo OPEN ;;
@@ -465,6 +467,8 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
+      runScript(extractScript(definition, "  - id: checkpoint_push"), repo);
+      assert.equal(git(repo.primary, "ls-remote", "origin", "refs/dagu/checkpoints/issue-189").split(/\s/)[0], sha);
       const script = extractScript(definition, "  - id: pr");
       for (const [EXISTING_PR, PR_NUMBER, command] of [["no", "", "pr create"], ["yes", "", "pr edit"], ["yes", "571", "pr edit"]]) {
         runScript(script, repo, { EXISTING_PR, PR_NUMBER });

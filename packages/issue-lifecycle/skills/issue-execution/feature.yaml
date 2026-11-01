@@ -262,18 +262,26 @@ env:
         else
           rows=$(gh pr list --repo "$repo" --head "$BRANCH" --base "$BASE_BRANCH" --state all \
             --json number,state,headRefName,headRefOid,baseRefName,autoMergeRequest,mergeCommit --limit 100)
+          jq -r '.[] | select(.state == "CLOSED") |
+            "resolve_run_pr: ignoring CLOSED PR #\(.number); publication will create a fresh PR if no OPEN or MERGED PR exists"' <<<"$rows" >&2
           RUN_PR=$(jq -cr '
+            [.[] | select(.state == "OPEN" or .state == "MERGED")] |
             [.[] | select(.state == "OPEN")] as $open |
             if ($open | length) == 1 then $open[0]
-            elif ($open | length) > 1 then error("ambiguous open run PR")
+            elif ($open | length) > 1 then error("ambiguous open run PRs: " + ($open | map("#" + (.number | tostring)) | join(", ")))
             elif length == 0 then null
             elif length == 1 then .[0]
-            else error("ambiguous completed run PR; supply PR_NUMBER") end' <<<"$rows")
+            else error("ambiguous merged run PRs: " + (map("#" + (.number | tostring)) | join(", ")) + "; supply PR_NUMBER") end' <<<"$rows")
         fi
         if [[ "$RUN_PR" == null ]]; then return; fi
-        jq -e --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
+        if ! jq -e --arg branch "$BRANCH" --arg base "$BASE_BRANCH" \
           '.headRefName == $branch and .baseRefName == $base and (.number | type == "number") and
-           (.state == "OPEN" or .state == "MERGED")' <<<"$RUN_PR" >/dev/null
+           (.state == "OPEN" or .state == "MERGED")' <<<"$RUN_PR" >/dev/null; then
+          printf 'resolve_run_pr: refusing PR #%s (state=%s head=%s base=%s); select an OPEN or MERGED PR matching branch %s and base %s, or clear PR_NUMBER and retained pr-number to discover a fresh PR\n' \
+            "$(jq -r .number <<<"$RUN_PR")" "$(jq -r .state <<<"$RUN_PR")" \
+            "$(jq -r .headRefName <<<"$RUN_PR")" "$(jq -r .baseRefName <<<"$RUN_PR")" "$BRANCH" "$BASE_BRANCH" >&2
+          return 1
+        fi
         jq -r .number <<<"$RUN_PR" > "$STATE/pr-number"
       }
       integrated_terminal() {
