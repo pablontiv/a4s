@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
   actions: read
 
 # Serialize inventory checks and immutable publication, including late CI completions.
@@ -22,13 +22,15 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
-  release:
+  build:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&
       github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.publication.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -46,6 +48,139 @@ jobs:
       - name: Build release archives
         if: steps.publication.outputs.publish == 'true'
         run: npm run build:a4s
-      - name: Publish immutable staged build or verify matching rerun
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: steps.publication.outputs.publish == 'true'
+        with:
+          name: release-archives
+          path: dist/*
+          if-no-files-found: error
+
+  compiled:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci && node node_modules/bun/install.js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-archives
+          path: dist
+      - name: Test compiled release
+        run: A4S_RELEASE_DIR="$PWD/dist" node --import tsx packages/issue-lifecycle/test/fixtures/release-station.mjs npm run test:compiled --workspace @a4s/issue-lifecycle
+
+  live-feature:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci && node node_modules/bun/install.js
+      - name: Install pinned Dagu
+        env:
+          DAGU_VERSION: 2.24.0
+        run: |
+          mkdir -p "$RUNNER_TEMP/dagu"
+          curl --fail --silent --show-error --location "https://github.com/dagu-org/dagu/releases/download/v${DAGU_VERSION}/dagu_${DAGU_VERSION}_linux_amd64.tar.gz" -o "$RUNNER_TEMP/dagu.tar.gz"
+          tar -xzf "$RUNNER_TEMP/dagu.tar.gz" -C "$RUNNER_TEMP/dagu"
+          echo "$RUNNER_TEMP/dagu" >> "$GITHUB_PATH"
+      - name: Execute minimal feature DAG against local bare origin
+        run: node --import tsx packages/issue-lifecycle/test/fixtures/release-station.mjs npm run test:release-live --workspace @a4s/issue-lifecycle
+
+  reproducibility:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: package.json
+          cache: npm
+      - run: npm ci && node node_modules/bun/install.js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-archives
+          path: dist
+      - name: Rebuild same revision and compare every archive digest
+        run: |
+          node scripts/build-a4s.mjs --outdir "$RUNNER_TEMP/repeated"
+          (cd dist && sha256sum --check *.sha256)
+          for checksum in dist/*.sha256; do
+            cmp "$checksum" "$RUNNER_TEMP/repeated/$(basename "$checksum")"
+          done
+          (cd "$RUNNER_TEMP/repeated" && sha256sum --check *.sha256)
+
+  smoke:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux-x64
+          - runner: macos-14
+            platform: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-archives
+          path: archives
+      - name: Smoke published platform binaries
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          test "$(uname -m)" = "${PLATFORM/*-/}" || { test "$PLATFORM" = linux-x64 && test "$(uname -m)" = x86_64; }
+          mkdir payload launcher
+          for archive in archives/*-"$PLATFORM".tar.gz; do
+            (cd archives && shasum -a 256 --check "$(basename "$archive").sha256")
+            case "$(basename "$archive")" in
+              a4s-launch-*) tar -xzf "$archive" -C launcher ;;
+              a4s-*) tar -xzf "$archive" -C payload ;;
+            esac
+          done
+          ./payload/a4s version | tee version.json
+          jq -e --arg sha "$EXPECTED_SHA" '.commit == $sha' version.json
+          ./launcher/a4s-launch launcher-version | jq -e '.launcherProtocol'
+
+  release:
+    needs: [build, compiled, live-feature, reproducibility, smoke]
+    if: needs.build.outputs.publish == 'true'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: package.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-archives
+          path: dist
+      - name: Publish immutable staged build or verify matching rerun
         run: node scripts/publish-a4s.mjs publish

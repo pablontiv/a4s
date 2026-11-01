@@ -56,7 +56,19 @@ YAML shell steps, builds or timing acceptance. `test/live/` is never selected by
 Workspace selection is also covered in-process by the default issue-lifecycle
 suite, including longest-path ownership, rename records, broad changes and
 transitive declared-dependency propagation. CLI/API fallback checks remain live.
-Before a package release, run
+
+Release publication automatically requires `test:compiled`, a minimal live
+`feature` DAG against a disposable local bare origin (stubbed GitHub responses)
+with pinned Dagu 2.24.0, same-revision digest comparisons for every archive, and
+Linux x64/macOS arm64 smoke jobs running both shipped executables. These jobs
+consume the build's archives; publication downloads those same artifacts only
+after every check succeeds. The macOS job executes `a4s version` natively.
+Identity-bound snapshots keep Dagu's recognized Bash shell and enter
+`a4s station-shell` from a script preamble. This preserves JSON parameters and
+shell-local variables while retaining station verification and artifact leases.
+The targeted native check is
+`npm run test:release-live --workspace @a4s/issue-lifecycle`.
+For broader pre-release acceptance, run
 `A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle`
 with a supported Dagu runtime on `PATH`. That command sets the live opt-in,
 omits the spawn guard and retains the heavy slot. Keep the service's canonical

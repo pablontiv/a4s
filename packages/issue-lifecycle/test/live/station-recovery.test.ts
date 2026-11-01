@@ -17,6 +17,7 @@ import { stationRecovery } from "../../../launcher/src/station-recovery.ts";
 import { stationBinding } from "../../../launcher/src/station-binding.ts";
 import { artifactToken } from "../../../launcher/src/release.ts";
 import { receiptBindingDigest } from "../../../launcher/src/station-recovery-evidence.ts";
+import { stationScript } from "../../src/materialize.ts";
 
 test("receipt-bound recovery cancels a native Waiting run after OMP relocation without touching another run or admitting successors", { ...liveDagu, timeout: 60000 }, async () => {
   const root = mkdtempSync(join(process.env.A4S_STATION_RECOVERY_EVIDENCE ?? tmpdir(), "a4s-native-station-recovery-"));
@@ -74,11 +75,11 @@ test("receipt-bound recovery cancels a native Waiting run after OMP relocation w
       });
     }
     const dynamicRun = "dynamic", dynamicOutput = join(root, "dynamic-output.json");
-    const dynamicSnapshot = stringify({ name: "feature", type: "graph", queue: "recovery-fixture", shell: ["a4s", "station-shell"], env: [
+    const dynamicSnapshot = stringify({ name: "feature", type: "graph", queue: "recovery-fixture", shell: "bash", env: [
       { PRIMARY: primary }, { RUN: dynamicRun }, { A4S_ARTIFACT: artifactToken(artifact) },
     ], steps: [
       { id: "approve", action: "human.task", with: { prompt: "Operator" } },
-      { id: "effect", depends: ["approve"], run: `\"$A4S_BIN\" version > ${JSON.stringify(dynamicOutput)}` },
+      { id: "effect", depends: ["approve"], run: stationScript(`\"$A4S_BIN\" version > ${JSON.stringify(dynamicOutput)}`) },
     ] });
     const dynamicReceipt = roleAdmission(primary, home, dynamicRun, dynamicSnapshot, artifact);
     dynamicReceipt.initial.runtimeAndModels.station = stationBinding();
