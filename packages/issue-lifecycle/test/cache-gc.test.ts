@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { gc } from "@a4s/launcher/station";
-import { selectStationBuild } from "@a4s/launcher/lease";
+import { createLeaseLocked, prepareLease, selectStationBuild } from "@a4s/launcher/lease";
 import { probeProcess } from "@a4s/launcher/process-identity";
 import { stationRoot } from "@a4s/launcher/station-state";
 import { listStationRuns, type StationRun } from "@a4s/launcher/station-inventory";
@@ -73,21 +73,81 @@ for (const statusLabel of ["queued", "waiting", "running", "recoverable", "retry
   });
 }
 
-test("a newly listed Dagu run between GC inventory and deletion keeps its only cache", async t => {
+test("GC keeps an unlisted receipt even if its Dagu run appears after preparation", async t => {
   const f = await gcFixture(t);
   f.receipt("old-run", f.builds[0]!, 40, "arbitrary-dag");
   let listed = false, acquisitions = 0;
-  await assert.rejects(gc(f.home, { ...f.dependencies,
+  const report = await gc(f.home, { ...f.dependencies,
     listRuns: async () => listed ? [{ name: "arbitrary-dag", dagRunId: "old-run", primary: f.primary, statusLabel: "running" }] : [],
     async withFileLock<T>(path: string, body: () => Promise<T>, options?: { timeoutMs?: number }) {
-      // No lease or tick stamp changes: only a fresh native inventory can see it.
+      // Native appearance cannot make an unverified prepared reader collectable.
       if (path.endsWith("/.state.lock") && ++acquisitions === 2) listed = true;
       return f.dependencies.withFileLock!(path, body, options);
     },
-  }), { code: "ESTALE", message: /inventory inputs changed.*retry/ });
+  });
   assert.equal(listed, true);
   assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")), "the sole cache for the newly visible reader survives");
-  assert.ok(existsSync(join(stationRoot(f.home), "r4")), "validation aborts before any eligible cache is deleted");
+  assert.ok(report.removed.includes("r4"), "unrelated cache collection still converges");
+});
+
+test("a lease arriving on a GC candidate keeps that cache without blocking unrelated deletion", async t => {
+  const f = await gcFixture(t), lease = prepareLease(f.builds[0]!, f.state().generation, "engine", "new observer");
+  let acquisitions = 0;
+  const report = await gc(f.home, { ...f.dependencies,
+    async withFileLock<T>(path: string, body: () => Promise<T>, options?: { timeoutMs?: number }) {
+      return f.dependencies.withFileLock!(path, async () => {
+        if (path.endsWith("/.state.lock") && ++acquisitions === 2) createLeaseLocked(f.home, lease);
+        return body();
+      }, options);
+    },
+  });
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /new observer/);
+  assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
+  assert.deepEqual(report.removed.sort(), ["r2", "r3", "r4"]);
+});
+
+test("a receipt reader that switches artifacts during GC preparation keeps its newly named cache", async t => {
+  const f = await gcFixture(t);
+  f.receipt("reader", f.builds[13]!, 40);
+  let acquisitions = 0;
+  const report = await gc(f.home, { ...f.dependencies,
+    listRuns: async () => [{ name: "feature", dagRunId: "reader", statusLabel: "failed" }],
+    async withFileLock<T>(path: string, body: () => Promise<T>, options?: { timeoutMs?: number }) {
+      return f.dependencies.withFileLock!(path, async () => {
+        if (path.endsWith("/.state.lock") && ++acquisitions === 2) f.receipt("reader", f.builds[0]!, 40);
+        return body();
+      }, options);
+    },
+  });
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /possible reader feature\/reader new or changed receipt/);
+  assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
+  assert.deepEqual(report.removed.sort(), ["r2", "r3", "r4"]);
+});
+
+test("a receipt published during GC preparation keeps its cache without a Dagu list change", async t => {
+  const f = await gcFixture(t);
+  let acquisitions = 0, requests = 0, locked = false;
+  const report = await gc(f.home, { ...f.dependencies,
+    async listRuns() {
+      assert.equal(locked, false, "the prepared list is never refreshed under the station lock");
+      requests++;
+      return [{ name: "feature", dagRunId: "new-reader", statusLabel: "succeeded" }];
+    },
+    async withFileLock<T>(path: string, body: () => Promise<T>, options?: { timeoutMs?: number }) {
+      return f.dependencies.withFileLock!(path, async () => {
+        if (!path.endsWith("/.state.lock")) return body();
+        locked = true;
+        try {
+          if (++acquisitions === 2) f.receipt("new-reader", f.builds[0]!, 40);
+          return await body();
+        } finally { locked = false; }
+      }, options);
+    },
+  });
+  assert.equal(requests, 1);
+  assert.match(report.retained.find(entry => entry.version === "r1")!.holders.join(), /new or changed receipt/);
+  assert.ok(existsSync(join(stationRoot(f.home), "r1", "a4s")));
+  assert.deepEqual(report.removed.sort(), ["r2", "r3", "r4"]);
 });
 
 for (const statusLabel of ["waiting", "failed"]) {
@@ -196,7 +256,7 @@ for (const failure of ["transport", "500", "plain404", "html404", "malformed404"
 test("terminal binding outlives its pruned build until authoritative native unknown", async t => {
   const f = await gcFixture(t), path = f.binding("tick", f.builds[0]!);
   t.mock.method(globalThis, "fetch", async () => Response.json({ dagRunDetails: { name: "reconcile", dagRunId: "tick", statusLabel: "succeeded" } }));
-  assert.ok((await gc(f.home, f.dependencies)).removed.includes("r1"));
+  assert.ok((await gc(f.home, { ...f.dependencies, listRuns: async () => [{ name: "reconcile", dagRunId: "tick", statusLabel: "succeeded" }] })).removed.includes("r1"));
   assert.ok(existsSync(path));
   t.mock.method(globalThis, "fetch", async () => Response.json({ code: "not_found", message: "dag-run ID tick not found for DAG reconcile" }, { status: 404 }));
   await gc(f.home, f.dependencies);

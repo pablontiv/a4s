@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
@@ -11,6 +11,8 @@ import { stationRoot, stationTransaction, writeJsonDurable } from "@a4s/launcher
 import { leaseSelection, stationSelection } from "../../loader/src/station.ts";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 import { deferred, inProcessLock } from "./fixtures/state-lock.ts";
+import { inventoryStation } from "@a4s/launcher/station-inventory";
+import { gcFixture } from "./fixtures/cache-gc.ts";
 
 test("listing, acquisition and verification stay outside the station lock for every activation path", async t => {
   const f = stationFixture(t), old = await f.release("r1"), next = await f.release("r2");
@@ -146,7 +148,7 @@ for (const operation of ["initialization", "promotion", "rollback"] as const) {
 }
 
 for (const source of ["receipt", "SQLite", "SQLite WAL"] as const) {
-  test(`a ${source} stat change after inventory aborts promotion before commit`, async t => {
+  test(`a ${source} schema change after inventory aborts promotion before commit`, async t => {
     const f = stationFixture(t), old = await f.release("r1"), next = await f.release("r2");
     await initializeStation(f.home, old, f.dependencies);
     const before = f.stateBytes(), directory = join(f.root, "repo", ".git", "dagu-feature"), run = join(directory, "runs", "old");
@@ -168,7 +170,7 @@ for (const source of ["receipt", "SQLite", "SQLite WAL"] as const) {
         releases: async () => [next], listRuns: async () => [{ name: "feature", dagRunId: "old", statusLabel: "succeeded" }],
         async withFileLock<T>(path: string, body: () => Promise<T>) {
           if (path.endsWith("/.state.lock") && ++acquisitions === 2) {
-            if (source === "receipt") writeFileSync(join(run, "receipt.json"), `${JSON.stringify(receipt)}\n\n`);
+            if (source === "receipt") writeJsonDurable(join(run, "receipt.json"), { ...receipt, schemaVersion: 99 });
             else if (writer) writer.exec("PRAGMA user_version=2");
             else {
               const db = new DatabaseSync(database);
@@ -184,15 +186,72 @@ for (const source of ["receipt", "SQLite", "SQLite WAL"] as const) {
   });
 }
 
-test("a reader published and released during inventory invalidates promotion before commit", async t => {
+test("a reader published and released during inventory does not invalidate promotion", async t => {
   const f = stationFixture(t), old = await f.release("r1"), next = await f.release("r2");
   await initializeStation(f.home, old, f.dependencies);
-  mkdirSync(join(stationRoot(f.home), "leases"));
-  const before = f.stateBytes(), prepared = prepareLease(old, 0, "plugin", "concurrent observer");
-  await assert.rejects(promote(f.home, { ...f.dependencies, releases: async () => [next], async inventory() {
+  const prepared = prepareLease(old, 0, "plugin", "concurrent observer");
+  const report = await promote(f.home, { ...f.dependencies, releases: async () => [next], async inventory() {
     await stationTransaction(f.home, async () => createLeaseLocked(f.home, prepared), f.dependencies);
     rmSync(join(stationRoot(f.home), "leases", `${prepared.id}.json`));
     return { formats: {}, references: [], expiredBindings: [] };
-  } }), /Station references changed during promotion preparation/);
-  assert.equal(f.stateBytes(), before);
+  } });
+  assert.equal(report.promoted, true);
+  assert.equal(f.state().current.version, "r2");
 });
+
+for (const operation of ["promotion", "rollback", "GC"] as const) {
+  test(`${operation} converges during repeated observer lease and runtime churn`, async t => {
+    const f = operation === "GC" ? await gcFixture(t) : stationFixture(t);
+    let next: Awaited<ReturnType<typeof f.release>> | undefined;
+    if (operation !== "GC") {
+      const old = await f.release("r1");
+      next = await f.release("r2");
+      await initializeStation(f.home, old, f.dependencies);
+      if (operation === "rollback") await promote(f.home, { ...f.dependencies, releases: async () => [next!] });
+    }
+    const current = f.state().current, primary = join(f.root, "repo"), directory = join(primary, ".git", "dagu-feature");
+    const run = join(directory, "runs", "watched");
+    mkdirSync(run, { recursive: true });
+    writeJsonDurable(join(run, "receipt.json"), { schemaVersion: 2, artifact: current,
+      initial: { admittedAt: "2026-10-01T00:00:00Z" }, runReceipt: { dag: "feature", run: "watched" } });
+    const writer = new DatabaseSync(join(f.home, "role-jobs.sqlite"));
+    writer.exec("PRAGMA journal_mode=WAL; PRAGMA user_version=1; CREATE TABLE jobs(document TEXT, result TEXT)");
+    t.after(() => writer.close());
+    const entered = Array.from({ length: 4 }, deferred), release = Array.from({ length: 4 }, deferred);
+    const { inventory: _, ...base } = f.dependencies;
+    const inputs = { ...base, primaries: () => [primary], gitPath: () => directory, configVersion: () => 2,
+      listRuns: async () => [{ name: "feature", dagRunId: "watched", statusLabel: "running" }], releases: async () => [next!] };
+    const dependencies = { ...inputs, async inventory(home: string) {
+      for (let poll = 0; poll < entered.length; poll++) {
+        entered[poll]!.resolve();
+        await release[poll]!.promise;
+      }
+      return inventoryStation(home, inputs, true, true);
+    } };
+    const pending = operation === "promotion" ? promote(f.home, dependencies) : operation === "rollback" ? rollback(f.home, dependencies) : gc(f.home, dependencies);
+    try {
+      for (let poll = 0; poll < entered.length; poll++) {
+        await entered[poll]!.promise;
+        const lease = prepareLease(current, f.state().generation, "engine", `observer poll ${poll}`);
+        await stationTransaction(f.home, async () => createLeaseLocked(f.home, lease), dependencies);
+        rmSync(join(stationRoot(f.home), "leases", `${lease.id}.json`));
+        writeJsonDurable(join(run, "ci-observation.json"), { poll });
+        writeJsonDurable(join(run, "ci-no-progress.json"), { count: poll });
+        const result = writer.prepare("INSERT INTO jobs VALUES (?,NULL)").run(JSON.stringify({
+          schemaVersion: 1, binding: { repo: primary, run: "watched", dag: "feature" }, poll,
+        }));
+        writer.prepare("UPDATE jobs SET result=? WHERE rowid=?").run('{"schemaVersion":1}', result.lastInsertRowid);
+        release[poll]!.resolve();
+      }
+      const report = await pending;
+      if (operation === "GC") {
+        assert.ok("removed" in report);
+        assert.deepEqual(report.removed.sort(), ["r1", "r2", "r3", "r4"]);
+      } else assert.equal(f.state().current.version, operation === "promotion" ? "r2" : "r1");
+      assert.equal(writer.prepare("PRAGMA user_version").get()!.user_version, 1);
+    } finally {
+      for (const gate of release) gate.resolve();
+      await pending.catch(() => {});
+    }
+  });
+}

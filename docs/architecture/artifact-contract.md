@@ -257,26 +257,78 @@ prepares the exact artifact, then reacquires the lock to reject changed station
 state/receipts and confirm the verified cache record still exists before publishing
 state or a lease. GC cannot delete an entry between that final check and publication.
 A changed selection fails closed with a retry diagnostic; it never commits stale state.
-Inventory and live-reader analysis also run outside the lock. Before reading
-inventory, the caller captures its inputs: registered primaries; Git HEAD/ref,
-index and config file metadata; receipt/run-directory listings and file metadata;
-SQLite database, WAL, SHM and journal metadata; and the Dagu run-list set of
-`(dag, runId, status)`. File proofs include size, nanosecond mtime/ctime and inode.
-Initialization, promotion and rollback re-capture and compare this proof under
-the lock, together with station state and lease/tick stamps, before committing.
-GC makes the same comparison before **each** cache detach and before reference
-cleanup. Any changed input aborts with a retryable `ESTALE` diagnostic, so the next
-tick inventories afresh instead of committing stale formats or deleting a reader.
+Full inventory and process probes run outside the lock. Before inventory reads,
+the caller captures only inputs needed to bind committed config decoding:
+registered primaries and Git HEAD/ref, index and config file metadata. File proofs
+include size, nanosecond mtime/ctime and inode. Initialization, promotion and
+rollback compare that config proof and the station envelope before committing;
+GC repeats those checks before **each** cache detach and reference cleanup.
+A changed config or station selection aborts with a retry diagnostic.
 
-The locked proof uses only Dagu's aggregate list endpoints, never per-run detail
-or spec requests, Git subprocesses, artifact restoration or executable hashing.
-Its one-second total recheck deadline covers all list pages and local stat work;
-an unavailable or slow scheduler causes a retry, not an extended lock hold.
-GC keeps an artifact named by a receipt unless the data in hand verifies its run
+The locked phase re-derives compatibility and retention from current small
+lease/tick records, receipt artifact/schema/contract fields, and SQLite `user_version`
+and payload schema/open-binding fields. Dagu's aggregate summaries are prepared
+outside the lock and reused, not polled during the recheck.
+SQLite reads include committed WAL changes. Directory/file timestamps for runtime
+receipts and database sidecars are not decision inputs: compatible observer lease
+churn, CI observation/counter rewrites and ordinary role-job claims/completions
+must not prevent station operations from converging. New or changed leases are
+possible readers; only unchanged records already proved dead outside the lock may
+be ignored or collected. A newly referenced GC candidate is retained while
+unrelated collection proceeds. Promotion and rollback keep their existing reader
+eligibility rules while re-deriving formats, receipts, jobs and live leases;
+incompatible changed inputs fail with retryable `ESTALE`. Conservative retention
+of unlisted receipts after the admission window is a GC rule, not an additional
+compatibility gate on promotion. Initialization and rollback retain their existing
+no-native-run inventory policy.
+
+Receipt inode, size and nanosecond mtime/ctime tuples are only cache-refresh hints,
+not conflict checks. The unlocked scan prepares compact parsed decision fields.
+Each locked recheck refreshes directory listings, reuses fields for unchanged
+receipts, re-parses new or rewritten receipts and drops removed readers. In steady
+state only receipts rewritten during the preparation window are parsed under the
+lock. Observation files outside receipts are ignored. A large re-parse set must
+fail closed within the same budget rather than hold the lock until it finishes.
+
+Re-derivation performs no HTTP, Git subprocesses, artifact restoration or executable
+hashing. Its one-second total budget covers local decision reads and checks before
+mutation. An unavailable scheduler aborts unlocked preparation; a slow local recheck
+causes a retry, not an extended lock hold. An unlisted tick is a possible reader
+unless its unchanged record was proved natively unknown during unlocked preparation.
+For GC, new or changed tick bindings are readers even if the prepared run was terminal.
+GC keeps an artifact named by a receipt unless the prepared data verifies its run
 terminal (or its admission has been explicitly released). Missing runs and
 failed/aborted/partially-succeeded runs that might have pending resumes remain
-possible readers even after the five-minute admission window. A retained cache
-is preferable to deleting a live reader's only copy.
+possible readers even after the five-minute admission window. Every new or changed
+receipt during preparation is a possible reader regardless of the prepared run
+status, including across subsequent rechecks in the same GC operation.
+
+This unlocked-list rule relies on normal launcher acquisition paths publishing a
+receipt, tick binding or lease under `stationTransaction` before use:
+admission (`packages/issue-lifecycle/src/admission.ts`), `leaseRun`/`invokeRun`
+(`packages/issue-lifecycle/src/run-artifact.ts`), tick and role-job selection
+(`packages/launcher/src/select.ts`), station-shell
+(`packages/launcher/src/station-shell.ts`) and loader imports
+(`packages/loader/src/station.ts`). Role dispatch uses `invokeRun`; its awaited
+child stays within the parent lease's lifetime. Every acquisition checks
+`assertCachedArtifactPresent` before publishing its reference in the same lock.
+Read-only artifact restoration/verification can precede that acquisition, but a
+cache disappearing in that window prevents execution rather than selecting a
+different build.
+
+Residual: Dagu may retry a run that was terminal-succeeded in the prepared list
+without republishing its existing receipt or acquiring a lease first. GC can then
+remove that run's otherwise-unreferenced cache. A supported subsequent invocation
+may restore the exact verified artifact before leasing it; if it remains missing
+at acquisition, `assertCachedArtifactPresent` fails closed before spawn/import.
+The OMP mutation guard (`packages/issue-lifecycle/src/triage/run-guard.ts`) verifies
+an existing receipt and rewrites directly to its cached `run --artifact`, without
+acquiring a fresh lease. It shares this terminal-success retry window; an
+executable removed before shell launch fails to start rather than selecting a
+different build. Native retries bypassing launcher acquisition have the same
+fresh-reference limitation. Failed, aborted, partial and unknown runs are not
+subject to this terminal-success assumption: their receipts retain the cache.
+A retained cache is preferable to deleting a possible reader's only copy.
 
 Every launcher `gh` metadata/checksum call has a 15-second timeout; the archive
 transfer has a five-minute timeout. Expiry kills the child with `SIGKILL` and

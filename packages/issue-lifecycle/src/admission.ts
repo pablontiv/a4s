@@ -228,7 +228,7 @@ async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean,
   });
   // Enqueue can block or be ambiguous. Keep the lease through payload exit,
   // not merely enqueue completion; only GC's dead-or-reused probe frees it.
-  // Concurrent inventory must recheck its reader stamp after this lease publishes.
+  // Concurrent inventory must re-derive its readers after this lease publishes.
   return await use(selected);
 }
 /** Internal explicit-artifact admission. Root CLI admission always hands off first. */

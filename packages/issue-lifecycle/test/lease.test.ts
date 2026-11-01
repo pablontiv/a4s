@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectDeadLeases, selectStationBuild } from "@a4s/launcher/lease";
+import { collectDeadLeases, createLeaseLocked, prepareLease, selectStationBuild } from "@a4s/launcher/lease";
 import { probeProcess } from "@a4s/launcher/process-identity";
 import { initializeStation, gc, promote } from "@a4s/launcher/station";
 import { stationRoot } from "@a4s/launcher/station-state";
@@ -20,6 +20,33 @@ test("selection leases the exact generation and artifact while holding the state
   assert.ok(existsSync(path));
   assert.equal(await collectDeadLeases(f.home, { ...f.dependencies, probe: () => "dead-or-reused" }), 1);
   assert.equal(existsSync(path), false);
+});
+
+test("dead-lease collection tolerates new observers and preserves records changed after probing", async t => {
+  const f = stationFixture(t), artifact = await f.release("r1");
+  await initializeStation(f.home, artifact, f.dependencies);
+  const expired = await selectStationBuild(f.home, "plugin", "expired observer", f.dependencies);
+  const changed = await selectStationBuild(f.home, "plugin", "changed observer", f.dependencies);
+  const observer = prepareLease(artifact, 0, "plugin", "new observer");
+  const path = (id: string) => join(stationRoot(f.home), "leases", `${id}.json`);
+  let locked = false;
+  const collected = await collectDeadLeases(f.home, { ...f.dependencies,
+    probe: () => { assert.equal(locked, false); return "dead-or-reused"; },
+    async withFileLock(lock, body) {
+      return f.dependencies.withFileLock!(lock, async () => {
+        locked = true;
+        try {
+          createLeaseLocked(f.home, observer);
+          writeFileSync(path(changed.id), JSON.stringify({ ...changed, generation: changed.generation + 1 }));
+          return await body();
+        } finally { locked = false; }
+      });
+    },
+  });
+  assert.equal(collected, 1);
+  assert.equal(existsSync(path(expired.id)), false);
+  assert.ok(existsSync(path(changed.id)));
+  assert.ok(existsSync(path(observer.id)));
 });
 
 test("unknown probe aborts all cleanup, including a previously observed dead lease", async t => {

@@ -102,17 +102,6 @@ export async function stationTransaction<T>(home: string, body: () => Promise<T>
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   return (dependencies.withFileLock ?? withFileLockAsync)(lock, body);
 }
-/** Lease and tick records are immutable. Directory change times also detect a
- * reader that was published and released entirely during slow inventory work. */
-export function referenceStamp(home: string): string {
-  return ["leases", "ticks"].map(name => {
-    const path = join(stationRoot(home), name);
-    const stat = lstatSync(path, { bigint: true, throwIfNoEntry: false });
-    if (!stat) return "missing";
-    if (!stat.isDirectory() || realpathSync(path) !== path) throw new Error(`Station runtime directory must not contain symlinks: ${path}`);
-    return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}`;
-  }).join("/");
-}
 /** Atomic rename publishes a complete envelope; advisory readers need no lock or repair. */
 export async function readStationState(home: string): Promise<StationState> {
   const root = stationRoot(home);

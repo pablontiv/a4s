@@ -5,9 +5,9 @@ import { isDeepStrictEqual } from "node:util";
 import { inspectArtifact, ensureArtifact, assertCachedArtifactPresent, artifactLock, type CachedArtifact } from "./artifact-cache.ts";
 import { assertIdentityContracts, assertReadCoverage, formatSupport } from "./artifact-support.ts";
 import { artifactToken, github, releaseRepository, resolveRelease, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
-import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, referenceStamp, readStationState, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
-import { readLeases, type LeaseDependencies } from "./lease.ts";
-import { inventoryStation, captureInventoryInputs, assertInventoryInputsCurrent, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
+import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, readStationState, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
+import { readLeases, recheckLeases, type BuildLease, type LeaseDependencies } from "./lease.ts";
+import { inventoryStation, captureInventoryInputs, recheckInventory, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
 import { withFileLockAsync } from "./file-lock.ts";
 import { isRecord } from "./type-guard.ts";
 import { SHARED_FORMATS, type ArtifactSupport } from "./contracts.ts";
@@ -37,8 +37,8 @@ async function publishedReleases(): Promise<ReleaseCandidate[]> {
   }
   return releases;
 }
-function mergeInventory(state: StationState, inventory: StationInventory): PersistedFormats {
-  return Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...state.formats[name], ...(inventory.formats[name] ?? [])])].sort((a, b) => a - b)])) as PersistedFormats;
+function mergeInventory(formats: PersistedFormats, inventory: StationInventory): PersistedFormats {
+  return Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...formats[name], ...(inventory.formats[name] ?? [])])].sort((a, b) => a - b)])) as PersistedFormats;
 }
 /** Live-reader checks never execute the reader: a broken current must not disable rollback. */
 function readerSupport(home: string, tuple: ArtifactTuple): ArtifactSupport {
@@ -48,19 +48,30 @@ function readerSupport(home: string, tuple: ArtifactTuple): ArtifactSupport {
   assertIdentityContracts(declared, !tuple.version.startsWith("r"));
   return formatSupport(declared.support);
 }
-function liveReferences(home: string, inventory: StationInventory, dependencies: StationDependencies): { references: BuildReference[]; dead: string[] } {
-  const leases = readLeases(home, dependencies);
-  return { references: [...inventory.references, ...leases.live.map(lease => ({ artifact: lease.artifact,
-    holder: `${lease.kind} lease holder pid=${lease.pid} generation=${lease.generation} ${lease.holder}${lease.kind === "plugin" ? "; restart OMP" : ""}` }))], dead: leases.dead };
+function liveReferences(inventory: StationInventory, leases: BuildLease[]): BuildReference[] {
+  return [...inventory.references, ...leases.map(lease => ({ artifact: lease.artifact,
+    holder: `${lease.kind} lease holder pid=${lease.pid} generation=${lease.generation} ${lease.holder}${lease.kind === "plugin" ? "; restart OMP" : ""}` }))];
 }
-interface StationSnapshot { state: StationState; stamp: string }
-function snapshotStation(home: string, dependencies: StationDependencies): Promise<StationSnapshot> {
-  return stationTransaction(home, async () => ({ state: readStateLocked(home, dependencies), stamp: referenceStamp(home) }), dependencies);
+function assertReaders(home: string, support: ArtifactSupport, formats: PersistedFormats, references: BuildReference[]): void {
+  assertReadCoverage(support, formats);
+  const checked = new Set<string>();
+  for (const reference of references) {
+    const token = artifactToken(reference.artifact);
+    if (checked.has(token)) continue;
+    checked.add(token);
+    try { assertReadCoverage(readerSupport(home, reference.artifact), {}, support); }
+    catch (error) { throw new Error(`Blocking reader ${reference.holder} build=${reference.artifact.version}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
 }
-function recheckStation(home: string, snapshot: StationSnapshot, operation: string, dependencies: StationDependencies): StationState {
+function changedDecision(operation: string, error: unknown): Error {
+  return Object.assign(new Error(`Station inventory inputs changed during ${operation} preparation; retry: ${error instanceof Error ? error.message : String(error)}`), { code: "ESTALE", cause: error });
+}
+function snapshotStation(home: string, dependencies: StationDependencies): Promise<StationState> {
+  return stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+}
+function recheckStation(home: string, snapshot: StationState, operation: string, dependencies: StationDependencies): StationState {
   const state = readStateLocked(home, dependencies);
-  if (!isDeepStrictEqual(state, snapshot.state)) throw new Error(`Station changed during ${operation} preparation; retry`);
-  if (referenceStamp(home) !== snapshot.stamp) throw new Error(`Station references changed during ${operation} preparation; retry`);
+  if (!isDeepStrictEqual(state, snapshot)) throw new Error(`Station changed during ${operation} preparation; retry`);
   return state;
 }
 export async function initializeStation(home: string, current: ArtifactTuple, dependencies: StationDependencies = {}): Promise<StationState> {
@@ -68,27 +79,30 @@ export async function initializeStation(home: string, current: ArtifactTuple, de
   const cached = await (dependencies.inspect ?? inspectArtifact)(home, current);
   if (!sameArtifact(cached.record, current)) throw new Error("Initialization verification returned a different tuple");
   assertLauncher(cached.identity);
-  const stamp = await stationTransaction(home, async () => {
+  await stationTransaction(home, async () => {
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
-    return referenceStamp(home);
   }, dependencies);
-  const inputs = await captureInventoryInputs(home, dependencies, false);
-  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
+  const inputs = await captureInventoryInputs(home, dependencies);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false, false, { receiptCache: inputs.receiptCache }));
   const support = formatSupport(cached.identity.support);
-  const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
-  assertReadCoverage(support, formats);
+  const preparedFormats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
+  assertReadCoverage(support, preparedFormats);
+  const leases = readLeases(home, dependencies);
   return stationTransaction(home, async () => {
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
-    if (referenceStamp(home) !== stamp) throw new Error("Station references changed during initialization preparation; retry");
-    await assertInventoryInputsCurrent(home, inputs, "initialization", dependencies, false);
+    const decision = await recheckInventory(home, inputs, inventory, "initialization", dependencies, { includeRuns: false });
+    const formats = mergeInventory(preparedFormats, decision);
+    try { assertReaders(home, support, formats, liveReferences(decision, recheckLeases(home, leases).live)); }
+    catch (error) { throw changedDecision("initialization", error); }
     assertCachedArtifactPresent(home, cached);
+    decision.checkDeadline();
     const state: StationState = { schema: 1, generation: 0, current, previous: current, rejected: [], formats };
     commitStateLocked(home, state, dependencies);
     return state;
   }, dependencies);
 }
 export async function promote(home: string, dependencies: StationDependencies = {}): Promise<PromotionReport> {
-  const observed = await snapshotStation(home, dependencies), snapshot = observed.state;
+  const snapshot = await snapshotStation(home, dependencies);
   let floor = releaseOrdinal(snapshot.current.version);
   for (const rejected of snapshot.rejected) if (releaseOrdinal(rejected) > floor) floor = releaseOrdinal(rejected);
   const releases = await (dependencies.releases ?? publishedReleases)();
@@ -114,33 +128,30 @@ export async function promote(home: string, dependencies: StationDependencies = 
       skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
       continue;
     }
-    // Full inventory stays outside the state lock. Its complete input proof,
-    // not only leases/ticks, must still match at publication.
+    // Preparation may overlap ordinary observer activity. Only the final
+    // decision, re-derived from current readers and schemas, authorizes commit.
     const inputs = await captureInventoryInputs(home, dependencies);
-    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
-    const { references } = liveReferences(home, inventory, dependencies);
-    references.push({ artifact: snapshot.current, holder: "post-promotion previous" });
-    const readers = references.map(reference => ({ ...reference, support: readerSupport(home, reference.artifact) }));
-    const formats = mergeInventory(snapshot, inventory);
+    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, true, false, { receiptCache: inputs.receiptCache }));
+    const leases = readLeases(home, dependencies), formats = mergeInventory(snapshot.formats, inventory);
     const support = formatSupport(cached.identity.support);
     try {
-      assertReadCoverage(support, formats);
-      for (const reader of readers) {
-        try { assertReadCoverage(reader.support, {}, support); }
-        catch (error) { throw new Error(`Blocking reader ${reader.holder} build=${reader.artifact.version}: ${error instanceof Error ? error.message : String(error)}`); }
-      }
+      assertReaders(home, support, formats, [...liveReferences(inventory, leases.live), { artifact: snapshot.current, holder: "post-promotion previous" }]);
     } catch (error) {
       skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
       continue;
     }
     const result = await stationTransaction(home, async () => {
-      const state = recheckStation(home, observed, "promotion", dependencies);
-      await assertInventoryInputsCurrent(home, inputs, "promotion", dependencies);
+      const state = recheckStation(home, snapshot, "promotion", dependencies);
+      const decision = await recheckInventory(home, inputs, inventory, "promotion", dependencies);
+      const currentFormats = mergeInventory(formats, decision);
+      try { assertReaders(home, support, currentFormats, [...liveReferences(decision, recheckLeases(home, leases).live), { artifact: state.current, holder: "post-promotion previous" }]); }
+      catch (error) { throw changedDecision("promotion", error); }
       try { assertCachedArtifactPresent(home, cached); }
       catch (error) { return error instanceof Error ? error.message : String(error); }
+      decision.checkDeadline();
       // Commit errors must not be mistaken for a skipped candidate.
       const next: StationState = { ...state, current: { version: release.version, commit: release.commit, digest: release.digest }, previous: state.current,
-        generation: state.generation + 1, formats: activatedFormats(formats, support) };
+        generation: state.generation + 1, formats: activatedFormats(currentFormats, support) };
       commitStateLocked(home, next, dependencies);
       return { current: next.current, promoted: true, skipped };
     }, dependencies);
@@ -151,31 +162,36 @@ export async function promote(home: string, dependencies: StationDependencies = 
 }
 /** Stable-launcher-owned operation: never imports or executes the current payload. */
 export async function rollback(home: string, dependencies: StationDependencies = {}): Promise<StationState> {
-  const observed = await snapshotStation(home, dependencies), snapshot = observed.state;
+  const snapshot = await snapshotStation(home, dependencies);
   const target = snapshot.previous;
   const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
   assertLauncher(cached.identity);
-  const inputs = await captureInventoryInputs(home, dependencies, false);
-  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
-  const formats = mergeInventory(snapshot, inventory);
-  assertReadCoverage(formatSupport(cached.identity.support), formats);
+  const inputs = await captureInventoryInputs(home, dependencies);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false, false, { receiptCache: inputs.receiptCache }));
+  const formats = mergeInventory(snapshot.formats, inventory), support = formatSupport(cached.identity.support);
+  const leases = readLeases(home, dependencies);
+  assertReaders(home, support, formats, liveReferences(inventory, leases.live));
   return stationTransaction(home, async () => {
-    const state = recheckStation(home, observed, "rollback", dependencies);
-    await assertInventoryInputsCurrent(home, inputs, "rollback", dependencies, false);
+    const state = recheckStation(home, snapshot, "rollback", dependencies);
+    const decision = await recheckInventory(home, inputs, inventory, "rollback", dependencies, { includeRuns: false });
+    const currentFormats = mergeInventory(formats, decision);
+    try { assertReaders(home, support, currentFormats, liveReferences(decision, recheckLeases(home, leases).live)); }
+    catch (error) { throw changedDecision("rollback", error); }
     if (!sameArtifact(cached.record, target)) throw new Error("Rollback verification returned a different tuple");
     assertCachedArtifactPresent(home, cached);
     if (sameArtifact(state.current, target)) return state;
-    const next: StationState = { ...state, current: target, previous: target, rejected: [...new Set([...state.rejected, state.current.version])], generation: state.generation + 1, formats };
+    decision.checkDeadline();
+    const next: StationState = { ...state, current: target, previous: target, rejected: [...new Set([...state.rejected, state.current.version])], generation: state.generation + 1, formats: currentFormats };
     commitStateLocked(home, next, dependencies);
     return next;
   }, dependencies);
 }
 export interface GcReport { removed: string[]; retained: Array<{ version: string; holders: string[] }> }
 export async function gc(home: string, dependencies: StationDependencies = {}): Promise<GcReport> {
-  const observed = await snapshotStation(home, dependencies), state = observed.state;
+  const state = await snapshotStation(home, dependencies);
   const inputs = await captureInventoryInputs(home, dependencies);
-  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, true, true));
-  const { references, dead } = liveReferences(home, inventory, dependencies);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, true, true, { receiptCache: inputs.receiptCache }));
+  const leases = readLeases(home, dependencies), references = liveReferences(inventory, leases.live);
   const keep = new Map<string, string[]>(), identities = new Map<string, string>();
   const retain = (tuple: ArtifactTuple, holder: string) => {
     const token = artifactToken(tupleFromJson(tuple)), prior = identities.get(tuple.version);
@@ -208,29 +224,37 @@ export async function gc(home: string, dependencies: StationDependencies = {}): 
   const removed: string[] = [];
   for (const entry of entries) if (!keep.has(entry.version)) {
     const trash = join(stationRoot(home), `.gc-${entry.version}-${randomUUID()}`);
+    let detached = false;
     try {
       // Lock order matches preparation: artifact first, then a short state
-      // commit. Recursive deletion happens only after releasing .state.lock.
+      // decision. Recursive deletion happens only after releasing .state.lock.
       await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, tupleFromJson(entry.record)), async () => {
-        await stationTransaction(home, async () => {
-          recheckStation(home, observed, "GC", dependencies);
-          await assertInventoryInputsCurrent(home, inputs, "GC", dependencies);
+        detached = await stationTransaction(home, async () => {
+          recheckStation(home, state, "GC", dependencies);
+          const decision = await recheckInventory(home, inputs, inventory, "GC", dependencies, { conservativeGc: true });
+          for (const reference of liveReferences(decision, recheckLeases(home, leases).live)) retain(reference.artifact, reference.holder);
+          if (keep.has(entry.version)) return false;
           if (!lstatSync(entry.path).isDirectory() || !isDeepStrictEqual(readJsonFile(join(entry.path, "artifact.json")), entry.record)) throw new Error(`Cache build changed during GC preparation: ${entry.version}`);
+          decision.checkDeadline();
           renameSync(entry.path, trash);
+          return true;
         }, dependencies);
-        rmSync(trash, { recursive: true });
+        if (detached) rmSync(trash, { recursive: true });
       }, { timeoutMs: 0 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
       keep.set(entry.version, [`artifact lock busy: ${error instanceof Error ? error.message : String(error)}`]);
       continue;
     }
-    removed.push(entry.version);
+    if (detached) removed.push(entry.version);
   }
   await stationTransaction(home, async () => {
-    recheckStation(home, observed, "GC", dependencies);
-    await assertInventoryInputsCurrent(home, inputs, "GC", dependencies);
-    for (const path of [...dead, ...inventory.expiredBindings]) rmSync(path, { force: true });
+    recheckStation(home, state, "GC", dependencies);
+    const decision = await recheckInventory(home, inputs, inventory, "GC", dependencies, { conservativeGc: true });
+    const { dead } = recheckLeases(home, leases);
+    decision.checkDeadline();
+    for (const lease of dead) rmSync(join(stationRoot(home), "leases", `${lease.id}.json`), { force: true });
+    for (const path of decision.expiredBindings) rmSync(path, { force: true });
   }, dependencies);
   return { removed, retained: [...keep].map(([version, holders]) => ({ version, holders })) };
 }
