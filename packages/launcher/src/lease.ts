@@ -25,7 +25,9 @@ export function readLeasesLocked(home: string, dependencies: LeaseDependencies =
         !Number.isSafeInteger(lease.pid) || Number(lease.pid) < 1 || typeof lease.processStartedAt !== "string" || !lease.processStartedAt ||
         !Number.isSafeInteger(lease.generation) || Number(lease.generation) < 0 || !["launcher", "plugin", "engine"].includes(String(lease.kind)) || typeof lease.holder !== "string") throw new Error(`Invalid lease ${name}`);
     tupleFromJson(lease.artifact);
-    const result: ProcessProbe = lease.host === hostname() ? (dependencies.probe ?? probeProcess)(Number(lease.pid), lease.processStartedAt) : "unknown";
+    // The station lease store is local. Hostnames are diagnostic labels, not
+    // stable identities: a rename must not override the PID/start (and boot) probe.
+    const result: ProcessProbe = (dependencies.probe ?? probeProcess)(Number(lease.pid), lease.processStartedAt);
     if (result === "unknown") throw new Error(`Lease identity unknown: pid=${lease.pid} generation=${lease.generation}; no collection or promotion`);
     if (result === "dead-or-reused") dead.push(join(directory, name));
     else live.push(lease as unknown as BuildLease);

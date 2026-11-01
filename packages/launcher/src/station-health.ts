@@ -1,5 +1,4 @@
 import { closeSync, fstatSync, openSync, readFileSync, readdirSync } from "node:fs";
-import { hostname } from "node:os";
 import { join } from "node:path";
 import { diagnostic, known, observeLocks, unknown, type Observation } from "./health-locks.ts";
 import { probeProcess } from "./process-identity.ts";
@@ -97,7 +96,6 @@ function leases(home: string, probe: typeof probeProcess) {
         const host = text(lease.host, "lease.host"), startedAt = text(lease.processStartedAt, "lease.processStartedAt");
         let liveness: Observation<string>;
         if (!pid.value || !host.value || !startedAt.value) liveness = unknown("Lease identity is incomplete");
-        else if (host.value !== hostname()) liveness = { value: "unknown", reason: "Cross-host lease; local process metadata cannot establish identity" };
         else {
           const result = probe(pid.value, startedAt.value);
           liveness = { value: result, reason: result === "unknown" ? "Local PID/start-time identity could not be read reliably" : null };

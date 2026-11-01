@@ -77,7 +77,8 @@ flowchart LR
 - Use the same default config home or explicit `A4S_SERVICE_ENV` override as the service. Any explicit `DAGU_HOME`, `DAGU_URL` or `DAGU_PORT` in your shell must match the declaration; `a4s service-environment` reports the validated values or field-specific operator actions, including the expected default path when missing. CLI, OMP run guard and status widget share discovery. All clients and fresh DAG snapshots use this source; only the declaration filename has a home fallback, never the service values or port. Fresh snapshots pin the resolved absolute declaration filename. Existing snapshots, receipts, bindings and releases remain unchanged; run-bound helpers reject declaration changes rather than retargeting a run.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Node for the real filesystem gate preload. Kernel advisory locks are native
-  in the compiled release; Python `fcntl` is a source-development fallback only.
+  in the compiled release. Node/tsx tools and Node-hosted loader leases require
+  `python3` with standard-library `fcntl`, checked on the declared service PATH.
 - The tools the repository's gate command needs.
 - The intended station `omp` must resolve on the service and bootstrap PATH.
   a4s launches that binary headlessly with `-p --no-session -e` and the executing
@@ -197,8 +198,11 @@ An explicitly empty, relative, missing or invalid override fails closed without
 trying the default. Supply the same declaration to Dagu's service environment;
 it is not committed consumer workflow policy. Discovery never supplies missing
 JSON fields or expands their values. The declared scheduler PATH must resolve
-`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`; templates hash through the
-release executable (`a4s planning sha256 --file <path>`, Node crypto), so `shasum`
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`.
+Node-hosted clients additionally check `python3` there for `fcntl` locks, while
+compiled Bun engines use libc without Python. This check uses the declaration's
+literal PATH, which admission freezes, not the invoking shell's PATH.
+Templates hash through the release executable (`a4s planning sha256 --file <path>`, Node crypto), so `shasum`
 and `sha256sum` are not required; initial admission
 also needs `a4s`. An interactive shell's PATH neither repairs nor invalidates
 the declared toolchain. Any explicitly selected home/endpoint must match.

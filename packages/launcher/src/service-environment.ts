@@ -4,7 +4,9 @@ import { isAbsolute, join, resolve } from "node:path";
 import { isRecord } from "./type-guard.ts";
 
 export interface ServiceEnvironment { DAGU_URL: string; DAGU_HOME: string; PATH: string }
-export const schedulerTools = ["bash", "git", "gh", "jq", "curl", "node", "omp", "dagu"];
+// Node-hosted lease/lock users need the fcntl helper; compiled Bun uses libc.
+export const schedulerTools = ["bash", "git", "gh", "jq", "curl", "node", "omp", "dagu",
+  ...(!process.versions.bun ? ["python3"] : [])];
 
 function failure(field: string, cause: string): never {
   throw new Error(`service-environment ready=no field=${field} cause=${JSON.stringify(cause)} action=ask-station-operator: supply/correct the operator-owned JSON declaration at $XDG_CONFIG_HOME/a4s/service-environment.json (default ~/.config/a4s/service-environment.json), or select an absolute A4S_SERVICE_ENV override; supply the same DAGU_URL, DAGU_HOME and PATH to Dagu and a4s, then follow the station's safe activation policy`);

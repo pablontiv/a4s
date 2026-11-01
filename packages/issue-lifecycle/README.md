@@ -111,8 +111,11 @@ Required fields are `DAGU_URL` (an unauthenticated HTTP loopback origin), absolu
 infers missing fields from a user home, default port, process table, service
 manager or caller PATH. The operator supplies the same values to Dagu and a4s.
 Any explicitly selected home/endpoint must match. The declared PATH must resolve
-`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`. Templates hash patches
-and results through the release-bound `$A4S_BIN planning sha256 --file <path>`
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`.
+Node-hosted clients also check `python3` on that declared PATH for their
+standard-library `fcntl` locking helper; the caller PATH cannot satisfy it.
+Compiled Bun engines use native locks and do not require Python.
+Templates hash patches and results through the release-bound `$A4S_BIN planning sha256 --file <path>`
 (Node crypto, lowercase hex), so no `shasum`/`sha256sum` is required; bootstrap
 `detect` probes that capability under the declared environment.
 
@@ -261,8 +264,10 @@ blocking exclusive locks, nonblocking exclusive attempts, explicit unlock, and
 descriptor-close release all use the original lock files. Node/tsx development
 and live tests use Python's standard-library `fcntl.flock` on an inherited
 duplicate of the open descriptor; the parent's open file description retains
-the kernel lock after the helper exits. This development branch needs `python3`,
-but the released Bun engine never invokes it. `bin/heavy-slot.py` remains for
+the kernel lock after the helper exits. Node-hosted loader leases use this branch
+too, so the service-environment reader checks `python3` on the declared literal
+PATH before admission; frozen run PATH values are not repaired from the caller.
+The released Bun engine never invokes it. `bin/heavy-slot.py` remains for
 the opt-in `test:live` and `test:compiled` lanes, not default tests. Release
 archives contain the compiled engine, real gate preload files, identity and
 complete OMP assets; they contain neither source executors nor Python helpers.
