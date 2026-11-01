@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import { initializeStation, promote, rollback, gc } from "@a4s/launcher/station";
 import { selectStationBuild } from "@a4s/launcher/lease";
-import { readStationState, stationRoot, validateState } from "@a4s/launcher/station-state";
+import { readStateLocked, readStationState, stationRoot, stationTransaction, validateState } from "@a4s/launcher/station-state";
 import { inventoryStation, listStationRuns } from "@a4s/launcher/station-inventory";
 import { stationFixture } from "./fixtures/station.ts";
 
@@ -16,9 +16,10 @@ for (const point of ["before-rename", "after-rename"] as const) {
     await initializeStation(f.home, old, f.dependencies);
     await assert.rejects(promote(f.home, { ...f.dependencies, releases: async () => [candidate], fault: stage => { if (stage === point) throw new Error("injected crash"); } }), /injected crash/);
     const expected = point === "before-rename" ? old : candidate;
-    const state = await readStationState(f.home, f.dependencies);
+    const state = await readStationState(f.home);
     assert.equal(state.current.version, expected.version);
     assert.equal(state.generation, point === "before-rename" ? 0 : 1);
+    await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies);
     assert.equal(readlinkSync(join(stationRoot(f.home), "current")), expected.version);
     for (const kind of ["launcher", "plugin"] as const) assert.equal((await selectStationBuild(f.home, kind, "atomic reader", f.dependencies)).artifact.version, expected.version);
     const report = await gc(f.home, f.dependencies);
@@ -53,11 +54,11 @@ test("native resources are consumer-visible state-derived links that survive act
   assert.equal(existsSync(join(f.home, ".agents")), false, "DAGU_HOME is not the native skills root");
   rmSync(join(skills, names[0]!));
   rmSync(join(loader, "agents"));
-  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assert.equal((await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies)).current.version, "r1");
   assertResources("r1");
   rmSync(pointer);
   symlinkSync("r999", pointer);
-  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assert.equal((await stationTransaction(f.home, async () => readStateLocked(f.home, f.dependencies), f.dependencies)).current.version, "r1");
   assertResources("r1");
   await promote(f.home, { ...f.dependencies, releases: async () => [next] });
   assertResources("r2");
@@ -78,7 +79,7 @@ test("state schemas, format sets and symlinks fail closed; initialization cannot
   await assert.rejects(selectStationBuild(f.home, "launcher", "schema test", f.dependencies), /reinstall a4s-launch/);
   const other = join(f.root, "other"); mkdirSync(other);
   const home = join(f.root, "linked"); symlinkSync(other, home);
-  await assert.rejects(readStationState(home, f.dependencies), /symlinks/);
+  await assert.rejects(readStationState(home), /symlinks/);
 });
 
 test("cutover inventories legacy and current receipts, committed configs, SQL/payloads and run/checkpoint state", async t => {

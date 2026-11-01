@@ -78,19 +78,26 @@ export interface LockOptions { timeoutMs?: number }
 export async function withFileLockAsync<T>(path: string, body: () => Promise<T>, options: LockOptions = {}): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 10000;
   if (!Number.isFinite(timeoutMs) || timeoutMs < 0) throw new Error("Lock timeout must be nonnegative");
-  const deadline = performance.now() + timeoutMs;
+  const started = performance.now(), deadline = started + timeoutMs;
   const fd = openLock(path);
+  const holders = new Set<string>();
+  const observeHolder = () => {
+    try {
+      const record = readFileSync(path, "utf8").trim();
+      if (record) holders.add(record);
+    } catch { /* Metadata is diagnostic; a concurrent acquisition may replace it. */ }
+  };
   let attempted = false;
   try {
     for (;;) {
       if (attempted && performance.now() >= deadline) {
-        let holder: string;
-        try { holder = readFileSync(path, "utf8").trim() || "unknown (no holder metadata)"; }
-        catch { holder = "unknown (holder metadata unreadable)"; }
-        throw Object.assign(new Error(`Lock acquisition timed out after ${timeoutMs}ms: ${path}; holder=${holder}`), { code: "ETIMEDOUT" });
+        const waitedMs = Math.round(performance.now() - started);
+        throw Object.assign(new Error(`Lock acquisition timed out after ${timeoutMs}ms (waited ${waitedMs}ms): ${path}; observed acquirers=[${[...holders].join(", ")}]; records describe acquisitions, not proof of current ownership`),
+          { code: "ETIMEDOUT", waitedMs, holders: [...holders] });
       }
       attempted = true;
       if (acquireLock(fd, true)) break;
+      observeHolder();
       const remaining = deadline - performance.now();
       if (remaining > 0) await delay(Math.min(25, remaining));
     }

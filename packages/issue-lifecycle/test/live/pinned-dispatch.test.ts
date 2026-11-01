@@ -23,7 +23,7 @@ import { cachePath, inspectArtifact } from "@a4s/launcher/artifact-cache";
 
 function save(f: ReturnType<typeof admissionFixture>, run: string, artifact: ArtifactTuple): void {
   if (!existsSync(join(f.home, "cache/a4s/state.json"))) {
-    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url)), "station", "init", "--artifact", artifactToken(artifact)],
+    execFileSync(process.execPath, ["--import", import.meta.resolve("tsx"), fileURLToPath(import.meta.resolve("@a4s/launcher/cli")), "station", "init", "--artifact", artifactToken(artifact)],
       { cwd: f.packageDir, env: stationEnvironment({ ...process.env, DAGU_HOME: f.home }), stdio: "pipe" });
   }
   const receipt = roleAdmission(f.packageDir, f.home, run, 'env: []\nsteps:\n  - run: \'"$A4S_BIN" role-jobs stage triage\'\n', artifact);
