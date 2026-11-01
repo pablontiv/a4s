@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Render identity-bound snapshot `run` scripts as literal block scalars after the
+  station-shell preamble. Flow styles escaped quotes, so the verbatim
+  `"$A4S_BIN" role-jobs stage implement` text that role dispatch authorizes
+  against disappeared, and every non-PoC feature run failed at `implement`.
 - Add the `primary-guard` extension to the package's OMP registrations and release
   artifacts. It blocks covered tool destinations in a primary Git checkout with
   `PRIMARY_WRITE_BLOCKED`, directing implementation to the feature issue worktree.

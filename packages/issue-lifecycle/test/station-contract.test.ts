@@ -9,7 +9,8 @@ import { exampleConfig } from "../../launcher/src/config.ts";
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { confirmFirstAttempt } from "../../launcher/src/tick-binding.ts";
 import { listStationRuns } from "../../launcher/src/station-inventory.ts";
-import { LIFECYCLE_DAGS, materializeDag } from "../src/materialize.ts";
+import { LIFECYCLE_DAGS, materializeDag, stationScript } from "../src/materialize.ts";
+import { snapshotAuthorizesStage } from "../src/role-dispatch.ts";
 import { readOwners } from "../src/resources.ts";
 import { useDefaultStation, useStation } from "./fixtures/service-environment.ts";
 
@@ -56,6 +57,18 @@ test("every identity-bound lifecycle snapshot uses dynamic shell and tuple witho
     assert.ok(!rendered.includes("/old-cache/a4s"));
     assert.ok(!rendered.includes(home));
   }
+});
+test("identity-bound feature snapshot still authorizes triage and implement dispatch with unchanged scripts", t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s dispatch station "));
+  const restore = useStation(home, "http://127.0.0.1:19643");
+  t.after(() => { restore(); rmSync(home, { recursive: true, force: true }); });
+  const artifact = `1.0.0@${"a".repeat(40)}#${"b".repeat(64)}`;
+  const source = materializeDag(root, "feature.yaml", exampleConfig(), { version: "fixture", source: "fixture", executable: "/release/a4s" });
+  const rendered = materializeDag(root, "feature.yaml", exampleConfig(), { version: "fixture", source: "fixture", artifact });
+  for (const stage of ["triage", "implement"]) assert.ok(snapshotAuthorizesStage(rendered, stage), `${stage} dispatch must stay authorized`);
+  const runs = (text: string) => (parseAllDocuments(text)[0]!.toJSON().steps as Array<{ id: string; run?: string }>)
+    .filter(step => typeof step.run === "string").map(step => [step.id, step.run!] as const);
+  assert.deepEqual(runs(rendered), runs(source).map(([id, run]) => [id, stationScript(run)] as const));
 });
 test("inventory, tick and resource children use the declared station and never the default", async t => {
   const requests: string[] = [];
