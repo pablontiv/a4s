@@ -329,7 +329,7 @@ payload promotion does not reinstall the launcher or repin a DAG.
 export DAGU_HOME="<canonical-station-home>"
 LAUNCHER_ROOT="<verified-extracted-a4s-launch-platform-archive>"
 TUPLE="<version>@<commit>#<archive-sha256>"
-LOADER_ROOT="$DAGU_HOME/cache/a4s/loader"
+LOADER_ROOT="<resolved-A4S_CACHE_HOME>/loader"
 
 # Install once on the service user's PATH, with a4s selecting this launcher.
 install -m 0755 "$LAUNCHER_ROOT/a4s-launch" "$HOME/.local/bin/a4s-launch"
@@ -341,16 +341,10 @@ a4s state
 
 # Review/validate the single `a4s tick` step and minute schedule before installing.
 dagu validate "$LAUNCHER_ROOT/reconcile.yaml"
-# Pin the resolved declaration path: Dagu does not forward A4S_SERVICE_ENV or XDG_CONFIG_HOME.
-case "${XDG_CONFIG_HOME:-}" in
-  /*) CONFIG_HOME=$XDG_CONFIG_HOME ;;
-  *) CONFIG_HOME=$HOME/.config ;;
-esac
-SERVICE_ENV=${A4S_SERVICE_ENV-"$CONFIG_HOME/a4s/service-environment.json"}
-{ printf 'env:\n  - A4S_SERVICE_ENV: %s\n' "$(jq -n --arg v "$SERVICE_ENV" '$v')"
-  cat "$LAUNCHER_ROOT/reconcile.yaml"; } > "$LAUNCHER_ROOT/reconcile.installed.yaml"
-dagu validate "$LAUNCHER_ROOT/reconcile.installed.yaml"
-install -m 0644 "$LAUNCHER_ROOT/reconcile.installed.yaml" "$DAGU_HOME/dags/reconcile.yaml"
+# Configure declaration discovery once in the operator-owned base.yaml env
+# (A4S_SERVICE_ENV or XDG_CONFIG_HOME), not in immutable run snapshots.
+# The stable a4s launcher must stay on the scheduler's executable search path.
+install -m 0644 "$LAUNCHER_ROOT/reconcile.yaml" "$DAGU_HOME/dags/reconcile.yaml"
 # Build from the reviewed source checkout once; loader changes require restart.
 node scripts/build-loader.mjs --outdir "$LOADER_ROOT"
 omp plugin link "$LOADER_ROOT"
@@ -467,20 +461,24 @@ the station's actual absolute paths):
 }
 ```
 
-All three fields are required nonempty strings without NUL or line breaks.
+`DAGU_URL` and `PATH` are required nonempty strings without NUL or line breaks.
 `DAGU_URL` is an unauthenticated HTTP loopback origin (`127.0.0.1`, `localhost`
-or `[::1]`), without credentials, path, query or fragment. `DAGU_HOME` must name
-an existing readable absolute directory. Every colon-separated PATH entry must
-be absolute; empty PATH entries are invalid.
-Field values are literal: no shell expansion, inferred `DAGU_HOME`, port or caller-PATH fallback.
-The declared PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
-`curl`, `node`, `omp` and `dagu`; initial admission also needs `a4s`.
-Node-hosted launcher/loader code additionally requires `python3` for its
-standard-library `fcntl` lock helper, and the same reader checks it on the
-declared PATH, never the caller's PATH. Compiled Bun engines use native locks and
-do not require Python. Admission freezes the literal PATH, so Node-hosted users
-must validate this prerequisite before admission rather than rely on a later
-interactive PATH change.
+or `[::1]`), without credentials, path, query or fragment. Explicit `DAGU_HOME`
+must name an existing readable absolute directory; when omitted it resolves to
+`$XDG_STATE_HOME/a4s/dagu`, or `~/.local/state/a4s/dagu`. Provision the directory
+before use; a4s does not create or retarget a station to repair a declaration.
+Every colon-separated PATH entry must be absolute; empty entries are invalid.
+Values are literal, without shell expansion, port inference or caller-PATH fallback.
+Optional `tools` maps tool names to absolute executable filenames (for example
+`"tools": {"omp": "/opt/omp/bin/omp"}`). Their directories precede the declared
+PATH; conflicting overrides that would shadow one another fail closed.
+The resulting PATH must resolve executable files for `bash`, `git`, `gh`, `jq`,
+`curl`, `node`, `omp` and `dagu`. The stable `a4s` launcher must also be available
+to Dagu. Node-hosted launcher/loader code additionally needs `python3` for its
+standard-library `fcntl` lock helper; compiled Bun engines use native locks.
+Python readiness is checked under the declared PATH, never the caller's PATH.
+Admission hashes required core tool bytes with SHA256; a relocated byte-identical
+tool is compatible, not a changed binary merely reporting the same version.
 Hashing is done by the release executable (`a4s planning sha256 --file`), so no `shasum` or
 `sha256sum` is needed; bootstrap `detect` fails if that probe fails under the
 declared environment. Planning review resolves coordinating transcripts from the
@@ -506,11 +504,12 @@ case "$SERVICE_ENV" in
   /*) ;;
   *) echo "service declaration requires an absolute path" >&2; exit 1 ;;
 esac
-DAGU_URL=$(/opt/station/bin/jq -er '.DAGU_URL' "$SERVICE_ENV")
-DAGU_HOME=$(/opt/station/bin/jq -er '.DAGU_HOME' "$SERVICE_ENV")
-PATH=$(/opt/station/bin/jq -er '.PATH' "$SERVICE_ENV")
-export DAGU_URL DAGU_HOME PATH
-exec /opt/station/bin/dagu start-all
+VALUES=$(/opt/station/bin/a4s service-environment)
+DAGU_URL=$(printf '%s' "$VALUES" | /opt/station/bin/jq -er '.DAGU_URL')
+DAGU_HOME=$(printf '%s' "$VALUES" | /opt/station/bin/jq -er '.DAGU_HOME')
+PATH=$(printf '%s' "$VALUES" | /opt/station/bin/jq -er '.PATH')
+export DAGU_URL DAGU_HOME PATH A4S_SERVICE_ENV
+exec dagu start-all
 ```
 
 Operator-owned systemd service example with an explicit isolated-station override
@@ -540,8 +539,9 @@ Ensure Dagu's own configuration binds the declared loopback endpoint (for this
 example, `host: 127.0.0.1` and `port: 8097`). Also provide `auth.mode: none`,
 `coordinator.enabled: true`, enabled queues, and the consumer lane's named
 global queue. Its positive `max_concurrency` is chosen by the operator, not
-committed consumer config. Engine helpers use the snapshot's absolute `A4S_BIN`;
-Bun and Python are not release runtime dependencies.
+committed consumer config. New snapshots invoke `a4s station-shell`, which resolves
+the pinned artifact's current cache executable after validating station identities.
+Compiled release engines do not require Bun or Python to be separately installed.
 
 Select the same declaration for a4s diagnostics and bootstrap. The shared
 launcher-layer reader is available through both the stable launcher and the
@@ -567,13 +567,22 @@ user-home default; `DAGU_HOME` and `DAGU_URL` must still be declared. Independen
 `DAGU_PORT` URLs are not supported; explicit endpoint, port, or home values that
 conflict with the declaration fail before station access.
 
-This cutover applies only to fresh admissions from new immutable release
-artifacts. Their rendered snapshots retain the normalized endpoint, literal home
-(including spaces), scheduler PATH, and resolved absolute declaration filename.
-Run-bound helpers reject a changed declaration rather than retarget an admitted run. Existing
-releases, snapshots, receipts, run bindings, and installed Dagu/service files
-are never rewritten. Keep the declaration available and unchanged for its
-admitted runs; operator activation remains a separate decision.
+New admissions record the normalized endpoint and filesystem device/inode of the
+station directory, plus SHA256 identities for each required core tool. Immutable
+snapshots carry an artifact tuple, not literal PATH, DAGU_HOME, declaration or
+cache-executable paths. At every shell launch and run mutation, the current
+declaration must resolve to the admitted target and identical tool bytes. Moving
+the same directory is compatible; copying it to another inode or changing its
+endpoint is not. A mismatch names the tool/target and fails before mutation.
+Historic path fields elsewhere in receipts remain immutable diagnostic evidence,
+not the identity of a new station binding.
+
+Provide the same declaration discovery configuration to Dagu's **step** environment,
+not just its service process: operator-owned `base.yaml` `env` can contain
+`A4S_SERVICE_ENV` (explicit absolute filename) or `XDG_CONFIG_HOME`/`HOME` for
+default discovery. Update that configuration if the declaration moves. Keep the
+stable launcher on Dagu's own executable search path; it resolves moving tool/cache
+locations afresh. a4s never rewrites installed service files or historical snapshots.
 
 Exit 1 identifies missing/unreadable/malformed declarations (including the expected
 default filename when absent), the invalid or inconsistent field, missing declared
@@ -585,6 +594,116 @@ bootstrap. a4s cannot create the declaration or repair/reload the service.
 Do not change active/waiting runs, unrelated queues or service definitions to
 make a probe pass. No live-station change or restart window is required to
 implement or test this feature; service activation is a separate operator decision.
+
+### Configurable path inventory
+
+The selected declaration is the single station configuration authority. XDG
+variables apply only when absolute, otherwise their user-home fallback applies.
+
+| Resource | Default / supported override |
+| --- | --- |
+| Declaration | `$XDG_CONFIG_HOME/a4s/service-environment.json`, else `$HOME/.config/a4s/service-environment.json`; absolute `A4S_SERVICE_ENV` overrides |
+| Station state | Declaration `DAGU_HOME`; when omitted `$XDG_STATE_HOME/a4s/dagu`, else `$HOME/.local/state/a4s/dagu`; provision before use |
+| Endpoint | Required declaration `DAGU_URL`; no inferred port or target |
+| Tool executables | Required declaration `PATH`; optional `tools` maps `bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp`, `dagu` (and Node locking `python3`) to absolute executable filenames |
+| Stable `a4s` launcher | Operator install on Dagu's search path, conventionally `$HOME/.local/bin`; never a versioned snapshot path |
+| Cache / launcher state | Declaration `A4S_CACHE_HOME`; with omitted DAGU_HOME, `$XDG_CACHE_HOME/a4s` or `$HOME/.cache/a4s`; with explicit DAGU_HOME and no override, historical `$DAGU_HOME/cache/a4s` |
+| Payload binaries, archives, inventory, bindings, locks, leases, health | Descendants of configured cache root; payload selected by `<version>/<commit>/<digest>` tuple, not a frozen executable path |
+| Loader plugin | Operator `scripts/build-loader.mjs --outdir`, conventionally `<cache>/loader`; plugin registration points there |
+| Dagu config, definitions, history, sockets/logs | `$DAGU_HOME/{config.yaml,base.yaml,dags,data,...}`; subordinate overrides belong to Dagu configuration |
+| Role jobs / heavy slots | `$DAGU_HOME/role-jobs.sqlite`, `$DAGU_HOME/a4s/...` |
+| Consumer primary | `--primary` / checkout; installed lookup uses `$DAGU_HOME/primaries/<workspace>`, `A4S_PRIMARY`, then `$DAGU_HOME/a4s-primary` |
+| Receipts / admitted snapshots / recovery evidence | Consumer git-common-dir `dagu-feature/runs/<run>`; receipt-bound, never retargeted |
+| Feature / PoC work | Consumer git metadata `dagu-feature/runs/<run>`, `poc/runs/<run>` and configured workspace worktrees |
+| Discovery / planning evidence | `$DAGU_HOME/data/{discovery,planning}/<owner>__<repo>/<run>` |
+| OMP profiles / transcripts | `$HOME/.omp`; `PI_CONFIG_DIR` overrides config root, `OMP_PROFILE` / `PI_PROFILE` selects profile, `PI_CODING_AGENT_DIR` overrides default-profile agent directory; coordinating transcript root/session is intentionally recorded at admission |
+| Skill / agent discovery links | `$HOME/.agents/skills` and selected OMP agent directory; targets resolve from configured cache/current artifact |
+| Temporary computations | `$TMPDIR` / OS temporary directory, or git-metadata run computations directory; never a consumer worktree |
+
+Historical source-template/Node/role-store/daguHome/primary/transcript paths remain
+immutable evidence, not new station tool identities. Moving consumer worktrees or
+copying a station inode is not authorized by changing PATH. Move a complete cache
+with its state/archives rather than just the executable.
+
+### Receipt-bound recovery for literal-PATH admissions
+
+Use the **current stable launcher**, not the old cached `A4S_BIN`, with the
+service's declaration selection. Quiesce automatic actors and operator approvals
+for the selected run. No new admission, snapshot replacement or ambient Dagu
+guard bypass is involved.
+
+```sh
+# Supply independently retained original identity evidence, bound to this receipt:
+a4s station-recovery pin --primary <consumer-primary> --run <admitted-run> --evidence <verified-manifest.json>
+# After a harmless PATH edit or byte-identical tool relocation:
+a4s station-recovery check --primary <consumer-primary> --run <admitted-run>
+# Cancel only this quiescent Waiting run at a verified CANCEL checkpoint:
+a4s station-recovery cancel --primary <consumer-primary> --run <admitted-run>
+```
+
+`pin` exclusively creates `station-recovery.json` beside the receipt from the
+operator's independently verified manifest; matching PATH does not establish
+historical identity. The manifest has `schemaVersion: 1`, `receiptDigest`,
+`verifiedAt` (ISO timestamp), nonempty `provenance` describing the retained evidence,
+and `station: {schemaVersion: 1, target: {endpoint, device, inode}, tools:
+{<tool>: {sha256}}}`. Include `bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp`,
+`dagu`, and `python3` for a Node-hosted launcher. Obtain expected hashes from
+independently retained original binaries and verified installation records, not
+today's same-name replacements; target device/inode must come from the original
+station inventory. `receiptDigest` is SHA256 of recursively key-sorted canonical
+JSON of the original receipt with `runReceipt` reduced to its `dag` and `run`.
+The exported launcher helper `receiptBindingDigest` implements this rule; exclude
+only append-only observations/attempt counters, never admission/snapshot fields.
+The operator supplies the manifest path explicitly; there is no ambient default.
+`pin` verifies the supplied hashes and target before copying this receipt-bound
+evidence. It never manufactures a historical baseline from the current PATH.
+Preserve the manifest/provenance, sidecar and original archive/evidence in backups;
+original receipt and snapshot bytes are not rewritten.
+`check` resolves and hashes every required tool. Names, PATH membership and version
+output are not compatibility evidence. Legacy URL and literal home must still
+agree, and the pinned directory must be the same. Missing tools/evidence,
+changed bytes/target, receipt/support mismatch or unverified cache rejects before
+native mutation.
+
+`cancel` supports feature and PoC snapshots only at native **Waiting**, with no
+active/queued/unknown-status nodes and an exact matching retained native spec.
+The waiting human task must offer `CANCEL` and have exactly one direct successor:
+its cancellation gate. Both must exactly match the original verified artifact's
+template. All four gate tools (`bash`, `git`, `jq`, `dagu`) must still resolve to
+the verified bytes on the immutable snapshot's old search path. OMP is not used
+by this gate and may relocate. Sibling waits require the gate's explicit native
+abort contract. Unsupported or older checkpoints fail before any mutation.
+Under a per-run lock, recovery retains the full native pre-transition observation
+(including inputs), writes cancellation evidence, and uses the verified Dagu
+executable to complete only this checkpoint with `CANCEL=yes`. Only the original,
+effect-free cancellation gate resumes; normal work is not retried. The observed
+native `failed` or `aborted` terminal state and evidence location are retained in
+`station-recovery-cancellation.json`; the native completion also retains the
+cancellation input. Feature/PoC handlers receive their normal cancellation marker.
+No materialization, publication or feature enqueue is replayed. A completed repeat
+returns existing evidence without a second mutation. An uncertain/prepared ledger
+refuses automatic retry: inspect native status and retained evidence with an
+operator before resolving the attempt.
+
+**Already drifted without a sidecar:** a literal PATH contains no historical tool
+digest. An independently retained manifest with verified original tool and target
+identities can be pinned directly even after PATH drift; it is checked against
+the current bytes and the original receipt. If only retained original executables
+and installation provenance exist, the operator must independently verify their
+digests and original target inventory before preparing that manifest. Fabricating
+old PATH entries or hashing today's same-name binaries is not historical evidence.
+If original identities or target evidence cannot be recovered and verified, this
+run is **not recoverable through this path**; retain all records and restore a
+genuine operator-verified original station instead. The tool does not infer
+compatibility from names, PATH membership or an operator's declaration alone.
+
+Historical engines still reject literal declaration changes themselves. This
+mechanism does not upgrade or offer arbitrary advancement for an old engine under
+changed PATH: restore its original station to continue, or use supported
+cancellation. Active runs, snapshots without a verified CANCEL checkpoint
+(including planning, discovery and reconciler ticks), copied/moved legacy targets
+and missing native specs fail closed, naming the required operator action.
+Widget/actionable-wait UI is #850.
 
 History retention is operator policy in `$DAGU_HOME/base.yaml`; the retained
 source example uses `hist_retention_days: 30`. The launcher tick DAG declares

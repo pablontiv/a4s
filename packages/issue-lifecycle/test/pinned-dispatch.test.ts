@@ -77,6 +77,23 @@ test("non-mutating commands bypass verification and ambiguous shell mutations fa
   }
 });
 
+test("literal recovery stays at the launcher boundary while ambient and ambiguous mutations remain blocked", async () => {
+  const verify: typeof verifiedRun = async () => { throw new Error("legacy PATH cannot use cached dispatch"); };
+  for (const action of ["pin", "check", "cancel"]) {
+    const command = `a4s station-recovery ${action} --primary '${primary}' --run legacy`;
+    assert.equal(await runMutationDecision({ toolName: "bash", toolCallId: "recovery", input: { command } }, primary, verify), undefined);
+  }
+  for (const command of [
+    `a4s station-recovery cancel --primary '${primary}' --run legacy --unsafe`,
+    `a4s station-recovery advance --primary '${primary}' --run legacy`,
+    `a4s station-recovery cancel --primary '${primary}' --run $(cat run)`,
+    `PRIMARY='${primary}' dagu stop feature --run-id legacy`,
+  ]) {
+    const result = await runMutationDecision({ toolName: "bash", toolCallId: "recovery", input: { command } }, primary, verify);
+    assert.ok(result && "block" in result);
+  }
+});
+
 test("tick scope shares artifact evidence but rereads every receipt and expires with the tick", async () => {
   const previous = process.env; process.env = { ...previous, ...stationEnv(home) };
   const firstPath = save("first"), secondPath = save("second");

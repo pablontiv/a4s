@@ -12,7 +12,7 @@ const quote = (word: string): string => `'${word.replace(/'/g, "'\\''")}'`;
 export async function runMutationDecision(event: Event, cwd = process.cwd(), verify = verifiedRun): Promise<CallDecision> {
   const field = event.toolName === "bash" ? "command" : event.toolName === "eval" ? "code" : undefined;
   const text = field ? event.input[field] : undefined;
-  if (typeof text !== "string" || !/(?:\bdagu[\s"']+(?:human-task|retry|stop)\b|(?:\ba4s|\$\{?A4S_BIN\}?)[\s"']+(?:run|protect|role-jobs|observe|escalation|codeql|poc-scope)\b)/.test(text)) return undefined;
+  if (typeof text !== "string" || !/(?:\bdagu[\s"']+(?:human-task|retry|stop)\b|(?:\ba4s|\$\{?A4S_BIN\}?)[\s"']+(?:station-recovery|run|protect|role-jobs|observe|escalation|codeql|poc-scope)\b)/.test(text)) return undefined;
   try {
     if (event.toolName !== "bash") throw new Error("Use bash with a literal receipt-bound a4s run command for run mutations");
     let syntax = "";
@@ -34,6 +34,13 @@ export async function runMutationDecision(event: Event, cwd = process.cwd(), ver
     let run: string | undefined, primary = env.PRIMARY || process.env.PRIMARY;
     if (file === "dagu") { run = flag("--run-id"); command = ["native", ...command]; }
     else if (file === "a4s") {
+      if (command[0] === "station-recovery") {
+        const withEvidence = command[1] === "pin" && command.length === 8 && command[6] === "--evidence" && !!command[7];
+        if (!(command.length === 6 || withEvidence) || !["pin", "check", "cancel"].includes(command[1] || "") || command[2] !== "--primary" || command[4] !== "--run" || !command[3] || !command[5]) throw new Error("Use a4s station-recovery pin|check|cancel --primary <primary> --run <run> [pin: --evidence <verified-manifest.json>]");
+        // The current launcher verifies the immutable historical receipt itself;
+        // dispatching through its old cached engine would recreate the PATH fault.
+        return undefined;
+      }
       if (command[0] === "run") {
         const separator = command.indexOf("--");
         if (separator < 0) throw new Error("Run dispatch requires -- before its action");

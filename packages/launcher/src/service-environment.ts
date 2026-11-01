@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { isRecord } from "./type-guard.ts";
 
-export interface ServiceEnvironment { DAGU_URL: string; DAGU_HOME: string; PATH: string }
+export interface ServiceEnvironment { DAGU_URL: string; DAGU_HOME: string; PATH: string; A4S_CACHE_HOME?: string }
 // Node-hosted lease/lock users need the fcntl helper; compiled Bun uses libc.
 export const schedulerTools = ["bash", "git", "gh", "jq", "curl", "node", "omp", "dagu",
   ...(!process.versions.bun ? ["python3"] : [])];
@@ -31,6 +31,11 @@ export function serviceEnvironmentPath(env: NodeJS.ProcessEnv = process.env): st
   return join(home, ".config", "a4s", "service-environment.json");
 }
 
+function xdgHome(key: string, fallback: string, env: NodeJS.ProcessEnv): string {
+  const value = env[key];
+  return value && isAbsolute(value) ? value : join(env.HOME || homedir(), fallback);
+}
+
 /** Read-only station contract. Never source shell code or infer service values. */
 export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): ServiceEnvironment {
   const file = serviceEnvironmentPath(env);
@@ -43,9 +48,31 @@ export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): Se
   if (!isRecord(value)) failure("A4S_SERVICE_ENV", "expected a JSON object");
   const declaration: ServiceEnvironment = {
     DAGU_URL: requiredString(value, "DAGU_URL"),
-    DAGU_HOME: requiredString(value, "DAGU_HOME"),
+    DAGU_HOME: value.DAGU_HOME === undefined ? join(xdgHome("XDG_STATE_HOME", ".local/state", env), "a4s", "dagu") : requiredString(value, "DAGU_HOME"),
     PATH: requiredString(value, "PATH"),
   };
+  const cache = value.A4S_CACHE_HOME ?? (value.DAGU_HOME === undefined ? join(xdgHome("XDG_CACHE_HOME", ".cache", env), "a4s") : undefined);
+  if (cache !== undefined) {
+    if (typeof cache !== "string" || !isAbsolute(cache) || /[\0\r\n]/.test(cache)) failure("A4S_CACHE_HOME", "required absolute cache directory");
+    declaration.A4S_CACHE_HOME = resolve(cache);
+  }
+  if (value.tools !== undefined) {
+    if (!isRecord(value.tools)) failure("tools", "expected an object of tool names and absolute executable paths");
+    const directories: string[] = [];
+    for (const [tool, binary] of Object.entries(value.tools)) {
+      if (!schedulerTools.includes(tool) || typeof binary !== "string" || !isAbsolute(binary) || /[\0\r\n]/.test(binary) || binary.split("/").at(-1) !== tool) failure(`tools.${tool}`, "expected an absolute executable filename matching a required tool name");
+      try { accessSync(binary, constants.X_OK); if (!statSync(binary).isFile()) throw new Error("not a regular executable"); }
+      catch (error) { failure(`tools.${tool}`, String(error)); }
+      directories.push(resolve(binary, ".."));
+    }
+    declaration.PATH = [...new Set([...directories, ...declaration.PATH.split(":")])].join(":");
+    for (const [tool, binary] of Object.entries(value.tools)) {
+      const first = declaration.PATH.split(":").map(directory => join(directory, tool)).find(candidate => {
+        try { accessSync(candidate, constants.X_OK); return statSync(candidate).isFile(); } catch { return false; }
+      });
+      if (first !== binary) failure(`tools.${tool}`, "configured tool directories shadow this override; separate conflicting tool installations");
+    }
+  }
   let url: URL;
   try { url = new URL(declaration.DAGU_URL); }
   catch { failure("DAGU_URL", "expected an absolute HTTP loopback endpoint"); }
@@ -85,7 +112,7 @@ export function readServiceEnvironment(env: NodeJS.ProcessEnv = process.env): Se
     } catch { return false; }
   }));
   if (missing.length) failure("PATH", `declared scheduler PATH is missing ${missing.join(", ")}`);
-  return { DAGU_URL: url.origin, DAGU_HOME: resolve(declaration.DAGU_HOME), PATH: declaration.PATH };
+  return { ...declaration, DAGU_URL: url.origin, DAGU_HOME: resolve(declaration.DAGU_HOME) };
 }
 
 export function serviceEnvironmentCommand(args: string[]): void {

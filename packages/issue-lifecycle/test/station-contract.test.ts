@@ -14,7 +14,7 @@ import { readOwners } from "../src/resources.ts";
 import { useDefaultStation, useStation } from "./fixtures/service-environment.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-test("every fresh lifecycle render freezes one normalized endpoint and space-containing home", t => {
+test("legacy fixture rendering retains literal station declarations for recovery coverage", t => {
   const home = mkdtempSync(join(tmpdir(), "a4s station spaces "));
   const restore = useStation(home, "http://127.0.0.1:19643///");
   t.after(() => { restore(); rmSync(home, { recursive: true, force: true }); });
@@ -32,6 +32,23 @@ test("every fresh lifecycle render freezes one normalized endpoint and space-con
     }
     assert.doesNotMatch(rendered, /DAGU_PORT|HOME\/\.dagu|127\.0\.0\.1:8080/);
     assert.equal(readFileSync(path, "utf8"), before, "source definitions remain immutable");
+  }
+});
+test("every identity-bound lifecycle snapshot uses dynamic shell and tuple without station paths", t => {
+  const home = mkdtempSync(join(tmpdir(), "a4s dynamic station "));
+  const restore = useStation(home, "http://127.0.0.1:19643");
+  t.after(() => { restore(); rmSync(home, { recursive: true, force: true }); });
+  const artifact = `1.0.0@${"a".repeat(40)}#${"b".repeat(64)}`;
+  for (const name of LIFECYCLE_DAGS) {
+    const rendered = materializeDag(root, name, exampleConfig(), { version: "fixture", source: "fixture", artifact, executable: "/old-cache/a4s" });
+    for (const document of parseAllDocuments(rendered)) {
+      const value = document.toJSON(), env = Object.assign({}, ...value.env);
+      assert.deepEqual(value.shell, ["a4s", "station-shell"]);
+      assert.equal(env.A4S_ARTIFACT, artifact);
+      for (const field of ["DAGU_URL", "DAGU_HOME", "PATH", "A4S_SERVICE_ENV", "A4S_BIN"]) assert.equal(env[field], undefined);
+    }
+    assert.ok(!rendered.includes("/old-cache/a4s"));
+    assert.ok(!rendered.includes(home));
   }
 });
 test("inventory, tick and resource children use the declared station and never the default", async t => {

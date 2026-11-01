@@ -7,11 +7,15 @@ import { parseArtifact } from "./release.ts";
 import { readStationState } from "./station-state.ts";
 import { LAUNCHER_PROTOCOL, STATE_SCHEMAS } from "./contracts.ts";
 import { readServiceEnvironment, serviceEnvironmentCommand } from "./service-environment.ts";
+import { stationRecovery } from "./station-recovery.ts";
+import { stationShell } from "./station-shell.ts";
 
 declare const A4S_COMPILED: boolean;
 /** Operator-installed program, compiled independently of payload identity. */
 export async function main(args: string[]): Promise<void> {
   if (args[0] === "service-environment") return serviceEnvironmentCommand(args.slice(1));
+  if (args[0] === "station-recovery") return stationRecovery(args.slice(1));
+  if (args[0] === "station-shell") return stationShell(args.slice(1));
   if (args[0] === "launcher-version" && args.length === 1) {
     console.log(JSON.stringify({ launcherProtocol: LAUNCHER_PROTOCOL, stateSchemas: STATE_SCHEMAS }));
     return;

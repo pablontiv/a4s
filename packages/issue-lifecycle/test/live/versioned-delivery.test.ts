@@ -81,7 +81,9 @@ test("clean-room station selection, atomic cache, handoff and all successor rout
     assert.deepEqual(initial.artifact, { version: tupleA.version, commit: tupleA.commit, digest: tupleA.digest });
     const directoryA = cachePath(home, tupleA), binaryA = join(directoryA, "a4s");
     assert.equal(ghCalls().some(args => args.some(value => value.endsWith("git/ref/tags/v0"))), false);
-    assert.ok(initial.initial.execution.dagSnapshot.includes(`  - A4S_BIN: ${JSON.stringify(binaryA)}\n`));
+    assert.ok(initial.initial.execution.dagSnapshot.includes('shell: ["a4s", "station-shell"]'));
+    assert.ok(initial.initial.execution.dagSnapshot.includes(`  - A4S_ARTIFACT: ${JSON.stringify(`${tupleA.version}@${tupleA.commit}#${tupleA.digest}`)}\n`));
+    assert.ok(!initial.initial.execution.dagSnapshot.includes(binaryA));
     const initialSnapshot = join(first.receipt("feature-a"), "..", "snapshot", "feature.yaml");
     assert.equal(readFileSync(initialSnapshot, "utf8"), initial.initial.execution.dagSnapshot);
     assert.equal(sha256(readFileSync(initialSnapshot)), initial.initial.deployment.generatedDagDigest);

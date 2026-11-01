@@ -9,6 +9,7 @@ import { artifactToken, archiveName, releaseTag, checksumDigest, github, parseAr
 import { type ArtifactIdentity } from "./contracts.ts";
 import { assertIdentityContracts } from "./artifact-support.ts";
 import { isRecord } from "./type-guard.ts";
+import { stationCacheRoot } from "./station-paths.ts";
 
 const EVIDENCE = "verified-archive.tar.gz";
 const RECORD = "artifact.json";
@@ -22,7 +23,7 @@ export interface ArtifactDependencies {
 }
 export function cachePath(home: string, tuple: ArtifactTuple): string {
   parseArtifact(artifactToken(tuple));
-  return join(resolve(home), "cache", "a4s", tuple.version);
+  return join(stationCacheRoot(home), tuple.version);
 }
 export function artifactLock(home: string, tuple: ArtifactTuple): string { return `${cachePath(home, tuple)}.lock`; }
 export async function fileDigest(path: string): Promise<string> {

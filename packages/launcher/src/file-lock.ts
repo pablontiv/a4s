@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { hostname } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import { readServiceEnvironment } from "./service-environment.ts";
 
 const EXCLUSIVE = 2;
 const NONBLOCKING = 4;
@@ -34,7 +35,7 @@ function bunLibc(): Libc {
  * The parent's descriptor retains the same kernel lock after that child exits.
  * Released Bun engines use libc directly and never execute this Python branch.
  * Node-hosted users require python3 on the declared service PATH, checked by
- * service-environment.ts before admission; that literal PATH stays frozen.
+ * service-environment.ts before execution; core tool identities, not PATH, are pinned.
  */
 function flock(fd: number, operation: number): boolean {
   if (process.versions.bun) {
@@ -49,6 +50,7 @@ function flock(fd: number, operation: number): boolean {
   }
   const result = spawnSync("python3", ["-c", "import fcntl,sys\ntry: fcntl.flock(3,int(sys.argv[1]))\nexcept BlockingIOError: sys.exit(73)", String(operation)], {
     stdio: ["ignore", "ignore", "pipe", fd],
+    env: { ...process.env, ...readServiceEnvironment() },
   });
   if (result.status === 73 && operation & NONBLOCKING) return false;
   if (result.status !== 0) throw new Error(`flock failed: ${result.error?.message || result.stderr?.toString().trim() || result.status}`);

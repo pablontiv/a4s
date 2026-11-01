@@ -53,14 +53,20 @@ function replacements(config: LifecycleConfig, identity: { version: string; sour
 }
 
 /** Fill a verified release template. The result is immutable run state. */
-export function materializeDag(root: string, name: LifecycleDag, config: LifecycleConfig, identity: { version: string; source: string; executable?: string; station?: ServiceEnvironment; coordinator?: CoordinatingSession }): string {
+export function materializeDag(root: string, name: LifecycleDag, config: LifecycleConfig, identity: { version: string; source: string; executable?: string; artifact?: string; station?: ServiceEnvironment; coordinator?: CoordinatingSession }): string {
   const template = readFileSync(join(root, "skills", "issue-execution", name), "utf8");
   let result = template;
   const tokens = replacements(config, identity, identity.station ?? readServiceEnvironment());
   for (const token of Object.keys(tokens).sort((left, right) => right.length - left.length)) {
     result = result.split(token).join(tokens[token]!);
   }
-  if (identity.executable) result = result.replace(/^env:\n/gm, `env:\n  - A4S_BIN: ${JSON.stringify(identity.executable)}\n`);
+  if (identity.artifact) {
+    // Only stable command/protocol identities belong in fresh snapshots.
+    // Dagu's shell boundary resolves declaration, cache and tools on every step.
+    result = result.replace(/^shell: bash$/gm, 'shell: ["a4s", "station-shell"]')
+      .replace(/^  - (?:DAGU_URL|DAGU_HOME|PATH|A4S_SERVICE_ENV):.*\n/gm, "")
+      .replace(/^env:\n/gm, `env:\n  - A4S_ARTIFACT: ${JSON.stringify(identity.artifact)}\n`);
+  } else if (identity.executable) result = result.replace(/^env:\n/gm, `env:\n  - A4S_BIN: ${JSON.stringify(identity.executable)}\n`);
   const leftover = result.match(/TEMPLATE_[A-Z0-9_]+|__[A-Z0-9_]+__/g);
   if (leftover) throw new Error(`${name} unresolved template placeholder ${[...new Set(leftover)].join(", ")}`);
   return result;

@@ -4,6 +4,7 @@ import { diagnostic, known, observeLocks, unknown, type Observation } from "./he
 import { probeProcess } from "./process-identity.ts";
 import { github, releaseRepository } from "./release.ts";
 import { isRecord } from "./type-guard.ts";
+import { stationCacheRoot } from "./station-paths.ts";
 
 export interface HealthOptions { home: string; url: string; now: string; from?: string; cpuMeasurement?: string }
 export interface HealthDependencies {
@@ -86,7 +87,7 @@ function runMetrics(runs: Row[], details: Map<string, Observation<Row>>, now: nu
 }
 function runKey(row: Row): string { return JSON.stringify([row.workspace ?? "", row.name, row.dagRunId]); }
 function leases(home: string, probe: typeof probeProcess) {
-  const directory = join(home, "cache", "a4s", "leases");
+  const directory = join(stationCacheRoot(home), "leases");
   try {
     return known(readdirSync(directory).sort().map(name => {
       try {
@@ -106,7 +107,7 @@ function leases(home: string, probe: typeof probeProcess) {
   } catch (error) { return unknown(diagnostic(error)); }
 }
 function stateObservation(home: string) {
-  const path = join(home, "cache", "a4s", "state.json");
+  const path = join(stationCacheRoot(home), "state.json");
   try {
     // Read contents and mtime from the SAME inode despite concurrent atomic replacement.
     const fd = openSync(path, "r");
@@ -224,7 +225,7 @@ export async function stationHealth(options: HealthOptions, dependencies: Health
     daguVersion: version, cpuMeasurement: { issue: `https://github.com/${releaseRepository()}/issues/786`, reference: cpuMeasurement, measuredHere: false },
     tick: history.value ? known(tickMetrics(history.value)) : unknown(history.reason!),
     runs: history.value ? known(runMetrics(history.value, details, now)) : unknown(history.reason!),
-    locks: (dependencies.locks ?? observeLocks)([join(options.home, "cache", "a4s", ".state.lock"), join(options.home, "a4s", "heavy-slot.lock")]),
+    locks: (dependencies.locks ?? observeLocks)([join(stationCacheRoot(options.home), ".state.lock"), join(options.home, "a4s", "heavy-slot.lock")]),
     leases: leases(options.home, dependencies.probe ?? probeProcess), state,
     releases, promotionObservationErrors: promotionErrors,
     limitations: ["Read-only, non-atomic snapshot across Dagu, GitHub, procfs and station files", "No CPU measurement; GitHub createdAt is the requested publish-time proxy", "Recent releases means ten highest immutable a4s build IDs; unpromoted or pruned promotion history stays unknown"] };
