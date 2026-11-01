@@ -30,13 +30,16 @@ export async function confirmFirstAttempt(dagRunId: string, env = process.env): 
     return trigger === "manual" || trigger === "scheduler" ? "first" : "unknown";
   } catch { return "unknown"; }
 }
-/** Caller holds .state.lock. Binding identity is not cache retention. */
-export async function bindTickLocked(home: string, dagRunId: string, current: ArtifactTuple, confirm = confirmFirstAttempt): Promise<TickBinding> {
-  const path = tickBindingPath(home, dagRunId);
-  try { return validateTickBinding(readJsonFile(path), dagRunId); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const attempt = await confirm(dagRunId);
+export function readTickBinding(home: string, dagRunId: string): TickBinding | undefined {
+  try { return validateTickBinding(readJsonFile(tickBindingPath(home, dagRunId)), dagRunId); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return undefined; }
+}
+/** Caller holds .state.lock; native attempt discovery must already have finished. */
+export function bindTickLocked(home: string, dagRunId: string, current: ArtifactTuple, attempt: Attempt): TickBinding {
+  const existing = readTickBinding(home, dagRunId);
+  if (existing) return existing;
   if (attempt !== "first") throw new Error(`Missing tick binding for ${dagRunId}; attempt=${attempt}; refusing to repin`);
+  const path = tickBindingPath(home, dagRunId);
   realDirectory(join(stationRoot(home), "ticks"));
   const binding = { dagRunId, tuple: current, createdAt: new Date().toISOString() };
   writeJsonDurable(path, binding);

@@ -1,11 +1,12 @@
-import { existsSync, lstatSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { inspectArtifact, ensureArtifact, assertCachedArtifactPresent, artifactLock, type CachedArtifact } from "./artifact-cache.ts";
 import { assertIdentityContracts, assertReadCoverage, formatSupport } from "./artifact-support.ts";
 import { artifactToken, github, releaseRepository, resolveRelease, sameArtifact, type ArtifactTuple, type ResolvedRelease } from "./release.ts";
-import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
-import { readLeasesLocked, type LeaseDependencies } from "./lease.ts";
+import { activatedFormats, assertLauncher, commitStateLocked, readJsonFile, readStateLocked, stationRoot, stationTransaction, tupleFromJson, referenceStamp, readStationState, type PersistedFormats, type StateDependencies, type StationState } from "./station-state.ts";
+import { readLeases, type LeaseDependencies } from "./lease.ts";
 import { inventoryStation, type BuildReference, type InventoryDependencies, type StationInventory } from "./station-inventory.ts";
 import { withFileLockAsync } from "./file-lock.ts";
 import { isRecord } from "./type-guard.ts";
@@ -48,29 +49,44 @@ function readerSupport(home: string, tuple: ArtifactTuple): ArtifactSupport {
   return formatSupport(declared.support);
 }
 function liveReferences(home: string, inventory: StationInventory, dependencies: StationDependencies): { references: BuildReference[]; dead: string[] } {
-  const leases = readLeasesLocked(home, dependencies);
+  const leases = readLeases(home, dependencies);
   return { references: [...inventory.references, ...leases.live.map(lease => ({ artifact: lease.artifact,
     holder: `${lease.kind} lease holder pid=${lease.pid} generation=${lease.generation} ${lease.holder}${lease.kind === "plugin" ? "; restart OMP" : ""}` }))], dead: leases.dead };
+}
+interface StationSnapshot { state: StationState; stamp: string }
+function snapshotStation(home: string, dependencies: StationDependencies): Promise<StationSnapshot> {
+  return stationTransaction(home, async () => ({ state: readStateLocked(home, dependencies), stamp: referenceStamp(home) }), dependencies);
+}
+function recheckStation(home: string, snapshot: StationSnapshot, operation: string, dependencies: StationDependencies): StationState {
+  const state = readStateLocked(home, dependencies);
+  if (!isDeepStrictEqual(state, snapshot.state)) throw new Error(`Station changed during ${operation} preparation; retry`);
+  if (referenceStamp(home) !== snapshot.stamp) throw new Error(`Station references changed during ${operation} preparation; retry`);
+  return state;
 }
 export async function initializeStation(home: string, current: ArtifactTuple, dependencies: StationDependencies = {}): Promise<StationState> {
   current = tupleFromJson(current);
   const cached = await (dependencies.inspect ?? inspectArtifact)(home, current);
   if (!sameArtifact(cached.record, current)) throw new Error("Initialization verification returned a different tuple");
   assertLauncher(cached.identity);
+  const stamp = await stationTransaction(home, async () => {
+    if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
+    return referenceStamp(home);
+  }, dependencies);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
+  const support = formatSupport(cached.identity.support);
+  const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
+  assertReadCoverage(support, formats);
   return stationTransaction(home, async () => {
     if (existsSync(join(stationRoot(home), "state.json"))) throw new Error("Station already initialized; state is never reseeded");
+    if (referenceStamp(home) !== stamp) throw new Error("Station references changed during initialization preparation; retry");
     assertCachedArtifactPresent(home, cached);
-    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
-    const support = formatSupport(cached.identity.support);
-    const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
-    assertReadCoverage(support, formats);
     const state: StationState = { schema: 1, generation: 0, current, previous: current, rejected: [], formats };
     commitStateLocked(home, state, dependencies);
     return state;
   }, dependencies);
 }
 export async function promote(home: string, dependencies: StationDependencies = {}): Promise<PromotionReport> {
-  const snapshot = await stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+  const observed = await snapshotStation(home, dependencies), snapshot = observed.state;
   let floor = releaseOrdinal(snapshot.current.version);
   for (const rejected of snapshot.rejected) if (releaseOrdinal(rejected) > floor) floor = releaseOrdinal(rejected);
   const releases = await (dependencies.releases ?? publishedReleases)();
@@ -96,23 +112,28 @@ export async function promote(home: string, dependencies: StationDependencies = 
       skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
       continue;
     }
+    // Inventory includes HTTP pagination, git, SQLite and per-run/lease probes.
+    // The lease/tick directory stamp closes races with new readers and admissions.
+    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
+    const { references } = liveReferences(home, inventory, dependencies);
+    references.push({ artifact: snapshot.current, holder: "post-promotion previous" });
+    const readers = references.map(reference => ({ ...reference, support: readerSupport(home, reference.artifact) }));
+    const formats = mergeInventory(snapshot, inventory);
+    const support = formatSupport(cached.identity.support);
+    try {
+      assertReadCoverage(support, formats);
+      for (const reader of readers) {
+        try { assertReadCoverage(reader.support, {}, support); }
+        catch (error) { throw new Error(`Blocking reader ${reader.holder} build=${reader.artifact.version}: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+    } catch (error) {
+      skipped.push({ version: candidate.version, reason: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
     const result = await stationTransaction(home, async () => {
-      const state = readStateLocked(home, dependencies);
-      if (!isDeepStrictEqual(state, snapshot)) throw new Error("Station changed during promotion preparation; retry");
-      const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
-      const { references } = liveReferences(home, inventory, dependencies);
-      references.push({ artifact: state.current, holder: "post-promotion previous" });
-      const readers = references.map(reference => ({ ...reference, support: readerSupport(home, reference.artifact) }));
-      const formats = mergeInventory(state, inventory);
-      const support = formatSupport(cached.identity.support);
-      try {
-        assertCachedArtifactPresent(home, cached);
-        assertReadCoverage(support, formats);
-        for (const reader of readers) {
-          try { assertReadCoverage(reader.support, {}, support); }
-          catch (error) { throw new Error(`Blocking reader ${reader.holder} build=${reader.artifact.version}: ${error instanceof Error ? error.message : String(error)}`); }
-        }
-      } catch (error) { return error instanceof Error ? error.message : String(error); }
+      const state = recheckStation(home, observed, "promotion", dependencies);
+      try { assertCachedArtifactPresent(home, cached); }
+      catch (error) { return error instanceof Error ? error.message : String(error); }
       // Commit errors must not be mistaken for a skipped candidate.
       const next: StationState = { ...state, current: { version: release.version, commit: release.commit, digest: release.digest }, previous: state.current,
         generation: state.generation + 1, formats: activatedFormats(formats, support) };
@@ -122,25 +143,21 @@ export async function promote(home: string, dependencies: StationDependencies = 
     if (typeof result !== "string") return result;
     skipped.push({ version: candidate.version, reason: result });
   }
-  return stationTransaction(home, async () => {
-    const state = readStateLocked(home, dependencies);
-    return { current: state.current, promoted: false, skipped };
-  }, dependencies);
+  return { current: (await readStationState(home)).current, promoted: false, skipped };
 }
 /** Stable-launcher-owned operation: never imports or executes the current payload. */
 export async function rollback(home: string, dependencies: StationDependencies = {}): Promise<StationState> {
-  const snapshot = await stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+  const observed = await snapshotStation(home, dependencies), snapshot = observed.state;
   const target = snapshot.previous;
   const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
   assertLauncher(cached.identity);
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
+  const formats = mergeInventory(snapshot, inventory);
+  assertReadCoverage(formatSupport(cached.identity.support), formats);
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home, dependencies);
-    if (!isDeepStrictEqual(state, snapshot)) throw new Error("Station changed during rollback preparation; retry");
+    const state = recheckStation(home, observed, "rollback", dependencies);
     if (!sameArtifact(cached.record, target)) throw new Error("Rollback verification returned a different tuple");
     assertCachedArtifactPresent(home, cached);
-    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies, false));
-    const formats = mergeInventory(state, inventory);
-    assertReadCoverage(formatSupport(cached.identity.support), formats);
     if (sameArtifact(state.current, target)) return state;
     const next: StationState = { ...state, current: target, previous: target, rejected: [...new Set([...state.rejected, state.current.version])], generation: state.generation + 1, formats };
     commitStateLocked(home, next, dependencies);
@@ -149,48 +166,62 @@ export async function rollback(home: string, dependencies: StationDependencies =
 }
 export interface GcReport { removed: string[]; retained: Array<{ version: string; holders: string[] }> }
 export async function gc(home: string, dependencies: StationDependencies = {}): Promise<GcReport> {
-  return stationTransaction(home, async () => {
-    const state = readStateLocked(home, dependencies);
-    const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
-    const { references, dead } = liveReferences(home, inventory, dependencies);
-    const keep = new Map<string, string[]>();
-    const identities = new Map<string, string>();
-    const retain = (tuple: ArtifactTuple, holder: string) => {
-      const token = artifactToken(tupleFromJson(tuple)), prior = identities.get(tuple.version);
-      if (prior && prior !== token) throw new Error(`Conflicting retained build ${tuple.version}`);
-      identities.set(tuple.version, token);
-      const holders = keep.get(tuple.version) ?? []; holders.push(holder); keep.set(tuple.version, holders);
-    };
-    retain(state.current, "current"); retain(state.previous, "previous");
-    for (const reference of references) retain(reference.artifact, reference.holder);
-    const entries: Array<{ version: string; path: string }> = [];
-    for (const version of readdirSync(stationRoot(home))) {
-      if (!/^(?:r(?:0|[1-9]\d*)|\d+\.\d+\.\d+)$/.test(version)) continue;
-      const path = join(stationRoot(home), version);
-      if (!lstatSync(path).isDirectory()) throw new Error(`Cache build must be a real directory: ${version}`);
-      const record = tupleFromJson(readJsonFile(join(path, "artifact.json")));
-      if (record.version !== version) throw new Error(`Cache build identity mismatch: ${version}`);
-      if (identities.has(version) && identities.get(version) !== artifactToken(record)) throw new Error(`Retained cache identity mismatch: ${version}`);
-      entries.push({ version, path });
+  const observed = await snapshotStation(home, dependencies), state = observed.state;
+  const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
+  const { references, dead } = liveReferences(home, inventory, dependencies);
+  const keep = new Map<string, string[]>(), identities = new Map<string, string>();
+  const retain = (tuple: ArtifactTuple, holder: string) => {
+    const token = artifactToken(tupleFromJson(tuple)), prior = identities.get(tuple.version);
+    if (prior && prior !== token) throw new Error(`Conflicting retained build ${tuple.version}`);
+    identities.set(tuple.version, token);
+    const holders = keep.get(tuple.version) ?? []; holders.push(holder); keep.set(tuple.version, holders);
+  };
+  retain(state.current, "current"); retain(state.previous, "previous");
+  for (const reference of references) retain(reference.artifact, reference.holder);
+  const entries: Array<{ version: string; path: string; record: unknown }> = [];
+  for (const version of readdirSync(stationRoot(home))) {
+    const path = join(stationRoot(home), version);
+    // A crash after detaching an unreferenced build may leave only its trash
+    // name. It can never be selected or leased and needs no station lock.
+    if (/^\.gc-(?:r(?:0|[1-9]\d*)|\d+\.\d+\.\d+)-[a-f0-9-]{36}$/.test(version)) {
+      if (!lstatSync(path).isDirectory()) throw new Error(`GC trash must be a real directory: ${version}`);
+      rmSync(path, { recursive: true }); continue;
     }
-    entries.sort((a, b) => releaseOrdinal(a.version) > releaseOrdinal(b.version) ? -1 : releaseOrdinal(a.version) < releaseOrdinal(b.version) ? 1 : a.version.localeCompare(b.version));
-    for (const entry of entries.slice(0, 10)) {
-      const holders = keep.get(entry.version) ?? []; holders.push("keep-10 highest IDs"); keep.set(entry.version, holders);
+    if (!/^(?:r(?:0|[1-9]\d*)|\d+\.\d+\.\d+)$/.test(version)) continue;
+    if (!lstatSync(path).isDirectory()) throw new Error(`Cache build must be a real directory: ${version}`);
+    const record = readJsonFile(join(path, "artifact.json")), tuple = tupleFromJson(record);
+    if (tuple.version !== version) throw new Error(`Cache build identity mismatch: ${version}`);
+    if (identities.has(version) && identities.get(version) !== artifactToken(tuple)) throw new Error(`Retained cache identity mismatch: ${version}`);
+    entries.push({ version, path, record });
+  }
+  entries.sort((a, b) => releaseOrdinal(a.version) > releaseOrdinal(b.version) ? -1 : releaseOrdinal(a.version) < releaseOrdinal(b.version) ? 1 : a.version.localeCompare(b.version));
+  for (const entry of entries.slice(0, 10)) {
+    const holders = keep.get(entry.version) ?? []; holders.push("keep-10 highest IDs"); keep.set(entry.version, holders);
+  }
+  const removed: string[] = [];
+  for (const entry of entries) if (!keep.has(entry.version)) {
+    const trash = join(stationRoot(home), `.gc-${entry.version}-${randomUUID()}`);
+    try {
+      // Lock order matches preparation: artifact first, then a short state
+      // commit. Recursive deletion happens only after releasing .state.lock.
+      await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, tupleFromJson(entry.record)), async () => {
+        await stationTransaction(home, async () => {
+          recheckStation(home, observed, "GC", dependencies);
+          if (!lstatSync(entry.path).isDirectory() || !isDeepStrictEqual(readJsonFile(join(entry.path, "artifact.json")), entry.record)) throw new Error(`Cache build changed during GC preparation: ${entry.version}`);
+          renameSync(entry.path, trash);
+        }, dependencies);
+        rmSync(trash, { recursive: true });
+      }, { timeoutMs: 0 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
+      keep.set(entry.version, [`artifact lock busy: ${error instanceof Error ? error.message : String(error)}`]);
+      continue;
     }
-    // All reads and probes finish before deletion. Never wait for preparation's
-    // artifact lock while holding .state.lock: retain a busy entry until next GC.
-    const removed: string[] = [];
-    for (const entry of entries) if (!keep.has(entry.version)) {
-      try {
-        await (dependencies.withFileLock ?? withFileLockAsync)(artifactLock(home, { version: entry.version, commit: "0".repeat(40), digest: "0".repeat(64) }), async () => { rmSync(entry.path, { recursive: true }); }, { timeoutMs: 0 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-        keep.set(entry.version, [`artifact lock busy: ${error instanceof Error ? error.message : String(error)}`]);
-        continue;
-      }
-      removed.push(entry.version);
-    }
-    for (const path of [...dead, ...inventory.expiredBindings]) rmSync(path);
-    return { removed, retained: [...keep].map(([version, holders]) => ({ version, holders })) };
+    removed.push(entry.version);
+  }
+  await stationTransaction(home, async () => {
+    recheckStation(home, observed, "GC", dependencies);
+    for (const path of [...dead, ...inventory.expiredBindings]) rmSync(path, { force: true });
   }, dependencies);
+  return { removed, retained: [...keep].map(([version, holders]) => ({ version, holders })) };
 }

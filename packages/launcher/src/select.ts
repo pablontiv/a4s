@@ -5,9 +5,9 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { cachePath, ensureArtifact, inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "./artifact-cache.ts";
 import { artifactToken, parseArtifact, resolveRelease, sameArtifact, type ArtifactTuple } from "./release.ts";
-import { assertLauncher, readJsonFile, readStateLocked, stationTransaction, tupleFromJson, type StateDependencies } from "./station-state.ts";
-import { createLeaseLocked, type BuildLease } from "./lease.ts";
-import { bindTickLocked, type Attempt } from "./tick-binding.ts";
+import { assertLauncher, readJsonFile, readStateLocked, readStationState, stationTransaction, tupleFromJson, type StateDependencies } from "./station-state.ts";
+import { createLeaseLocked, prepareLease, type BuildLease } from "./lease.ts";
+import { bindTickLocked, readTickBinding, confirmFirstAttempt, type Attempt } from "./tick-binding.ts";
 import { isRecord } from "./type-guard.ts";
 import { assertProtocols, formatSupport } from "./artifact-support.ts";
 import { SHARED_FORMATS } from "./contracts.ts";
@@ -62,53 +62,56 @@ export interface SelectedPayload { cached: CachedArtifact; lease: BuildLease; ar
 export async function selectPayload(home: string, args: string[], dependencies: SelectionDependencies = {}): Promise<SelectedPayload> {
   if (!args.length) throw new Error("Usage: a4s <command> [args...]");
   const env = dependencies.env ?? process.env, cwd = dependencies.cwd ?? process.cwd();
-  const selection = await stationTransaction(home, async () => {
-    // Validate the state envelope without loading any payload, including current.
-    const state = readStateLocked(home, dependencies);
-    let tuple = state.current, selectedArgs = [...args], receiptPath: string | undefined;
-    const admission = args[0] === "admit" || args[0] === "enqueue";
-    const parent = admission ? flag(args, "--parent") : undefined;
-    if (parent) receiptPath = resolve(cwd, parent);
-    else if (args[0] === "run") {
-      const primary = flag(args, "--primary"), run = flag(args, "--run");
-      if (!primary || !run) throw new Error("Run dispatch requires --primary and --run");
-      receiptPath = runReceiptPath(realpathSync(primary), run);
-    } else if (args[0] === "reconcile" && (args[1] === "inspect" || args[1] === "finish")) {
-      const row: unknown = JSON.parse(args[2] || "{}");
-      const primary = isRecord(row) ? row[args[1] === "inspect" ? "PRIMARY" : "primary"] : undefined;
-      const run = isRecord(row) ? row[args[1] === "inspect" ? "RUN" : "run"] : undefined;
-      if (typeof primary !== "string" || typeof run !== "string") throw new Error("Reconcile action requires primary and run");
-      receiptPath = runReceiptPath(realpathSync(primary), run);
-    } else if (args[0] === "cancel") {
-      const run = flag(args, "--run");
-      if (!run) throw new Error("Cancel requires --run");
-      receiptPath = cancellationReceipt(realpathSync(env.PRIMARY || cwd), run).path;
-    } else if (args[0] === "prioritize") {
-      if (!args[2]) throw new Error("Prioritize requires an existing run");
-      receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), args[2]);
-    } else if (args[0] === "observe") {
-      const observation: unknown = args[1] === "runtime" ? JSON.parse(args[2] || "{}") : undefined;
-      const run = args[1] === "runtime" ? (isRecord(observation) && isRecord(observation.run) && typeof observation.run.dagRunId === "string" ? observation.run.dagRunId : undefined) : args[1];
-      if (!run) throw new Error("Observation requires a run");
-      receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), run);
-    } else if (args[0] === "cancellation" && env.PRIMARY && (env.RUN || env.DAG_RUN_ID)) {
-      receiptPath = cancellationReceipt(realpathSync(env.PRIMARY), (env.RUN || env.DAG_RUN_ID)!).path;
-    } else if (!admission && args[0] !== "tick" && env.RUN && env.PRIMARY && ["reconcile", "stale-recovery", "protect", "role-jobs", "escalation", "codeql", "poc-scope", "native"].includes(args[0]!)) {
-      receiptPath = runReceiptPath(realpathSync(env.PRIMARY), env.RUN);
-    } else if (args[0] === "tick") {
-      if (args.length !== 1) throw new Error("Usage: a4s tick");
-      tuple = (await bindTickLocked(home, env.DAG_RUN_ID || "", state.current, dependencies.confirm)).tuple;
+  // Routing may spawn git, and tick discovery may wait on HTTP. Neither needs
+  // exclusive access to the atomically published state envelope.
+  const state = await readStationState(home);
+  let tuple = state.current, selectedArgs = [...args], receiptPath: string | undefined;
+  let tickAttempt: Attempt = "unknown";
+  const admission = args[0] === "admit" || args[0] === "enqueue";
+  const parent = admission ? flag(args, "--parent") : undefined;
+  if (parent) receiptPath = resolve(cwd, parent);
+  else if (args[0] === "run") {
+    const primary = flag(args, "--primary"), run = flag(args, "--run");
+    if (!primary || !run) throw new Error("Run dispatch requires --primary and --run");
+    receiptPath = runReceiptPath(realpathSync(primary), run);
+  } else if (args[0] === "reconcile" && (args[1] === "inspect" || args[1] === "finish")) {
+    const row: unknown = JSON.parse(args[2] || "{}");
+    const primary = isRecord(row) ? row[args[1] === "inspect" ? "PRIMARY" : "primary"] : undefined;
+    const run = isRecord(row) ? row[args[1] === "inspect" ? "RUN" : "run"] : undefined;
+    if (typeof primary !== "string" || typeof run !== "string") throw new Error("Reconcile action requires primary and run");
+    receiptPath = runReceiptPath(realpathSync(primary), run);
+  } else if (args[0] === "cancel") {
+    const run = flag(args, "--run");
+    if (!run) throw new Error("Cancel requires --run");
+    receiptPath = cancellationReceipt(realpathSync(env.PRIMARY || cwd), run).path;
+  } else if (args[0] === "prioritize") {
+    if (!args[2]) throw new Error("Prioritize requires an existing run");
+    receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), args[2]);
+  } else if (args[0] === "observe") {
+    const observation: unknown = args[1] === "runtime" ? JSON.parse(args[2] || "{}") : undefined;
+    const run = args[1] === "runtime" ? (isRecord(observation) && isRecord(observation.run) && typeof observation.run.dagRunId === "string" ? observation.run.dagRunId : undefined) : args[1];
+    if (!run) throw new Error("Observation requires a run");
+    receiptPath = runReceiptPath(realpathSync(env.PRIMARY || cwd), run);
+  } else if (args[0] === "cancellation" && env.PRIMARY && (env.RUN || env.DAG_RUN_ID)) {
+    receiptPath = cancellationReceipt(realpathSync(env.PRIMARY), (env.RUN || env.DAG_RUN_ID)!).path;
+  } else if (!admission && args[0] !== "tick" && env.RUN && env.PRIMARY && ["reconcile", "stale-recovery", "protect", "role-jobs", "escalation", "codeql", "poc-scope", "native"].includes(args[0]!)) {
+    receiptPath = runReceiptPath(realpathSync(env.PRIMARY), env.RUN);
+  } else if (args[0] === "tick") {
+    if (args.length !== 1) throw new Error("Usage: a4s tick");
+    const binding = readTickBinding(home, env.DAG_RUN_ID || "");
+    if (binding) tuple = binding.tuple;
+    else {
+      tickAttempt = await (dependencies.confirm ?? (run => confirmFirstAttempt(run, env)))(env.DAG_RUN_ID || "");
+      if (tickAttempt !== "first") throw new Error(`Missing tick binding for ${env.DAG_RUN_ID}; attempt=${tickAttempt}; refusing to repin`);
     }
-    if (receiptPath) tuple = (dependencies.receipt ?? receiptTuple)(receiptPath);
-    const explicit = flag(args, "--artifact");
-    if (explicit && !sameArtifact(parseArtifact(explicit), tuple)) throw new Error("Requested artifact differs from selected receipt/state tuple");
-    return { state, tuple, selectedArgs, receiptPath, admission, explicit };
-  }, dependencies);
-  const { state, tuple, receiptPath, admission, explicit } = selection;
-  let { selectedArgs } = selection;
+  }
+  if (receiptPath) tuple = (dependencies.receipt ?? receiptTuple)(receiptPath);
+  const explicit = flag(args, "--artifact");
+  if (explicit && !sameArtifact(parseArtifact(explicit), tuple)) throw new Error("Requested artifact differs from selected receipt/state tuple");
   const cached = await (dependencies.restore ?? restoreArtifact)(home, tuple);
   assertLauncher(cached.identity);
   if (!sameArtifact(cached.record, tuple)) throw new Error("Restored artifact differs from selected tuple");
+  const prepared = prepareLease(tuple, state.generation, "launcher", args[0]!);
   return stationTransaction(home, async () => {
     const latest = readStateLocked(home, dependencies);
     if (!isDeepStrictEqual(latest, state)) throw new Error("Station changed during payload preparation; retry");
@@ -125,7 +128,8 @@ export async function selectPayload(home: string, args: string[], dependencies: 
       }
     }
     if ((admission && !args.includes("--check") || args[0] === "run") && !explicit) selectedArgs = [args[0]!, "--artifact", artifactToken(tuple), ...args.slice(1)];
-    const lease = createLeaseLocked(home, tuple, state.generation, "launcher", args[0]!);
+    if (args[0] === "tick" && !sameArtifact(bindTickLocked(home, env.DAG_RUN_ID || "", state.current, tickAttempt).tuple, tuple)) throw new Error("Tick binding changed during payload preparation; retry");
+    const lease = createLeaseLocked(home, prepared);
     return { cached, lease, args: selectedArgs };
   }, dependencies);
 }

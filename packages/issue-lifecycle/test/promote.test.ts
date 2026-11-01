@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createLeaseLocked } from "@a4s/launcher/lease";
+import { createLeaseLocked, prepareLease } from "@a4s/launcher/lease";
 import { initializeStation, promote, rollback } from "@a4s/launcher/station";
 import { stationTransaction } from "@a4s/launcher/station-state";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
@@ -36,7 +36,8 @@ test("newest incompatible writer falls through to bridge, then writer activates 
 test("live and retiring pre-bridge plugin readers block a new writer and name restart remedy", async t => {
   const f = stationFixture(t), old = await f.release("r1", configSupport([1], 1)), bridge = await f.release("r2", configSupport([1, 2], 1)), writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, old, f.dependencies);
-  await stationTransaction(f.home, async () => { createLeaseLocked(f.home, old, 0, "plugin", "retiring status generation"); }, f.dependencies);
+  const retired = prepareLease(old, 0, "plugin", "retiring status generation");
+  await stationTransaction(f.home, async () => { createLeaseLocked(f.home, retired); }, f.dependencies);
   const dependencies = { ...f.dependencies, releases: async () => [writer, bridge] };
   assert.equal((await promote(f.home, dependencies)).current.version, "r2");
   const before = f.stateBytes(), report = await promote(f.home, dependencies);

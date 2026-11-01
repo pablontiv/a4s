@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { registrationHash } from "../../launcher/src/contracts.ts";
 import { harness, selection } from "./fixtures.ts";
-import { createLeaseLocked } from "../../launcher/src/lease.ts";
+import { createLeaseLocked, prepareLease } from "../../launcher/src/lease.ts";
 import { initializeStation, promote } from "../../launcher/src/station.ts";
 import { stationTransaction } from "../../launcher/src/station-state.ts";
+import { stationSelection } from "../src/station.ts";
+import { deferred, inProcessLock } from "../../issue-lifecycle/test/fixtures/state-lock.ts";
 import { configSupport, stationFixture } from "../../issue-lifecycle/test/fixtures/station.ts";
 import { declareService } from "../../issue-lifecycle/test/fixtures/service-environment.ts";
 
@@ -45,7 +47,8 @@ test("OMP process exit removes the retired-reader barrier for a new-format write
   const bridge = await f.release("r2", configSupport([1, 2], 1));
   const writer = await f.release("r3", configSupport([1, 2], 2));
   await initializeStation(f.home, old, f.dependencies);
-  await stationTransaction(f.home, async () => { createLeaseLocked(f.home, old, 0, "plugin", "@a4s/loader retired generation"); }, f.dependencies);
+  const retired = prepareLease(old, 0, "plugin", "@a4s/loader retired generation");
+  await stationTransaction(f.home, async () => { createLeaseLocked(f.home, retired); }, f.dependencies);
   const dependencies = { ...f.dependencies, releases: async () => [writer, bridge] };
   assert.equal((await promote(f.home, dependencies)).current.version, "r2");
   const held = await promote(f.home, dependencies);
@@ -53,4 +56,18 @@ test("OMP process exit removes the retired-reader barrier for a new-format write
   assert.match(held.skipped[0]!.reason, /restart OMP/);
   // Model the retired OMP PID having exited. The new process cannot retain its modules.
   assert.equal((await promote(f.home, { ...dependencies, probe: () => "dead-or-reused" })).current.version, "r3");
+});
+
+test("multiple idle loader polls never contend with a held station transaction", async t => {
+  const f = stationFixture(t), old = await f.release("r1");
+  const initial = await initializeStation(f.home, old, f.dependencies);
+  const entered = deferred(), release = deferred();
+  const writer = stationTransaction(f.home, async () => { entered.resolve(); await release.promise; }, { ...f.dependencies, withFileLock: inProcessLock(100) });
+  try {
+    await entered.promise;
+    for (let poll = 0; poll < 20; poll++) {
+      const sessions = await Promise.all([stationSelection(f.home), stationSelection(f.home)]);
+      for (const selection of sessions) assert.deepEqual(selection.state, initial);
+    }
+  } finally { release.resolve(); await writer; }
 });

@@ -126,11 +126,13 @@ export async function bindingRun(binding: TickBinding): Promise<StationRun | und
 }
 export function readTickBindings(home: string): Array<{ path: string; binding: TickBinding }> {
   const directory = join(stationRoot(home), "ticks");
-  return names(directory).map(name => {
+  return names(directory).filter(name => !/\.json\.[a-f0-9-]+\.tmp$/.test(name)).flatMap(name => {
     if (!name.endsWith(".json")) throw new Error(`Unknown tick binding file ${name}`);
-    const path = join(directory, name), value = readJsonFile(path);
+    const path = join(directory, name);
+    let value: unknown;
+    try { value = readJsonFile(path); } catch (error) { if (missing(error)) return []; throw error; }
     const binding = validateTickBinding(value, name.slice(0, -5));
-    return { path, binding };
+    return [{ path, binding }];
   });
 }
 interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number; cancelled: boolean }

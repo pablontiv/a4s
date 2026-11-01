@@ -3,17 +3,18 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { readFileSync, realpathSync, rmSync } from "node:fs";
 
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parseAllDocuments } from "yaml";
 import { receiptArtifact, assertExecutingArtifact } from "./artifact-receipt.ts";
 import { artifactToken, parseArtifact, sameArtifact } from "@a4s/launcher/release";
 import { compiled } from "./executable.ts";
 import { isRecord } from "@a4s/launcher/type-guard";
-import { fileDigest, inspectArtifact, type CachedArtifact } from "@a4s/launcher/artifact-cache";
+import { fileDigest, inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "@a4s/launcher/artifact-cache";
 import { identity } from "./identity.ts";
 import type { Receipt } from "./admission.ts";
 import { restoreArtifact } from "@a4s/launcher/select";
-import { createLeaseLocked } from "@a4s/launcher/lease";
-import { stationRoot, stationTransaction } from "@a4s/launcher/station-state";
+import { createLeaseLocked, prepareLease, type BuildLease } from "@a4s/launcher/lease";
+import { readJsonFile, stationRoot, stationTransaction, type StateDependencies } from "@a4s/launcher/station-state";
 import { assertReceiptStation } from "@a4s/launcher/station-binding";
 import { readRecoveryEvidence } from "@a4s/launcher/station-recovery-evidence";
 
@@ -94,12 +95,23 @@ function environment(context: VerifiedRun): NodeJS.ProcessEnv {
   }
   return env;
 }
+/** Slow receipt/tool/cache verification never owns the station lock. Only the
+ * immutable dispatch binding and cache metadata are rechecked at lease commit. */
+export async function leaseRun(primary: string, run: string, dependencies: StateDependencies & { verify?: typeof verifiedRun } = {}): Promise<{ context: VerifiedRun; lease: BuildLease }> {
+  const context = await (dependencies.verify ?? verifiedRun)(primary, run);
+  const prepared = prepareLease(context.cached.record, 0, "launcher", `run ${run}`);
+  return stationTransaction(context.home, async () => {
+    const latest = readJsonFile(context.path);
+    if (!isRecord(latest) || !isRecord(latest.runReceipt) ||
+        latest.runReceipt.run !== context.receipt.runReceipt.run || latest.runReceipt.dag !== context.receipt.runReceipt.dag ||
+        !(["schemaVersion", "artifact", "artifactSupport", "contracts", "sourceVersion", "initial", "parent", "deploymentFingerprint", "receiptCreatedAt"] as const)
+          .every(key => isDeepStrictEqual(latest[key], context.receipt[key]))) throw new Error("Run receipt changed during dispatch preparation; retry");
+    assertCachedArtifactPresent(context.home, context.cached);
+    return { context, lease: createLeaseLocked(context.home, prepared) };
+  }, dependencies);
+}
 export async function invokeRun(primary: string, run: string, args: string[], options: { capture?: boolean; env?: NodeJS.ProcessEnv } = {}): Promise<{ status: number; stdout: string; stderr: string }> {
-  const home = realpathSync(readServiceEnvironment().DAGU_HOME);
-  const { context, lease } = await stationTransaction(home, async () => {
-    const context = await verifiedRun(primary, run);
-    return { context, lease: createLeaseLocked(home, context.cached.record, 0, "launcher", `run ${run}`) };
-  });
+  const { context, lease } = await leaseRun(primary, run);
   const token = artifactToken(context.cached.record);
   try {
   return await new Promise((resolve, reject) => {

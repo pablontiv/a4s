@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep receipt verification, station-tool hashing, artifact restore/inspection and
+  admission snapshot generation outside `.state.lock`. Run dispatch rechecks the
+  immutable receipt binding and cache metadata only when committing its lease,
+  so one-second OMP observers and tick/stale-recovery per-run sweeps do not block
+  feature steps behind their slow work (#913).
 - Consume launcher helpers through explicit `@a4s/launcher` package exports rather
   than relative source imports, preserving per-module loading boundaries. Move
   artifact-cache unit and live coverage into the launcher workspace.

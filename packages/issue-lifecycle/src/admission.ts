@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 
 import { dirname, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "@a4s/launcher/config";
 import { dagName, materializeDag, type LifecycleDag } from "./materialize.ts";
 import type { RunDetails } from "./status/progress.ts";
@@ -16,13 +17,13 @@ import { assertReceiptVersion } from "./receipt-version.ts";
 import { requireOwnerSession } from "./owner-session.ts";
 import { packageRoot } from "./executable.ts";
 import { artifactToken, parseArtifact, releaseRepository, sameArtifact } from "@a4s/launcher/release";
-import { artifactLock, inspectArtifact, type CachedArtifact } from "@a4s/launcher/artifact-cache";
+import { artifactLock, inspectArtifact, assertCachedArtifactPresent, type CachedArtifact } from "@a4s/launcher/artifact-cache";
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
 import { withFileLock, withFileLockAsync } from "@a4s/launcher/file-lock";
 import { stationReadiness } from "./queue.ts";
 import { stationTransaction, readStationState, readStateLocked } from "@a4s/launcher/station-state";
 import { handoff } from "@a4s/launcher/select";
-import { createLeaseLocked } from "@a4s/launcher/lease";
+import { createLeaseLocked, prepareLease } from "@a4s/launcher/lease";
 import { admittedCoordinator } from "./planning-transcript.ts";
 import { writeAtomicJson } from "./atomic-json.ts";
 
@@ -145,8 +146,7 @@ async function selectParent(options: AdmissionOptions, context: AdmissionContext
   if (options.artifact && !sameArtifact(parseArtifact(options.artifact), receipt.artifact)) throw new Error("Child artifact differs from parent receipt");
   return { receipt: path, dag: run.dag, run: run.run, artifact: receipt.artifact };
 }
-// A cancelled parent cannot publish successors even though native dequeue permits reuse.
-function createReceipt(options: AdmissionOptions, context: AdmissionContext, cached: CachedArtifact, parent: ArtifactReceiptFields["parent"], persist: boolean): { path: string; receipt: Receipt } {
+function prepareReceipt(options: AdmissionOptions, context: AdmissionContext, cached: CachedArtifact, parent: ArtifactReceiptFields["parent"]): { path: string; receipt: Receipt } {
   const { name, owner, primary, repo, committed } = context;
   const path = receiptPath(primary, options.run);
   const { version, commit } = cached.record;
@@ -190,17 +190,16 @@ function createReceipt(options: AdmissionOptions, context: AdmissionContext, cac
     }, runReceipt: { dag: name.replace(/\.yaml$/, ""), run: options.run, attempt: 1, observations: [] },
   };
   assertArtifactReceipt(receipt, path);
-  if (!persist) {
-    if (existsSync(path)) throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
-    return { path, receipt };
-  }
+  if (existsSync(path)) throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
+  return { path, receipt };
+}
+function publishReceipt(path: string, run: string, serialized: string): void {
   mkdirSync(dirname(path), { recursive: true });
-  try { writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 }); }
+  try { writeFileSync(path, serialized, { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if (!isRecord(error) || error.code !== "EEXIST") throw error;
-    throw new Error(`run=${options.run} already has an immutable admission receipt; choose a new run ID`);
+    throw new Error(`run=${run} already has an immutable admission receipt; choose a new run ID`);
   }
-  return { path, receipt };
 }
 async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean, use: (admission: { path: string; receipt: Receipt }) => T | Promise<T>): Promise<T> {
   const context = preflightAdmission(options);
@@ -209,16 +208,27 @@ async function selectedAdmission<T>(options: AdmissionOptions, persist: boolean,
   const tuple = options.artifact ? parseArtifact(options.artifact) : parent?.artifact;
   if (!tuple) throw new Error("Admission requires a resolved --artifact handoff or --parent receipt");
   assertExecutingArtifact(tuple);
-  const selected = await stationTransaction(home, () => withFileLockAsync(artifactLock(home, tuple), async () => {
+  // Artifact acquisition always precedes the short station commit, including GC.
+  const selected = await withFileLockAsync(artifactLock(home, tuple), async () => {
+    const state = await readStationState(home);
     const cached = await inspectArtifact(home, tuple);
     if (realpathSync(process.execPath) !== cached.executable) throw new Error(`Admission must execute the cached artifact ${cached.executable}`);
-    const admission = createReceipt(options, context, cached, parent, persist);
-    createLeaseLocked(home, tuple, readStateLocked(home).generation, "engine", `admission ${options.run}`);
-    return admission;
-  }));
+    const admission = prepareReceipt(options, context, cached, parent);
+    const serialized = `${JSON.stringify(admission.receipt, null, 2)}\n`;
+    const prepared = prepareLease(tuple, state.generation, "engine", `admission ${options.run}`);
+    return stationTransaction(home, async () => {
+      if (!isDeepStrictEqual(readStateLocked(home), state)) throw new Error("Station changed during admission preparation; retry");
+      assertCachedArtifactPresent(home, cached);
+      // Cancellation cannot publish a successor, including during preparation.
+      if (parent) assertNotCancelled(dirname(parent.receipt));
+      if (persist) publishReceipt(admission.path, options.run, serialized);
+      createLeaseLocked(home, prepared);
+      return admission;
+    });
+  });
   // Enqueue can block or be ambiguous. Keep the lease through payload exit,
   // not merely enqueue completion; only GC's dead-or-reused probe frees it.
-  // The receipt/enqueue handoff does not exclude state-locked tick inventory.
+  // Concurrent inventory must recheck its reader stamp after this lease publishes.
   return await use(selected);
 }
 /** Internal explicit-artifact admission. Root CLI admission always hands off first. */

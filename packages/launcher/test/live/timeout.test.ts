@@ -36,10 +36,10 @@ test("hung gh listing/resolution/download time out, release locks and allow the 
   assert.equal(readFileSync(join(stationRoot(f.home), "state.json"), "utf8"), before);
   rmSync(marker);
   assert.equal((await promote(f.home, dependencies)).promoted, false);
-  assert.deepEqual((await readStationState(f.home, dependencies)).current, f.a);
+  assert.deepEqual((await readStationState(f.home)).current, f.a);
 });
 
-test("station lock deadline names its holder, does not run the body, and recovers after release", { timeout: 10000 }, async t => {
+test("station lock deadline names observed acquirers, does not run the body, and recovers after release", { timeout: 10000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), "a4s-lock-deadline-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   // Launcher targets ES2022, whose Promise type does not expose withResolvers.
@@ -55,7 +55,7 @@ test("station lock deadline names its holder, does not run the body, and recover
       assert.equal((error as NodeJS.ErrnoException).code, "ETIMEDOUT");
       assert.match(String(error), /Lock acquisition timed out after 100ms.*\.state\.lock/);
       assert.ok(String(error).includes(`"pid":${process.pid}`));
-      assert.match(String(error), /holder=.*"host":.*"command":.*"acquiredAt":/);
+      assert.match(String(error), /observed acquirers=.*"host":.*"command":.*"acquiredAt":/);
       return true;
     });
     await assert.rejects(stationTransaction(directory, async () => { ran = true; }, {

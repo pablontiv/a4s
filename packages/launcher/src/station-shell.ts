@@ -6,7 +6,7 @@ import { readRecoveryEvidence } from "./station-recovery-evidence.ts";
 import { readServiceEnvironment } from "./service-environment.ts";
 import { receiptTuple, restoreArtifact, runReceiptPath } from "./select.ts";
 import { artifactToken, parseArtifact, sameArtifact } from "./release.ts";
-import { createLeaseLocked } from "./lease.ts";
+import { createLeaseLocked, prepareLease } from "./lease.ts";
 import { assertLauncher, stationRoot, stationTransaction } from "./station-state.ts";
 import { assertCachedArtifactPresent } from "./artifact-cache.ts";
 import { isRecord } from "./type-guard.ts";
@@ -32,9 +32,10 @@ export async function stationShell(args: string[]): Promise<void> {
   const cached = await restoreArtifact(service.DAGU_HOME, tuple);
   assertLauncher(cached.identity);
   if (receiptSupport !== undefined && !isDeepStrictEqual(receiptSupport, cached.identity.support)) throw new Error("Station shell cached artifact support differs from the admitted receipt");
+  const prepared = prepareLease(tuple, 0, "launcher", "station-shell");
   const lease = await stationTransaction(service.DAGU_HOME, async () => {
     assertCachedArtifactPresent(service.DAGU_HOME, cached);
-    return createLeaseLocked(service.DAGU_HOME, tuple, 0, "launcher", "station-shell");
+    return createLeaseLocked(service.DAGU_HOME, prepared);
   });
   try {
     const result = spawnSync(executableOnPath("bash", service.PATH), args, { stdio: "inherit", env: { ...process.env, ...service, A4S_BIN: cached.executable, A4S_ARTIFACT: artifactToken(tuple) } });
