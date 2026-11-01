@@ -17,7 +17,6 @@ export interface SelectionDependencies extends StateDependencies {
   confirm?: (dagRunId: string) => Promise<Attempt>;
   receipt?: (path: string) => ArtifactTuple;
   cwd?: string;
-  env?: NodeJS.ProcessEnv;
 }
 /** Missing means restore; damaged/conflicting cache entries never trigger replacement. */
 export async function restoreArtifact(home: string, tuple: ArtifactTuple): Promise<CachedArtifact> {
@@ -56,7 +55,7 @@ export async function selectPayload(home: string, args: string[], dependencies: 
   const env = dependencies.env ?? process.env, cwd = dependencies.cwd ?? process.cwd();
   return stationTransaction(home, async () => {
     // Validate the state envelope without loading any payload, including current.
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     let tuple = state.current, selectedArgs = [...args], receiptPath: string | undefined;
     const admission = args[0] === "admit" || args[0] === "enqueue";
     const parent = admission ? flag(args, "--parent") : undefined;

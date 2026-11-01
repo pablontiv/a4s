@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { useStation } from "./fixtures/service-environment.ts";
-import { existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { DatabaseSync } from "node:sqlite";
@@ -29,23 +29,44 @@ for (const point of ["before-rename", "after-rename"] as const) {
   });
 }
 
-test("native resource discovery is a repairable state-derived cache pointer, not an execution selector", async t => {
+test("native resources are consumer-visible state-derived links that survive activation, repair and rollback", async t => {
   const f = stationFixture(t), current = await f.release("r1"), next = await f.release("r2");
+  const cache = stationRoot(f.home), pointer = join(cache, "current"), loader = join(cache, "loader");
+  const skills = join(f.userHome, ".agents", "skills");
+  const names = readdirSync(join(cache, current.version, "skills")).filter(name => existsSync(join(cache, current.version, "skills", name, "SKILL.md"))).sort();
+  assert.ok(names.length > 0);
+  function assertResources(version: string): void {
+    assert.equal(readlinkSync(pointer), version);
+    for (const name of names) {
+      assert.equal(readlinkSync(join(skills, name)), join(pointer, "skills", name));
+      assert.equal(realpathSync(join(skills, name)), join(cache, version, "skills", name));
+      assert.equal(readFileSync(join(skills, name, "SKILL.md"), "utf8"), readFileSync(join(cache, version, "skills", name, "SKILL.md"), "utf8"));
+    }
+    assert.equal(readlinkSync(join(loader, "agents")), "../current/agents");
+    assert.equal(realpathSync(join(loader, "agents")), join(cache, version, "agents"));
+    assert.throws(() => lstatSync(join(loader, "skills")), { code: "ENOENT" });
+  }
   await initializeStation(f.home, current, f.dependencies);
-  const pointer = join(stationRoot(f.home), "current");
+  assertResources("r1");
+  assert.equal(lstatSync(loader).isDirectory(), true, "resource discovery creates loader before build-loader runs");
+  assert.equal(existsSync(join(loader, "package.json")), false);
+  assert.equal(existsSync(join(f.home, ".agents")), false, "DAGU_HOME is not the native skills root");
+  rmSync(join(skills, names[0]!));
+  rmSync(join(loader, "agents"));
+  assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
+  assertResources("r1");
   rmSync(pointer);
   symlinkSync("r999", pointer);
   assert.equal((await readStationState(f.home, f.dependencies)).current.version, "r1");
-  assert.equal(readlinkSync(pointer), "r1");
+  assertResources("r1");
   await promote(f.home, { ...f.dependencies, releases: async () => [next] });
-  assert.equal(readlinkSync(pointer), "r2");
-  const loader = join(stationRoot(f.home), "loader");
-  mkdirSync(loader);
+  assertResources("r2");
+  mkdirSync(loader, { recursive: true });
   writeFileSync(join(loader, "package.json"), '{"name":"@a4s/loader"}');
   await gc(f.home, f.dependencies);
   assert.ok(existsSync(join(loader, "package.json")));
   await rollback(f.home, f.dependencies);
-  assert.equal(readlinkSync(pointer), "r1");
+  assertResources("r1");
 });
 
 test("state schemas, format sets and symlinks fail closed; initialization cannot overwrite", async t => {

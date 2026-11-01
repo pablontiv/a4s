@@ -71,9 +71,10 @@ staging directory outside the source checkout. This independent compiled binary
 contains the release repository and launcher protocol, not a payload identity.
 Install `a4s-launch` on the service user's PATH and make `a4s` select it, initialize
 with a trusted exact payload tuple, then validate/review/install the archive's
-`reconcile.yaml` (single step `a4s tick`). The launcher writes only runtime cache
-state; it never writes station/service configuration, installs the DAG, or
-restarts Dagu. Follow the
+`reconcile.yaml` (single step `a4s tick`). The launcher writes runtime cache
+state and reconciles a4s-owned skill links under `~/.agents/skills`; it never
+writes station/service configuration, changes plugin-manager links, installs the
+DAG, or restarts Dagu. Follow the
 [exact operator commands](deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 
 Launcher changes require operator reinstall. `a4s launcher-version` reports its
@@ -90,19 +91,45 @@ From a reviewed source checkout with dependencies installed:
 ```sh
 node scripts/build-loader.mjs --outdir "$DAGU_HOME/cache/a4s/loader"
 omp plugin link "$DAGU_HOME/cache/a4s/loader"
+a4s state
 ```
 
 This creates a self-contained `@a4s/loader` package under the runtime cache.
-Its native skills/agents roots point to `../current/skills` and
-`../current/agents`; the launcher maintains that cache-only derived symlink from
-`state.current` under its state lock. `state.json` remains authoritative and reads
-repair the pointer after an interrupted commit. No station settings, service
-files or plugin-manager links are written by a4s. Preserve unrelated plugin
-entries; the operator removes the obsolete `@a4s/issue-lifecycle` link, links
-`@a4s/loader`, and restarts OMP. Verify the manager's actual directory source and
+Its manifest registers only the extension entry; native discovery does not use
+`omp.skills` or `omp.agents` fields. The launcher maintains the conventional
+`$DAGU_HOME/cache/a4s/loader/agents -> ../current/agents` root. There is no
+conventional `loader/skills` root: each current skill is exposed separately as
+`~/.agents/skills/<name> -> $DAGU_HOME/cache/a4s/current/skills/<name>`.
+
+Under its state lock, the launcher reconciles the `current` pointer, loader agent
+root and user skill links during initialization, activation, rollback and state
+read-repair. `state.json` remains authoritative after an interrupted commit.
+Reconciliation adds missing skill links and removes only a4s-owned stale
+symlinks; it preserves and reports existing files, directories and nonowned
+symlinks as conflicts. Resolve reported conflicts explicitly without overwriting
+unrelated resources, then rerun `a4s state`.
+
+No station settings, service files or plugin-manager links are written by the
+launcher. On first migration, the operator removes the obsolete
+`@a4s/issue-lifecycle` registration and links `@a4s/loader`, preserving unrelated
+plugin entries. Restart OMP and verify the manager's actual directory source and
 manifest entry, plus one status observer and both extensions after startup.
 
-Loader changes require an operator rebuild/relink if needed and OMP restart.
+For an existing station already linked to the stable loader, install the updated
+reviewed launcher as above, then run from the reviewed source checkout using the
+same service user, `HOME` and canonical `DAGU_HOME` as OMP:
+
+```sh
+node scripts/build-loader.mjs --outdir "$DAGU_HOME/cache/a4s/loader"
+a4s state
+```
+
+`a4s state` is the intended read-repair entry point; it creates/repairs discovery
+links without reinitializing station state or selecting another payload. An
+existing plugin link to that stable directory does not need replacing. Resolve
+any reported resource conflicts, rerun `a4s state`, then restart OMP for agent
+rediscovery and the rebuilt loader. Do not use a per-release plugin relink.
+
 Payload promotion requires neither reinstall nor per-release relink. Same
 registration/resource metadata switches both extensions automatically at idle;
 different commands/tools, schemas/descriptions/completions, skills/agents or

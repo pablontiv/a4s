@@ -35,7 +35,7 @@ test("argv-named action/observation/priority targets override caller run and tic
     ["observe", "run-b", "{}"], ["observe", "runtime", JSON.stringify({ run: { dagRunId: "run-b" } })],
     ["prioritize", "feature", "run-b"],
   ]) {
-    const selected = await selectPayload(f.home, args, { ...f.dependencies, env: { DAG_RUN_ID: "tick-a", PRIMARY: f.primary, RUN: "caller-a" } });
+    const selected = await selectPayload(f.home, args, { ...f.dependencies, env: { ...f.dependencies.env, DAG_RUN_ID: "tick-a", PRIMARY: f.primary, RUN: "caller-a" } });
     assert.deepEqual(selected.lease.artifact, f.b);
   }
 });

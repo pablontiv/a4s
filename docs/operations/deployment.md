@@ -138,10 +138,10 @@ deleted by a4s, so exact historical tuples remain restorable.
 stable launcher, plugin link, tick DAG, admission policy, model or service.
 The separate launcher archive and locked state/promote/rollback/GC primitives
 are available for operator installation; tick/loader adoption remains
-operator-owned. a4s never writes station/service configuration; station
-runtime writes stay inside `$DAGU_HOME/cache/a4s`, alongside already-owned run/job
-state. At the authorized drained cutover, ensure the exact initial artifact then
-run `a4s station init --artifact '<id>@<sha>#<digest>'`. This inventories persisted
+operator-owned. a4s never writes station/service configuration or plugin-manager
+links. It writes runtime cache/run/job state and reconciles a4s-owned per-skill
+links under `~/.agents/skills`. At the authorized drained cutover, ensure the exact
+initial artifact then run `a4s station init --artifact '<id>@<sha>#<digest>'`. This inventories persisted
 receipts, shared SQLite/JSON jobs, run/checkpoint state and committed configs;
 it does not rewrite that history. Initial previous equals current.
 
@@ -213,10 +213,12 @@ operator-owned station/service configuration remain untouched.
 2. **Install an initial release.** Obtain the exact platform
    `a4s-r<N>-<os>-<arch>.tar.gz` (or the original historical
    `a4s-v<semver>-<os>-<arch>.tar.gz`) and matching `.sha256` from its immutable
-   GitHub release, verify SHA-256 before extraction, then install the extracted
-   root at an operator-owned stable location. Put that release's `a4s` on PATH
-   for initial admission and load/link its whole root as the OMP plugin. Do not
-   install a checkout or point the service at a source interpreter.
+   GitHub release and verify SHA-256 before extraction. Install the stable
+   launcher on PATH and initialize it with that exact immutable tuple using
+   [the procedure below](#install-the-stable-launcher-tick-dag-and-release-plugin);
+   it restores the verified payload into its cache. Install the stable
+   `@a4s/loader`, not the payload root or a source checkout, as the persistent OMP
+   plugin. Do not point the service at a source interpreter.
 3. **Provision the station explicitly.** Select the intended compiled `omp` on
    the service PATH and verify `a4s role-jobs detect`. Configure Dagu's loopback API, coordinator and named
    queues with operator-chosen `max_concurrency`. Preserve the canonical home
@@ -329,7 +331,7 @@ LOADER_ROOT="$DAGU_HOME/cache/a4s/loader"
 install -m 0755 "$LAUNCHER_ROOT/a4s-launch" "$HOME/.local/bin/a4s-launch"
 ln -s a4s-launch "$HOME/.local/bin/a4s"
 a4s-launch launcher-version
-# Runtime cache/state only: restore and verify this exact release, seed inventory.
+# Restore/verify this exact release, seed inventory, reconcile discovery links.
 a4s station init --artifact "$TUPLE"
 a4s state
 
@@ -348,6 +350,7 @@ install -m 0644 "$LAUNCHER_ROOT/reconcile.installed.yaml" "$DAGU_HOME/dags/recon
 # Build from the reviewed source checkout once; loader changes require restart.
 node scripts/build-loader.mjs --outdir "$LOADER_ROOT"
 omp plugin link "$LOADER_ROOT"
+a4s state
 ```
 
 Preserve/resolve existing operator-owned binaries, links and DAGs before those
@@ -369,20 +372,47 @@ Retain both scheduled-history and explicit retry evidence. a4s never installs
 these DAG bytes or changes Dagu configuration, capacity, service units or service
 activation; the operator owns those operations.
 
-For the service user's persistent OMP installation, replace the existing
-`@a4s/issue-lifecycle` registration rather than registering a second copy. The
-plugin manager/link must make
-`~/.omp/plugins/node_modules/@a4s/issue-lifecycle` resolve to `RELEASE_ROOT`,
-not PRIMARY's `packages/issue-lifecycle`. Update the corresponding
-`~/.omp/plugins/omp-plugins.lock.json` managed entry to the release's actual
-`package.json` version and release-directory source/link; do not retain the
-old `0.5.25` checkout record or alter unrelated plugin entries. Use the installed
-OMP plugin manager's link/replacement operation to maintain its lock schema.
-Retain the selected version, commit, archive digest, resolved link and lock
-entry as operator evidence. A new OMP process must load both extension entries,
-agents and skills from that root; refresh alone is not module-load evidence.
-The packaged extensions select adjacent `RELEASE_ROOT/a4s`, then each run's
-receipt-bound cache for mutations.
+For the service user's persistent OMP installation, remove the obsolete
+`@a4s/issue-lifecycle` registration and link **only the stable `@a4s/loader`**,
+not another payload copy. Use the installed OMP plugin manager's removal/link
+operations to preserve its lock schema and unrelated entries. Verify
+`~/.omp/plugins/node_modules/@a4s/loader` resolves to
+`$DAGU_HOME/cache/a4s/loader`, and retain the corresponding managed manifest
+entry and selected payload tuple as operator evidence. The loader manifest
+registers its extension entry only, not ignored `omp.skills`/`omp.agents` fields.
+
+The launcher maintains
+`$DAGU_HOME/cache/a4s/loader/agents -> ../current/agents`, even before the loader
+is built. Skills use canonical user discovery, with one
+`~/.agents/skills/<name> -> $DAGU_HOME/cache/a4s/current/skills/<name>` link per
+current skill; there is no conventional `loader/skills` root. Initialization,
+activation, rollback and state read-repair reconcile these links and the cache's
+`current` pointer under the launcher state lock, derived from authoritative
+`state.json`. Missing skill links are added; only a4s-owned stale symlinks are
+removed. Existing files, directories and nonowned symlinks are preserved and
+reported as conflicts, not replaced.
+
+**Existing station already linked to `@a4s/loader`:** after verifying and
+extracting the updated launcher archive, use the same service user, `HOME` and
+canonical `DAGU_HOME` as OMP. From the reviewed source checkout:
+
+```sh
+LAUNCHER_ROOT="<verified-extracted-updated-a4s-launch-platform-archive>"
+install -m 0755 "$LAUNCHER_ROOT/a4s-launch" "$HOME/.local/bin/a4s-launch"
+a4s launcher-version
+node scripts/build-loader.mjs --outdir "$DAGU_HOME/cache/a4s/loader"
+a4s state
+```
+
+`a4s state` is the intended read-repair entry point, not `station init`: it
+repairs discovery links without changing the selected payload. Preserve the
+existing `a4s` selection and stable plugin link; neither needs replacement when
+it already points to the stable installation. Resolve reported resource
+conflicts explicitly and rerun `a4s state`. Then restart OMP for the rebuilt
+loader and agent rediscovery; plugin refresh alone is not module-load evidence.
+Verify current skills and agent sources, one status observer and both extensions
+after startup. Future payload promotions require no per-release plugin relink;
+existing-run mutations still use each run's receipt-bound cached executable.
 
 Admission can reopen only after read-only readiness, manual/scheduled tick
 history and plugin-load evidence agree with the selected station tuple.
@@ -579,10 +609,12 @@ new-format writer even when a bridge build is already current.
    its actual process exit, not just observer shutdown. Never remove a live lease
    file or delete a cached build to bypass compatibility. After an unclean exit,
    launcher GC verifies PID/start identity before collecting dead leases.
-3. Start OMP again using the stable loader. It reads `state.current`, repairs the
-   cache-only `current` resource pointer and creates a fresh process lease. Native
-   agent discovery is restart-only; skills and agents are included in the manifest
-   gate, rather than assuming hot rediscovery of either.
+3. Run `a4s state` to read-repair the cache's `current` pointer, loader agent root
+   and canonical user skill links under the launcher lock. Resolve any reported
+   nonowned conflicts and rerun it. Start OMP again using the stable loader,
+   which selects `state.current` and creates a fresh process lease. Native agent
+   discovery is restart-only; skills and agents are included in the resource
+   manifest gate, rather than assuming hot rediscovery of either.
 4. Retry normal promotion after the old PID is gone. Its retired-reader barrier
    is now absent; other nonterminal runs/jobs and persisted formats still gate a
    new-format writer. Do not repin old runs. Resume planning parents with their
@@ -592,8 +624,8 @@ A model/service cutover still requires closed admission, zero nonterminal runs
 and zero open role jobs under the separate procedure above. Ordinary same-manifest
 hot switches do not impose that global drain. Loader/helper changes require OMP
 restart; launcher protocol skew requires operator launcher reinstall as well.
-a4s writes only cache-directory runtime state and never station/service
-configuration, plugin-manager links or service activation.
+a4s writes runtime cache/run/job state and reconciles a4s-owned user skill links,
+never station/service configuration, plugin-manager links or service activation.
 
 ### Run recovery
 
