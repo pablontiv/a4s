@@ -251,13 +251,23 @@ a4s-owned: reconciliation removes stale owned links, preserves all non-owned
 entries and reports name conflicts. Neither ignored `omp.skills`/`omp.agents`
 manifest fields nor a second loader `skills/` root are used for discovery.
 The launcher, plugin loader, promotion, rollback, admission handoff and GC share
-`.state.lock`. Release listing/resolution, archive download, extraction and full
-cache verification MUST run outside that lock. A caller snapshots selection,
-prepares the exact artifact, then reacquires the lock to reject changed station
-state/receipts and confirm the verified cache record still exists before publishing
-state or a lease. GC cannot delete an entry between that final check and publication.
-A changed selection fails closed with a retry diagnostic; it never commits stale state.
-Inventory and live-reader compatibility checks remain serialized with the commit.
+`.state.lock`. Release listing/resolution, archive download, extraction, hashing,
+Git commands, native HTTP observations and process probes MUST run outside that
+lock. A caller prepares the exact artifact and observations, then reacquires the
+lock to reject changed station/config bindings, re-derive local decision fields
+and confirm the verified cache record still exists before publishing state or a
+lease. Unchanged receipt decision fields use a parsed cache keyed by inode,
+size and nanosecond modification/change times; a changed stat reparses the file,
+not an automatic retry. New receipts, SQLite schema/payload versions and open
+bindings (including committed WAL frames), tick bindings and current leases are
+read locally at the final decision. Unrelated receipt/CI observations, lease
+turnover and role-job row churn do not invalidate preparation. The local decision
+has a 1-second fail-closed budget, checked before state publication or cache
+detach; there is no final HTTP recheck. Compatibility remains serialized with
+the commit. New readers publish a receipt, tick binding or lease under this lock
+before using the cache and fail closed if it has disappeared. The triage
+run-guard's direct `run --artifact` handoff is a known exception: it does not
+publish a fresh launcher lease; this change does not add one.
 
 Every launcher `gh` metadata/checksum call has a 15-second timeout; the archive
 transfer has a five-minute timeout. Expiry kills the child with `SIGKILL` and
@@ -296,21 +306,39 @@ launcher skew reports `launcher reinstall required`. Commit sets
 arriving late cannot move selection backward. A precommit failure changes no
 state; an error after rename never falls through to another candidate.
 
-GC holds the same global lock and keeps current, previous, the ten highest build
-IDs, all process leases, all nonterminal/retryable/waiting tick bindings, every
-nonterminal run in **every DAG of every registered primary**, and every open role
-job resolved through its repository/run receipt. All Dagu history pages are
-required; repeated cursors, unknown status, unreadable sources or an unresolved
-job abort before any deletion. An artifact-bound receipt not yet listed by Dagu
-is a pending admission, even when enqueue recorded an incident/ambiguous outcome;
-its build is kept for five minutes after `receiptCreatedAt` (legacy
-`initial.admittedAt`). At that bound an absent run no longer pins the build, but
-live leases, nonterminal/recoverable runs and open jobs remain readers regardless
-of receipt age. Artifact-less schema-1 receipts predate the launcher cache and
-are never pending cache readers. Receipts are unchanged and their exact tuples
-remain restorable after expiry. Tick binding files remain for every listed
-status and are deleted only after a definitive unknown response, never an API
-error. Run identity remains in receipts/bindings even after build pruning.
+GC prepares observations outside the global lock and keeps current, previous,
+the ten highest build IDs, all live process leases, nonterminal/retryable/waiting
+tick bindings, every nonterminal run in **every DAG of every registered primary**,
+and every open role job resolved through its repository/run receipt. GC alone
+also retains possible readers: failed, aborted, partially succeeded, unknown or
+unlisted runs, plus new or decision-changed artifact-bound receipts. These
+conservative holds do not change promote/rollback eligibility. Promotion still
+treats an unlisted admission as pending for five minutes after `receiptCreatedAt`
+(legacy `initial.admittedAt`); live leases, nonterminal/recoverable runs and open
+jobs remain readers regardless of age. Artifact-less schema-1 receipts predate
+the launcher cache and are never pending cache readers.
+
+All Dagu history pages are required; repeated cursors, unreadable sources or
+unresolved live readers abort before the first deletion. Native status changes
+after preparation do not require HTTP under the lock: a resumed/new reader must
+publish its local binding/lease before cache use. For each collection candidate,
+GC takes the artifact-publisher lock **outside** the state lock, re-derives the
+current local retention decision under the state lock, atomically renames the
+unreferenced directory out of the cache namespace, then removes it recursively
+after releasing the state lock. Busy publishers are retained, never waited on
+while holding the state lock. Receipts remain unchanged and exact tuples stay
+restorable. Tick files remain for every listed status and are removed only on
+the prepared exact native unknown response while the same binding still exists;
+new/changed bindings are retained. Run identity survives build pruning.
+
+For a station-scale read-only measurement, run
+`node --import tsx packages/launcher/test/fixtures/station-hold-measurement.ts`
+from the checkout with the operator's declared service environment. It copies
+only station/cache metadata and SQLite journals to a temporary home, reads live
+primary receipts/config and native observations, then measures the actual GC
+transaction bodies with an in-process lock in that isolated home. It acquires
+no live lock and writes no live state; the reported holds exclude lock wait and
+include local inventory, leases, retention planning and atomic cache detach.
 
 Leases record build, PID, host, process start identity, generation and holder.
 The lease store belongs to one local station and MUST NOT be shared across

@@ -1,10 +1,11 @@
 import { readServiceEnvironment } from "./service-environment.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { DatabaseSync } from "node:sqlite";
-import { readCommittedConfig } from "./config.ts";
+import { CONFIG_PATH, readCommittedConfig } from "./config.ts";
 import { isRecord } from "./type-guard.ts";
 import { tupleFromJson, readJsonFile, stationRoot, type PersistedFormats } from "./station-state.ts";
 import type { ArtifactTuple } from "./release.ts";
@@ -47,6 +48,11 @@ function gitPath(primary: string): string {
 }
 const activeStatuses: Record<string, true> = { queued: true, waiting: true, running: true, recoverable: true, retrying: true, not_started: true };
 const terminalStatuses: Record<string, true> = { succeeded: true, failed: true, aborted: true, cancelled: true, partially_succeeded: true, rejected: true };
+const resumableStatuses: Record<string, true> = { failed: true, aborted: true, partially_succeeded: true };
+function possibleReader(run: StationRun): boolean {
+  const status = run.statusLabel.toLowerCase();
+  return !!activeStatuses[status] || !!resumableStatuses[status] || !terminalStatuses[status] || run.retryable === true;
+}
 export function nonterminal(run: StationRun): boolean {
   const status = run.statusLabel.toLowerCase();
   if (!activeStatuses[status] && !terminalStatuses[status]) throw new Error(`Unknown Dagu status ${run.statusLabel}`);
@@ -56,7 +62,7 @@ async function api(path: string): Promise<Response> {
   return fetch(`${readServiceEnvironment().DAGU_URL}/api/v1/${path}`, { signal: AbortSignal.timeout(15000) });
 }
 /** All DAGs, all history pages: page size is never a retention limit. */
-export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME, limit = 100): Promise<StationRun[]> {
+export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME, limit = 100, conservativeGc = false): Promise<StationRun[]> {
   readServiceEnvironment({ ...process.env, DAGU_HOME: home });
   const runs: StationRun[] = [];
   const seen = new Set<string>();
@@ -77,7 +83,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
       const workspace = typeof row.workspace === "string" && row.workspace ? `?workspace=${encodeURIComponent(row.workspace)}` : "";
       // Dagu 2.24 exposes pending resumes only in details, not in list summaries.
       // Failed/aborted/partial runs may therefore still be recoverable readers.
-      if (["failed", "aborted", "partially_succeeded"].includes(run.statusLabel.toLowerCase())) {
+      if (!conservativeGc && resumableStatuses[run.statusLabel.toLowerCase()]) {
         const detailResponse = await api(`dag-runs/${encodeURIComponent(run.name)}/${encodeURIComponent(run.dagRunId)}${workspace}`);
         if (!detailResponse.ok) throw new Error(`Dagu recovery inventory HTTP ${detailResponse.status}`);
         const detail: unknown = await detailResponse.json();
@@ -88,7 +94,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
           (typeof row.autoRetryCount !== "number" || row.autoRetryCount < row.autoRetryLimit);
       }
       // Resolve from the immutable spec, not from today's DAG file or a label guess.
-      if (nonterminal(run)) {
+      if (conservativeGc ? !!activeStatuses[run.statusLabel.toLowerCase()] || run.retryable : nonterminal(run)) {
         const specResponse = await api(`dag-runs/${encodeURIComponent(run.name)}/${encodeURIComponent(run.dagRunId)}/spec${workspace}`);
         if (!specResponse.ok) throw new Error(`Dagu spec inventory HTTP ${specResponse.status}`);
         const spec: unknown = await specResponse.json();
@@ -105,7 +111,7 @@ export async function listStationRuns(home = readServiceEnvironment().DAGU_HOME,
   return runs;
 }
 /** Only the exact native run-detail unknown result authorizes binding deletion. */
-export async function bindingRun(binding: TickBinding): Promise<StationRun | undefined> {
+export async function bindingRun(binding: TickBinding, conservativeGc = false): Promise<StationRun | undefined> {
   const response = await api(`dag-runs/${TICK_DAG}/${encodeURIComponent(binding.dagRunId)}`);
   if (!response.headers.get("content-type")?.split(";")[0]?.trim().match(/^application\/json$/i)) throw new Error(`Cannot establish tick binding history: non-JSON HTTP ${response.status}`);
   const value: unknown = await response.json();
@@ -116,7 +122,7 @@ export async function bindingRun(binding: TickBinding): Promise<StationRun | und
         retryable: detail.humanTaskResumePending === true || detail.approvalResumePending === true ||
           detail.statusLabel === "failed" && typeof detail.autoRetryLimit === "number" &&
           (typeof detail.autoRetryCount !== "number" || detail.autoRetryCount < detail.autoRetryLimit) };
-      nonterminal(run);
+      if (!conservativeGc) nonterminal(run);
       return run;
     }
   }
@@ -133,13 +139,18 @@ export function readTickBindings(home: string): Array<{ path: string; binding: T
     return { path, binding };
   });
 }
-interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number; cancelled: boolean }
-// Covers receipt publication before enqueue becomes visible. Live admission
-// processes also hold leases; absent history alone must not pin builds for days.
+interface ReceiptEntry { value: Record<string, unknown>; primary: string; dag: string; run: string; artifact?: ArtifactTuple; created: number; cancelled: boolean; changed: boolean }
+// Promotion admission covers the gap before enqueue becomes visible; GC uses
+// its separate conservative possible-reader retention instead of this expiry.
 const PENDING_ADMISSION_WINDOW_MS = 5 * 60 * 1000;
 export interface StationInventory { formats: Partial<PersistedFormats>; references: BuildReference[]; expiredBindings: string[] }
+interface InventoryRead {
+  read: (path: string, cancellation?: boolean) => unknown;
+  changed: Set<string>;
+  check: () => void;
+}
 /** Read-only inventory; every error propagates before the caller can delete anything. */
-export async function inventoryStation(home: string, dependencies: InventoryDependencies = {}, includeRuns = true): Promise<StationInventory> {
+export async function inventoryStation(home: string, dependencies: InventoryDependencies = {}, includeRuns = true, conservativeGc = false, local?: InventoryRead): Promise<StationInventory> {
   const versions = Object.fromEntries(SHARED_FORMATS.map(name => [name, new Set<number>()])) as Record<SharedFormat, Set<number>>;
   const add = (name: SharedFormat, value: unknown) => {
     if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`Unrecognized persisted ${name} version`);
@@ -148,13 +159,15 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
   const references: BuildReference[] = [], receipts: ReceiptEntry[] = [];
   const primaries = (dependencies.primaries ?? registeredPrimaries)(home);
   for (const primary of primaries) {
+    local?.check();
     add("config", (dependencies.configVersion ?? (p => readCommittedConfig(p).config.schemaVersion))(primary));
     const directory = (dependencies.gitPath ?? gitPath)(primary);
     if (names(directory).length) add("runState", 1); // Historical unversioned run-state decoder.
     for (const run of names(join(directory, "runs"))) {
+      local?.check();
       const path = join(directory, "runs", run, "receipt.json");
       let value: unknown;
-      try { value = readJsonFile(path); } catch (error) { if (missing(error)) continue; throw error; }
+      try { value = local ? local.read(path) : readJsonFile(path); } catch (error) { if (missing(error)) continue; throw error; }
       if (!isRecord(value) || !isRecord(value.runReceipt) || typeof value.runReceipt.dag !== "string" || value.runReceipt.run !== run || !isRecord(value.initial)) throw new Error(`Unreadable run receipt ${run}`);
       add("receipt", value.schemaVersion);
       const contracts = isRecord(value.contracts) ? value.contracts : undefined;
@@ -162,9 +175,11 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       const created = Date.parse(String(value.receiptCreatedAt ?? value.initial.admittedAt));
       if (!Number.isFinite(created)) throw new Error(`Missing receipt creation time ${run}`);
       let cancellation: unknown;
-      try { cancellation = readJsonFile(join(directory, "runs", run, "cancellation.json")); } catch (error) { if (!missing(error)) throw error; }
+      try { cancellation = local ? local.read(join(directory, "runs", run, "cancellation.json"), true) : readJsonFile(join(directory, "runs", run, "cancellation.json")); } catch (error) { if (!missing(error)) throw error; }
       const cancelled = isRecord(cancellation) && cancellation.run === run && cancellation.outcome === "cancelled" && isRecord(cancellation.cleanup) && cancellation.cleanup.admissionReleased === true;
-      receipts.push({ value, primary, dag: value.runReceipt.dag, run, created, cancelled, ...(value.artifact ? { artifact: tupleFromJson(value.artifact) } : {}) });
+      receipts.push({ value, primary, dag: value.runReceipt.dag, run, created, cancelled,
+        changed: !!local && (local.changed.has(path) || local.changed.has(join(directory, "runs", run, "cancellation.json"))),
+        ...(value.artifact ? { artifact: tupleFromJson(value.artifact) } : {}) });
       // PR checkpoint protocol 1 used unversioned marker files; never rewrite them.
       if (names(join(directory, "runs", run)).some(name => /^(?:pr|checkpoint|publication)(?:[.-]|$)/.test(name))) add("prCheckpoint", 1);
     }
@@ -175,35 +190,66 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
     if (!lstatSync(database).isFile()) throw new Error("Role-job store must be regular");
     const db = new DatabaseSync(database, { readOnly: true });
     try {
+      // Read decision fields in one SQLite snapshot, including committed WAL
+      // frames. Row churn is not an optimistic-concurrency conflict.
+      db.exec("BEGIN");
       const schema = db.prepare("PRAGMA user_version").get();
-      add("roleJobStore", Number(schema?.user_version) || 1); // Historical SQL schema 1 predates user_version.
-      for (const row of db.prepare("SELECT document,result FROM jobs").all()) {
-        const job: unknown = JSON.parse(String(row.document));
-        if (!isRecord(job) || !isRecord(job.binding) || typeof job.binding.repo !== "string" || typeof job.binding.run !== "string" || typeof job.binding.dag !== "string") throw new Error("Unreadable role-job binding");
-        add("roleJobPayload", job.schemaVersion);
-        if (row.result !== null) {
-          const result: unknown = JSON.parse(String(row.result));
-          if (!isRecord(result)) throw new Error("Unreadable role-job result");
-          add("roleJobPayload", result.schemaVersion);
-        } else openJobs.push({ repo: realpathSync(job.binding.repo), run: job.binding.run, dag: job.binding.dag });
+      add("roleJobStore", Number(schema?.user_version) || 1);
+      const invalid = db.prepare(`SELECT 1 FROM jobs WHERE
+        json_type(document) IS NOT 'object' OR json_type(document,'$.binding') IS NOT 'object' OR
+        json_type(document,'$.binding.repo') IS NOT 'text' OR json_type(document,'$.binding.run') IS NOT 'text' OR
+        json_type(document,'$.binding.dag') IS NOT 'text' OR (result IS NOT NULL AND json_type(result) IS NOT 'object') LIMIT 1`).get();
+      if (invalid) throw new Error("Unreadable role-job binding or result");
+      for (const row of db.prepare(`SELECT DISTINCT json_extract(document,'$.schemaVersion') AS version FROM jobs
+        UNION SELECT DISTINCT json_extract(result,'$.schemaVersion') FROM jobs WHERE result IS NOT NULL`).all()) {
+        local?.check();
+        add("roleJobPayload", row.version);
+      }
+      for (const row of db.prepare(`SELECT DISTINCT json_extract(document,'$.binding.repo') AS repo,
+        json_extract(document,'$.binding.run') AS run, json_extract(document,'$.binding.dag') AS dag FROM jobs WHERE result IS NULL`).all()) {
+        local?.check();
+        openJobs.push({ repo: realpathSync(String(row.repo)), run: String(row.run), dag: String(row.dag) });
       }
     } finally { db.close(); }
   }
   if (includeRuns) {
-    const runs = await (dependencies.listRuns ? dependencies.listRuns() : listStationRuns(home));
-    for (const run of runs) nonterminal(run);
-    for (const run of runs.filter(nonterminal)) {
-      const matching = receipts.filter(receipt => receipt.run === run.dagRunId && receipt.dag === run.name && (!run.primary || receipt.primary === run.primary));
+    const runs = await (dependencies.listRuns ? dependencies.listRuns() : listStationRuns(home, 100, conservativeGc));
+    if (!conservativeGc) for (const run of runs) nonterminal(run);
+    const byRun = new Map<string, ReceiptEntry[]>(), byBinding = new Map<string, ReceiptEntry>();
+    const key = (dag: string, run: string) => JSON.stringify([dag, run]);
+    for (const receipt of receipts) {
+      const id = key(receipt.dag, receipt.run), entries = byRun.get(id) ?? [];
+      entries.push(receipt); byRun.set(id, entries);
+      byBinding.set(JSON.stringify([receipt.primary, receipt.dag, receipt.run]), receipt);
+    }
+    const listedRuns = new Map<string, StationRun[]>();
+    for (const run of runs) {
+      const id = key(run.name, run.dagRunId), entries = listedRuns.get(id) ?? [];
+      entries.push(run); listedRuns.set(id, entries);
+    }
+    for (const run of runs.filter(conservativeGc ? possibleReader : nonterminal)) {
+      local?.check();
+      const matching = (byRun.get(key(run.name, run.dagRunId)) ?? []).filter(receipt => !run.primary || receipt.primary === run.primary);
       if (!matching.length && run.primary && primaries.includes(run.primary)) throw new Error(`Nonterminal run has no receipt: ${run.name}/${run.dagRunId}`);
       for (const receipt of matching) {
         if (receipt.cancelled) continue;
-        if (!receipt.artifact) throw new Error(`Unresolved nonterminal artifact ${receipt.run}`);
+        if (!receipt.artifact) {
+          // Pre-launcher terminal receipts cannot identify a cache reader.
+          // Preserve the existing fail-closed rule for active/retryable runs.
+          if (conservativeGc && receipt.value.schemaVersion === 1 && !activeStatuses[run.statusLabel.toLowerCase()] && !run.retryable) continue;
+          throw new Error(`Unresolved nonterminal artifact ${receipt.run}`);
+        }
         references.push({ artifact: receipt.artifact, holder: `run ${run.name}/${run.dagRunId} ${run.statusLabel}` });
       }
     }
     const now = (dependencies.now ?? Date.now)();
     for (const receipt of receipts) {
-      if (!receipt.cancelled && !runs.some(run => run.name === receipt.dag && run.dagRunId === receipt.run) && now - receipt.created < PENDING_ADMISSION_WINDOW_MS) {
+      local?.check();
+      const listed = listedRuns.get(key(receipt.dag, receipt.run))?.filter(run => !run.primary || run.primary === receipt.primary);
+      if (conservativeGc && receipt.artifact && (receipt.changed || !listed?.length || listed.some(possibleReader))) {
+        references.push({ artifact: receipt.artifact, holder: `possible reader ${receipt.dag}/${receipt.run} ${receipt.changed ? "changed receipt" : listed?.map(run => run.statusLabel).join(",") || "unlisted"}` });
+      }
+      if (!receipt.cancelled && !listed?.length && now - receipt.created < PENDING_ADMISSION_WINDOW_MS) {
         // Pre-launcher receipts cannot name a cache reader. Existing runs and
         // open role jobs still require resolvable artifacts above and below.
         if (receipt.value.schemaVersion === 1 && !receipt.artifact) continue;
@@ -212,18 +258,152 @@ export async function inventoryStation(home: string, dependencies: InventoryDepe
       }
     }
     for (const job of openJobs) {
-      const receipt = receipts.find(receipt => receipt.primary === job.repo && receipt.run === job.run && receipt.dag === job.dag);
+      local?.check();
+      const receipt = byBinding.get(JSON.stringify([job.repo, job.dag, job.run]));
       if (!receipt?.artifact) throw new Error(`Unresolved open role job ${job.dag}/${job.run}`);
       references.push({ artifact: receipt.artifact, holder: `open role job ${job.dag}/${job.run}` });
     }
     const expiredBindings: string[] = [];
     for (const { path, binding } of readTickBindings(home)) {
-      const listed = runs.find(run => run.name === TICK_DAG && run.dagRunId === binding.dagRunId);
-      const run = listed ?? await (dependencies.bindingRun ?? bindingRun)(binding);
+      local?.check();
+      const listed = listedRuns.get(key(TICK_DAG, binding.dagRunId))?.[0];
+      const run = listed ?? await (dependencies.bindingRun ? dependencies.bindingRun(binding) : bindingRun(binding, conservativeGc));
       if (!run) expiredBindings.push(path);
-      else if (nonterminal(run)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
+      else if ((conservativeGc ? possibleReader : nonterminal)(run)) references.push({ artifact: binding.tuple, holder: `tick ${TICK_DAG}/${binding.dagRunId}` });
     }
     return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings };
   }
   return { formats: Object.fromEntries(SHARED_FORMATS.map(name => [name, [...versions[name]]])) as Partial<PersistedFormats>, references, expiredBindings: [] };
+}
+
+/** Content proof for Git's committed-config binding; no Git in the decision lock.
+ * Index and directory timestamps are deliberately absent: staging unrelated work,
+ * new receipts and observer writes must not invalidate a prepared decision. */
+function configProof(primary: string): Array<[string, string | null]> {
+  const files = new Map<string, string | null>();
+  const track = (path: string) => {
+    let value: string | null = null;
+    try {
+      if (!lstatSync(path).isFile()) throw new Error(`Config input must be a regular file: ${path}`);
+      value = readFileSync(path, "utf8");
+    } catch (error) { if (!missing(error)) throw error; }
+    files.set(path, value);
+    return value;
+  };
+  const marker = join(primary, ".git");
+  let directory = marker;
+  if (!lstatSync(marker).isDirectory()) {
+    const value = track(marker);
+    if (!value?.startsWith("gitdir: ")) throw new Error("Unreadable PRIMARY gitdir");
+    directory = resolve(primary, value.slice(8).trim());
+  }
+  const commonFile = track(join(directory, "commondir"));
+  const common = commonFile ? resolve(directory, commonFile.trim()) : directory;
+  track(join(primary, CONFIG_PATH));
+  for (const base of new Set([directory, common])) {
+    track(join(base, "config")); track(join(base, "config.worktree")); track(join(base, "packed-refs"));
+    for (const name of names(join(base, "reftable"))) track(join(base, "reftable", name));
+  }
+  const replacements = process.env.GIT_REPLACE_REF_BASE ?? "refs/replace";
+  for (const name of names(join(common, replacements))) track(join(common, replacements, name));
+  let ref = "HEAD";
+  const seen = new Set<string>();
+  for (;;) {
+    if (seen.has(ref)) throw new Error("Cyclic PRIMARY Git ref");
+    seen.add(ref);
+    const base = ref === "HEAD" || /^refs\/(?:worktree|bisect|rewritten)\//.test(ref) ? directory : common;
+    const value = track(join(base, ref))?.trim();
+    if (!value?.startsWith("ref: ")) break; // Detached or packed ref.
+    ref = value.slice(5);
+    if (!/^refs\/[A-Za-z0-9._/-]+$/.test(ref) || ref.split("/").some(part => !part || part === "." || part === "..")) throw new Error("Invalid PRIMARY Git ref");
+  }
+  return [...files].sort(([a], [b]) => a.localeCompare(b));
+}
+
+export interface PreparedInventory {
+  readLocked: () => Promise<StationInventory>;
+  checkDeadline: () => void;
+}
+
+/** Prepare expensive observations once, then re-derive the decision locally.
+ * A stat is only a parse-cache hint, never an abort condition. Cache values contain
+ * decision fields, not the multi-megabyte receipt snapshots/CI observations. */
+export async function prepareInventory(home: string, dependencies: InventoryDependencies = {}, includeRuns = true, conservativeGc = false): Promise<PreparedInventory> {
+  const primaries = [...new Set((dependencies.primaries ?? registeredPrimaries)(home))].sort();
+  const paths = new Map<string, string>(), configs = new Map<string, number>(), proofs = new Map<string, Array<[string, string | null]>>();
+  for (const primary of primaries) {
+    const before = dependencies.configVersion ? undefined : configProof(primary);
+    configs.set(primary, (dependencies.configVersion ?? (p => readCommittedConfig(p).config.schemaVersion))(primary));
+    paths.set(primary, (dependencies.gitPath ?? gitPath)(primary));
+    if (before) {
+      if (!isDeepStrictEqual(before, configProof(primary))) throw new Error("Committed config changed during preparation; retry");
+      proofs.set(primary, before);
+    }
+  }
+  const cache = new Map<string, { stamp: string; value: unknown }>(), changed = new Set<string>();
+  let rechecking = false, deadline = Infinity;
+  const checkDeadline = () => {
+    if (performance.now() >= deadline) throw Object.assign(new Error("Station local decision exceeded 1000ms; retry"), { code: "ESTALE" });
+  };
+  const local: InventoryRead = {
+    changed, check: checkDeadline,
+    read(path, cancellation = false) {
+      for (;;) {
+        checkDeadline();
+        const stat = lstatSync(path, { bigint: true });
+        if (!stat.isFile()) throw new Error(`Inventory input must be a regular file: ${path}`);
+        const stamp = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+        const prior = cache.get(path);
+        if (prior?.stamp === stamp) return prior.value;
+        const raw = readJsonFile(path);
+        const after = lstatSync(path, { bigint: true });
+        if (`${after.dev}:${after.ino}:${after.size}:${after.mtimeNs}:${after.ctimeNs}` !== stamp) continue;
+        let value: unknown = raw;
+        if (isRecord(raw)) {
+          value = cancellation ? { run: raw.run, outcome: raw.outcome, cleanup: isRecord(raw.cleanup) ? { admissionReleased: raw.cleanup.admissionReleased } : raw.cleanup } : {
+            schemaVersion: raw.schemaVersion, artifact: raw.artifact, artifactSupport: raw.artifactSupport, contracts: raw.contracts,
+            receiptCreatedAt: raw.receiptCreatedAt, initial: isRecord(raw.initial) ? { admittedAt: raw.initial.admittedAt } : raw.initial,
+            runReceipt: isRecord(raw.runReceipt) ? { dag: raw.runReceipt.dag, run: raw.runReceipt.run } : raw.runReceipt,
+          };
+        }
+        if (rechecking && !isDeepStrictEqual(prior?.value, value)) changed.add(path);
+        cache.set(path, { stamp, value });
+        checkDeadline();
+        return value;
+      }
+    },
+  };
+  let runs: StationRun[] = [];
+  const bindings = new Map<string, StationRun | undefined>();
+  const preparedDependencies: InventoryDependencies = { ...dependencies,
+    primaries: () => primaries, gitPath: primary => paths.get(primary)!,
+    configVersion: primary => rechecking && dependencies.configVersion ? dependencies.configVersion(primary) : configs.get(primary)!,
+    listRuns: async () => rechecking ? runs : (runs = await (dependencies.listRuns ? dependencies.listRuns() : listStationRuns(home, 100, conservativeGc))),
+    bindingRun: async binding => {
+      const key = JSON.stringify(binding);
+      if (rechecking) {
+        // A newly published binding has no prepared native observation. Its
+        // exact tuple is a reader; never query HTTP or erase it under the lock.
+        return bindings.has(key) ? bindings.get(key) : { name: TICK_DAG, dagRunId: binding.dagRunId, statusLabel: "waiting" };
+      }
+      const run = await (dependencies.bindingRun ? dependencies.bindingRun(binding) : bindingRun(binding, conservativeGc));
+      bindings.set(key, run); return run;
+    },
+  };
+  await inventoryStation(home, preparedDependencies, includeRuns, conservativeGc, local);
+  return {
+    checkDeadline,
+    async readLocked() {
+      deadline = performance.now() + 1000;
+      rechecking = true;
+      if (!isDeepStrictEqual(primaries, [...new Set((dependencies.primaries ?? registeredPrimaries)(home))].sort())) throw new Error("Registered primaries changed during preparation; retry");
+      for (const [primary, proof] of proofs) {
+        checkDeadline();
+        if (!isDeepStrictEqual(proof, configProof(primary))) throw Object.assign(new Error("Committed config changed during preparation; retry"), { code: "ESTALE" });
+      }
+      const inventory = await inventoryStation(home, preparedDependencies, includeRuns, conservativeGc, local);
+      checkDeadline();
+      return inventory;
+    },
+  };
 }
