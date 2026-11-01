@@ -1,4 +1,5 @@
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { executableOnPath } from "../../launcher/src/station-binding.ts";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,18 +8,25 @@ import { parseAllDocuments } from "yaml";
 import { packageRoot } from "./executable.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { invokeRun } from "./run-artifact.ts";
-import { promote, gc } from "../../launcher/src/station.ts";
 import { isRecord } from "../../launcher/src/type-guard.ts";
+
+/** Invoke the operator-installed launcher, never this tick's cached payload. */
+function stationCommand(launcher: string, command: "promote" | "gc"): void {
+  const result = spawnSync(launcher, ["station", command], { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] });
+  process.stdout.write(result.stdout || "");
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Station ${command} failed: ${result.status}`);
+}
 
 /** This process stays on the launcher's tick tuple even when promote commits a successor. */
 export async function tick(args: string[]): Promise<void> {
   if (args.length || !process.env.DAG_RUN_ID || !process.env.A4S_BIN || !process.env.A4S_ARTIFACT) throw new Error("tick requires a launcher-bound Dagu run");
   const service = readServiceEnvironment();
   Object.assign(process.env, service);
-  const home = service.DAGU_HOME;
+  const launcher = executableOnPath("a4s", service.PATH);
   process.env.CI_OBSERVATION_ID = process.env.DAG_RUN_ID;
   console.log(`tick=${process.env.DAG_RUN_ID} artifact=${process.env.A4S_ARTIFACT}`);
-  console.log(JSON.stringify(await promote(home)));
+  stationCommand(launcher, "promote");
   const directory = mkdtempSync(join(tmpdir(), "a4s-tick-"));
   try {
     const recovered = spawnSync(process.env.A4S_BIN, ["stale-recovery", "recover-scheduled"], { stdio: "inherit" });
@@ -60,5 +68,5 @@ export async function tick(args: string[]): Promise<void> {
     }));
     if (errors.length) throw new Error(`Tick actions failed: ${errors.join("; ")}`);
   } finally { rmSync(directory, { recursive: true, force: true }); }
-  console.log(JSON.stringify(await gc(home)));
+  stationCommand(launcher, "gc");
 }

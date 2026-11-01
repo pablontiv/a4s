@@ -151,6 +151,15 @@ such releases with “launcher reinstall required”, rather than hiding a compa
 bridge. Install a protocol-compatible launcher under the same operator authority,
 not by overwriting the selected payload.
 
+`a4s station promote` and `a4s station gc` are stable-launcher-owned, like
+`a4s rollback`: they never hand off to the current payload. Successor validation
+uses the installed launcher's validator, not the current payload's embedded copy.
+If a stale validator rejects every successor, reinstall the verified updated
+launcher as described below, then run `a4s station promote`. Do not rerun
+`station init` (initialized state is never reseeded) or overwrite the cached
+current payload. Scheduled ticks also use the stable launcher, so subsequent
+ticks recover after the launcher reinstall without a payload workaround.
+
 **R5 limited deployment assumption:** this policy is authorized for **one
 station and short runs**. Sprint Review MUST re-evaluate it before adding a station
 or long-lived work; it is not an assertion that distributed/multi-station rollout
@@ -360,8 +369,10 @@ protocol fail closed with `reinstall a4s-launch`; promotion skips them.
 
 The service PATH must resolve `a4s` to this stable executable. There is no
 scheduled release pin. Tick binds the confirmed first attempt's `DAG_RUN_ID`
-under the state lock, then promotes, reconciles each run through its own receipt
-artifact, and runs GC. A retry without a binding fails closed; a fresh tick needs
+under the state lock, then invokes that stable launcher with `station promote`,
+reconciles each run through its own receipt artifact, and invokes `station gc`
+through the same launcher. Promotion JSON remains in the tick log, and skipped
+candidates do not stop reconciliation. A retry without a binding fails closed; a fresh tick needs
 readable native Dagu 2.24 attempt evidence. A tick running A remains A after
 promoting B; the next new tick runs B. Keep binding files while Dagu can replay
 their IDs even if GC removes their build directories: exact replay restores the
