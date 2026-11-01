@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectDeadLeases, selectStationBuild } from "../../launcher/src/lease.ts";
-import { probeProcess } from "../../launcher/src/process-identity.ts";
-import { initializeStation, gc, promote } from "../../launcher/src/station.ts";
-import { stationRoot } from "../../launcher/src/station-state.ts";
+import { collectDeadLeases, selectStationBuild } from "@a4s/launcher/lease";
+import { probeProcess } from "@a4s/launcher/process-identity";
+import { initializeStation, gc, promote } from "@a4s/launcher/station";
+import { stationRoot } from "@a4s/launcher/station-state";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("selection leases the exact generation and artifact while holding the state lock", async t => {

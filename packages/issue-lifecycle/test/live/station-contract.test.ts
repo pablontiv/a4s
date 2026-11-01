@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse, stringify } from "yaml";
-import { exampleConfig } from "../../../launcher/src/config.ts";
+import { exampleConfig } from "@a4s/launcher/config";
 import { materializeDag } from "../../src/materialize.ts";
 import { a4sBin } from "../fixtures/a4s.ts";
 import { useStation } from "../fixtures/service-environment.ts";

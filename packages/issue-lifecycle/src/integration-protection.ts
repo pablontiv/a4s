@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 import { requireOwnerSession } from "./owner-session.ts";
-import { withFileLock } from "../../launcher/src/file-lock.ts";
+import { withFileLock } from "@a4s/launcher/file-lock";
 
 /** Visible checkpoint named in gate, push and auto-merge logs and [DAGU STATE]. */
 export const INTEGRATION_HOLD_CHECKPOINT = "integration_hold";

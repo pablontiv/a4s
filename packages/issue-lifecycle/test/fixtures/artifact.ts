@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { identity } from "../../src/identity.ts";
-import { archiveName, type ResolvedRelease } from "../../../launcher/src/release.ts";
-import { cachePath } from "../../../launcher/src/artifact-cache.ts";
+import { archiveName, type ResolvedRelease } from "@a4s/launcher/release";
+import { cachePath } from "@a4s/launcher/artifact-cache";
 
 export const packageDirectory = fileURLToPath(new URL("../../", import.meta.url));
 export const repository = "pablontiv/a4s";

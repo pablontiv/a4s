@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test, { after } from "node:test";
 import type { Receipt } from "../src/admission.ts";
-import { artifactToken } from "../../launcher/src/release.ts";
+import { artifactToken } from "@a4s/launcher/release";
 import { RunArtifactScope, verifiedRun } from "../src/run-artifact.ts";
 import { runMutationDecision } from "../src/triage/run-guard.ts";
 import { cachedArtifact, context, receipt, tuple } from "./fixtures/reconcile-bench-classify.ts";

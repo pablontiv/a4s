@@ -12,7 +12,7 @@ import {
   parseConfig,
   readCommittedConfig,
   serializeConfig,
-} from "../../launcher/src/config.ts";
+} from "@a4s/launcher/config";
 
 test("config schema rejects unknown fields, bad versions and non-integers", () => {
   const valid = exampleConfig({ lane: "a4s" });

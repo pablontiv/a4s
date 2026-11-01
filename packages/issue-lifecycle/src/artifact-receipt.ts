@@ -1,15 +1,15 @@
-import { assertReceiptStation } from "../../launcher/src/station-binding.ts";
-import { readRecoveryEvidence } from "../../launcher/src/station-recovery-evidence.ts";
+import { assertReceiptStation } from "@a4s/launcher/station-binding";
+import { readRecoveryEvidence } from "@a4s/launcher/station-recovery-evidence";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 import { identity, type ArtifactIdentity } from "./identity.ts";
-import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "../../launcher/src/release.ts";
+import { artifactToken, parseArtifact, sameArtifact, type ArtifactTuple } from "@a4s/launcher/release";
 import { assertReceiptVersion } from "./receipt-version.ts";
-import { type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
-import { restoreArtifact } from "../../launcher/src/select.ts";
-import { formatSupport, assertProtocols } from "../../launcher/src/artifact-support.ts";
-import { SHARED_FORMATS } from "../../launcher/src/contracts.ts";
+import { type CachedArtifact } from "@a4s/launcher/artifact-cache";
+import { restoreArtifact } from "@a4s/launcher/select";
+import { formatSupport, assertProtocols } from "@a4s/launcher/artifact-support";
+import { SHARED_FORMATS } from "@a4s/launcher/contracts";
 import { createHash } from "node:crypto";
 
 export interface UsedContracts { dispatch: string; config: number; receipt: number; roleJobStore: number; roleJobPayload?: number; runState?: number; prCheckpoint?: number; protocols: typeof identity.protocols }

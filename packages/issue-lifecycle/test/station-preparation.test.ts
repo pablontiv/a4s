@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
-import { initializeStation, promote, rollback } from "../../launcher/src/station.ts";
-import { selectPayload } from "../../launcher/src/select.ts";
-import { selectStationBuild } from "../../launcher/src/lease.ts";
-import type { ArtifactTuple } from "../../launcher/src/release.ts";
-import { stationRoot } from "../../launcher/src/station-state.ts";
+import { initializeStation, promote, rollback } from "@a4s/launcher/station";
+import { selectPayload } from "@a4s/launcher/select";
+import { selectStationBuild } from "@a4s/launcher/lease";
+import type { ArtifactTuple } from "@a4s/launcher/release";
+import { stationRoot } from "@a4s/launcher/station-state";
 import { leaseSelection, stationSelection } from "../../loader/src/station.ts";
 import { stationFixture } from "./fixtures/station.ts";
 

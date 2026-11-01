@@ -9,13 +9,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
-import { archiveName, checksumDigest, nativePlatform, type ArtifactTuple } from "../../../launcher/src/release.ts";
-import { initializeStation } from "../../../launcher/src/station.ts";
-import { stationRoot } from "../../../launcher/src/station-state.ts";
-import { tickBindingPath } from "../../../launcher/src/tick-binding.ts";
-import { exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
+import { archiveName, checksumDigest, nativePlatform, type ArtifactTuple } from "@a4s/launcher/release";
+import { initializeStation } from "@a4s/launcher/station";
+import { stationRoot } from "@a4s/launcher/station-state";
+import { tickBindingPath } from "@a4s/launcher/tick-binding";
+import { exampleConfig, serializeConfig } from "@a4s/launcher/config";
 import { roleAdmission } from "../role-job-fixtures.ts";
-import { isRecord } from "../../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 async function port(): Promise<number> {
   const server = createServer(), listening = Promise.withResolvers<void>();

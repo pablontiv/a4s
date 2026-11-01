@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { initializeStation, promote, rollback } from "../../launcher/src/station.ts";
+import { initializeStation, promote, rollback } from "@a4s/launcher/station";
 import { configSupport, stationFixture } from "./fixtures/station.ts";
 
 test("stable rollback works with a broken current, rejects bad ID, and does not bounce back", async t => {

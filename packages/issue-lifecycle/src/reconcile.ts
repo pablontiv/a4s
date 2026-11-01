@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { closeSync, readFileSync } from "node:fs";
 import { constants } from "node:os";
 import { inspectRun, finishRun, executeStep } from "./reconcile-run.ts";
-import { acquireLock, openLock } from "../../launcher/src/file-lock.ts";
+import { acquireLock, openLock } from "@a4s/launcher/file-lock";
 import { recordNoProgress } from "./ci-no-progress.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { observeRequiredCheckPolicy } from "./required-check-policy.ts";

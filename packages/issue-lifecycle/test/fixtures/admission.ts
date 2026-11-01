@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after } from "node:test";
-import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "../../../launcher/src/config.ts";
-import { archiveName, nativePlatform } from "../../../launcher/src/release.ts";
+import { CONFIG_PATH, exampleConfig, serializeConfig, type LifecycleConfig } from "@a4s/launcher/config";
+import { archiveName, nativePlatform } from "@a4s/launcher/release";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "./artifact.ts";
-import { checksumDigest, type ArtifactTuple } from "../../../launcher/src/release.ts";
-import { commitStateLocked } from "../../../launcher/src/station-state.ts";
-import type { PersistedFormats } from "../../../launcher/src/station-state.ts";
+import { checksumDigest, type ArtifactTuple } from "@a4s/launcher/release";
+import { commitStateLocked } from "@a4s/launcher/station-state";
+import type { PersistedFormats } from "@a4s/launcher/station-state";
 import { identity } from "../../src/identity.ts";
 import { declareService, useStation } from "./service-environment.ts";
 

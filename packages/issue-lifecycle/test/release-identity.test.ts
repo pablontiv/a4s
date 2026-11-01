@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { HELPER_API_VERSION } from "@a4s/hot-reload";
 import { parse } from "yaml";
 import { identity } from "../src/identity.ts";
-import { assertReadCoverage, formatSupport } from "../../launcher/src/artifact-support.ts";
-import { canonicalJson, registrationHash } from "../../launcher/src/contracts.ts";
+import { assertReadCoverage, formatSupport } from "@a4s/launcher/artifact-support";
+import { canonicalJson, registrationHash } from "@a4s/launcher/contracts";
 import { registrationManifest } from "../src/registration.ts";
 import status from "../src/status/index.ts";
 

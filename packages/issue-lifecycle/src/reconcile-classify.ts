@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { inspectRun, finishRun, type Routed } from "./reconcile-run.ts";
 import { invokeRun, RunArtifactScope, type VerifiedRun } from "./run-artifact.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 type Issue = { number: number; state: string; closed_at?: string | null };
 

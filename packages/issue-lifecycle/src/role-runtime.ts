@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
-import { fileDigest } from "../../launcher/src/artifact-cache.ts";
+import { fileDigest } from "@a4s/launcher/artifact-cache";
 import { compiled, packageRoot } from "./executable.ts";
 import { atomicJson, type Job, type JobBinding, type NativeEvidence } from "./role-jobs.ts";
 import { effectiveTranscriptIdentity, type TranscriptRow } from "./transcript-identity.ts";

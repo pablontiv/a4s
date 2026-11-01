@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 export interface CoordinatingSession { session: string; transcriptRoot: string }
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

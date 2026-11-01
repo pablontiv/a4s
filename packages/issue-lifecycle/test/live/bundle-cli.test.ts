@@ -13,11 +13,11 @@ import test from "node:test";
 import { parse } from "yaml";
 import { admissionFixture, compiledA4sBin } from "../fixtures/admission.ts";
 import { installGithubFixture, writeReleaseDirectory, repository } from "../fixtures/artifact.ts";
-import { archiveName } from "../../../launcher/src/release.ts";
+import { archiveName } from "@a4s/launcher/release";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { declareService } from "../fixtures/service-environment.ts";
 
-import { exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
+import { exampleConfig, serializeConfig } from "@a4s/launcher/config";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
 const cli = fileURLToPath(new URL("../../bin/dagu-feature-bundle.ts", import.meta.url));
 

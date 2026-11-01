@@ -12,11 +12,11 @@ import { fixtureArtifact } from "../fixtures/artifact.ts";
 import { declareService } from "../fixtures/service-environment.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
-import { stationRecovery } from "../../../launcher/src/station-recovery.ts";
-import { stationBinding } from "../../../launcher/src/station-binding.ts";
-import { artifactToken } from "../../../launcher/src/release.ts";
-import { receiptBindingDigest } from "../../../launcher/src/station-recovery-evidence.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
+import { stationRecovery } from "@a4s/launcher/station-recovery";
+import { stationBinding } from "@a4s/launcher/station-binding";
+import { artifactToken } from "@a4s/launcher/release";
+import { receiptBindingDigest } from "@a4s/launcher/station-recovery-evidence";
 import { stationScript } from "../../src/materialize.ts";
 
 test("receipt-bound recovery cancels a native Waiting run after OMP relocation without touching another run or admitting successors", { ...liveDagu, timeout: 60000 }, async () => {
@@ -27,7 +27,7 @@ test("receipt-bound recovery cancels a native Waiting run after OMP relocation w
   execFileSync("git", ["-C", primary, "-c", "user.name=Recovery", "-c", "user.email=recovery@example.test", "commit", "--allow-empty", "-qm", "initial"]);
   writeFileSync(join(old, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   mkdirSync(stable);
-  const cli = fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url));
+  const cli = fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url));
   writeFileSync(join(stable, "a4s"), `#!/bin/sh\nexec node --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(cli)} "$@"\n`, { mode: 0o755 });
   const socket = createServer(), listening = Promise.withResolvers<void>();
   socket.listen(0, "127.0.0.1", listening.resolve); await listening.promise;

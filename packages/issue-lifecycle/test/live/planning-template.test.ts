@@ -14,8 +14,8 @@ import { planningReviewer } from "../../src/transcript-identity.ts";
 import { liveDagu, liveDaguVersion } from "../fixtures/live-dagu.ts";
 import { testRunId } from "../fixtures/run-id.ts";
 import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
-import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
-import { artifactToken } from "../../../launcher/src/release.ts";
+import { inspectArtifact } from "@a4s/launcher/artifact-cache";
+import { artifactToken } from "@a4s/launcher/release";
 
 const a4sBin = compiledA4sBin();
 

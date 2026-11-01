@@ -1,4 +1,4 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
 
@@ -8,9 +8,9 @@ import {
   type RecoveryLedger,
 } from "../stale-recovery.ts";
 import { invokeRun, executingRunArtifact } from "../run-artifact.ts";
-import { primaryFromSpec } from "../../../launcher/src/primary.ts";
+import { primaryFromSpec } from "@a4s/launcher/primary";
 import { STALE_PROCESS_ERROR } from "../stale-recovery.ts";
-import { withFileLock } from "../../../launcher/src/file-lock.ts";
+import { withFileLock } from "@a4s/launcher/file-lock";
 
 function stationHome(): string {
   return readServiceEnvironment().DAGU_HOME;

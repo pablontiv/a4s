@@ -14,9 +14,9 @@ import { waitingSnapshot } from "../fixtures/waiting-snapshot.ts";
 import { testRunId } from "../fixtures/run-id.ts";
 import { compiledArtifact, compiledA4sBin } from "../fixtures/admission.ts";
 import { stationEnvironment } from "../fixtures/service-environment.ts";
-import { inspectArtifact } from "../../../launcher/src/artifact-cache.ts";
-import { artifactToken } from "../../../launcher/src/release.ts";
-import { CONFIG_PATH, exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
+import { inspectArtifact } from "@a4s/launcher/artifact-cache";
+import { artifactToken } from "@a4s/launcher/release";
+import { CONFIG_PATH, exampleConfig, serializeConfig } from "@a4s/launcher/config";
 import { USED_CONTRACTS } from "../../src/artifact-receipt.ts";
 
 type Step = { id: string; action?: string; depends?: string | string[]; preconditions?: unknown[]; with?: { push_back?: unknown }; [key: string]: unknown };

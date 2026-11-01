@@ -6,12 +6,12 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { inProcessAdmissionFixture as admissionFixture } from "./fixtures/compiled-admission.ts";
 import { runA4s } from "./fixtures/compiled-cli.ts";
-import { CONFIG_PATH, POLICY_PARAMETERS } from "../../launcher/src/config.ts";
+import { CONFIG_PATH, POLICY_PARAMETERS } from "@a4s/launcher/config";
 import { admit, enqueueArguments, preflightAdmission } from "../src/admission.ts";
 import { assertArtifactReceipt, assertExecutingArtifact } from "../src/artifact-receipt.ts";
 import { roleAdmission } from "./role-job-fixtures.ts";
 import { identity } from "../src/identity.ts";
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 
 const inputs = { dag: "feature", run: "admission", params: ["ISSUE=277", "OMP_SESSION_ID=owner-session"] };
 function snapshot(root: string): Record<string, string> {

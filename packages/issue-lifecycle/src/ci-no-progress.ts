@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeAtomicJson } from "./atomic-json.ts";
-import { withFileLock } from "../../launcher/src/file-lock.ts";
+import { withFileLock } from "@a4s/launcher/file-lock";
 
 interface Observation {
   run: string; sha: string; check: string; cause: string; class: string; action: string;

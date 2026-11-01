@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
 import { fileURLToPath } from "node:url";
-import { exampleConfig } from "../../../launcher/src/config.ts";
+import { exampleConfig } from "@a4s/launcher/config";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
 import { materializeDag } from "../../src/materialize.ts";
 

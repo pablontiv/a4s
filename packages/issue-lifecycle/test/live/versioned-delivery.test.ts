@@ -5,11 +5,11 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
-import { archiveName, artifactToken, type ArtifactTuple } from "../../../launcher/src/release.ts";
-import { CONFIG_PATH, exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
-import { cachePath, ensureArtifact } from "../../../launcher/src/artifact-cache.ts";
-import { initializeStation } from "../../../launcher/src/station.ts";
-import { commitStateLocked, readStateLocked, stationTransaction } from "../../../launcher/src/station-state.ts";
+import { archiveName, artifactToken, type ArtifactTuple } from "@a4s/launcher/release";
+import { CONFIG_PATH, exampleConfig, serializeConfig } from "@a4s/launcher/config";
+import { cachePath, ensureArtifact } from "@a4s/launcher/artifact-cache";
+import { initializeStation } from "@a4s/launcher/station";
+import { commitStateLocked, readStateLocked, stationTransaction } from "@a4s/launcher/station-state";
 import { sha256 } from "../../src/admission.ts";
 import { installGithubFixture, packageDirectory, repository, writeReleaseDirectory } from "../fixtures/artifact.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";

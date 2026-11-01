@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { join } from "node:path";
 import {
   BUNDLE_VERSION,
@@ -12,7 +12,7 @@ import { packageRoot } from "../executable.ts";
 import { WORKFLOWS_COMMAND } from "../registration.ts";
 import type { StallNotice } from "../long-computation.ts";
 import { runParam } from "../run-primary.ts";
-import { stationRoot, validateState } from "../../../launcher/src/station-state.ts";
+import { stationRoot, validateState } from "@a4s/launcher/station-state";
 import type { Cancellation } from "../cancellation.ts";
 
 export interface RunDetails {

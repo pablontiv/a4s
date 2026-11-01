@@ -1,4 +1,4 @@
-import { ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, registrationHash } from "../../launcher/src/contracts.ts";
+import { ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, registrationHash } from "@a4s/launcher/contracts";
 import { readPackageManifest } from "./executable.ts";
 import { registrationManifest } from "./registration.ts";
 

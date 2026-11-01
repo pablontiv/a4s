@@ -5,9 +5,9 @@ import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import test from "node:test";
-import { main } from "../../launcher/src/cli.ts";
-import { initializeStation } from "../../launcher/src/station.ts";
-import { stationRoot } from "../../launcher/src/station-state.ts";
+import { main } from "@a4s/launcher/cli";
+import { initializeStation } from "@a4s/launcher/station";
+import { stationRoot } from "@a4s/launcher/station-state";
 import { declareService } from "./fixtures/service-environment.ts";
 import { stationFixture } from "./fixtures/station.ts";
 

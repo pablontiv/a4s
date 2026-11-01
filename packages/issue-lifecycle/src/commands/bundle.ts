@@ -1,10 +1,10 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { basename, dirname, join, resolve } from "node:path";
 import { appendObservation, enqueue, parseObservation, receiptPath, observeRunReceipt } from "../admission.ts";
-import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "../../../launcher/src/config.ts";
+import { CONFIG_PATH, configFromEnvironment, readConfigFile, readCommittedConfig, serializeConfig } from "@a4s/launcher/config";
 import { validatePlanningUnitsCommand } from "../planning-validator.ts";
 import { planningReviewer, type TranscriptRow } from "../transcript-identity.ts";
 import { BUNDLE_VERSION, lifecycleProtocolToken } from "../bundle.ts";
@@ -12,8 +12,8 @@ import { queueReadiness, stationReadiness } from "../queue.ts";
 import { main as escalation } from "../escalation.ts";
 import { executingRunArtifact, invokeRun } from "../run-artifact.ts";
 import type { RunDetails } from "../status/progress.ts";
-import { isRecord } from "../../../launcher/src/type-guard.ts";
-import { fileDigest } from "../../../launcher/src/artifact-cache.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
+import { fileDigest } from "@a4s/launcher/artifact-cache";
 import { planningTranscript } from "../planning-transcript.ts";
 
 interface RuntimeObservation {

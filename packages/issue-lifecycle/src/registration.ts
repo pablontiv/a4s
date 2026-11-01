@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { packageRoot } from "./executable.ts";
-import type { ArtifactIdentity } from "../../launcher/src/contracts.ts";
+import type { ArtifactIdentity } from "@a4s/launcher/contracts";
 
 declare const A4S_REGISTRATION_MANIFEST: ArtifactIdentity["registrationManifest"];
 

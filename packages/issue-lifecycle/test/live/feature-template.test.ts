@@ -13,7 +13,7 @@ import { test } from "node:test";
 import { parse, stringify } from "yaml";
 import { Transitions } from "../../src/status/progress.ts";
 import type { RunDetails } from "../../src/status/progress.ts";
-import { readConfigFile } from "../../../launcher/src/config.ts";
+import { readConfigFile } from "@a4s/launcher/config";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
 import { materializeDag } from "../../src/materialize.ts";
 import { stubHistory, withResourceGuard } from "../resource-fixtures.ts";
@@ -26,9 +26,9 @@ import { testRunId } from "../fixtures/run-id.ts";
 import { renderedFeature, renderedPoc } from "../fixtures/rendered-feature.ts";
 import { readAdminEvents, STALE_PROCESS_ERROR } from "../../src/stale-recovery.ts";
 import { compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
-import { exampleConfig } from "../../../launcher/src/config.ts";
-import { stationBinding } from "../../../launcher/src/station-binding.ts";
-import { artifactToken } from "../../../launcher/src/release.ts";
+import { exampleConfig } from "@a4s/launcher/config";
+import { stationBinding } from "@a4s/launcher/station-binding";
+import { artifactToken } from "@a4s/launcher/release";
 
 const a4sBin = compiledA4sBin();
 
@@ -2684,7 +2684,7 @@ test("release minimal live feature preserves JSON, locks ownership, gates and au
   // Replace fixture links, never write through the shared source executable.
   rmSync(join(bin, "a4s"));
   rmSync(join(bin, "dagu"));
-  const launcher = fileURLToPath(new URL("../../../launcher/src/cli.ts", import.meta.url));
+  const launcher = fileURLToPath(new URL("@a4s/launcher/cli", import.meta.url));
   writeFileSync(join(bin, "a4s"), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} --import ${JSON.stringify(import.meta.resolve("tsx"))} ${JSON.stringify(launcher)} "$@"\n`, { mode: 0o755 });
   writeFileSync(join(bin, "omp"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   const fixture = await recoveryFixture("", `${bin}:${process.env.PATH}`, 120_000);

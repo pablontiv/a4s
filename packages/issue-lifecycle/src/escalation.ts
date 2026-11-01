@@ -1,12 +1,12 @@
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { writeAtomicJson } from "./atomic-json.ts";
-import { withFileLockAsync } from "../../launcher/src/file-lock.ts";
+import { withFileLockAsync } from "@a4s/launcher/file-lock";
 import { receiptArtifact } from "./artifact-receipt.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 
 interface Finding {
   event: string; kind: string; iteration: number; fingerprint: string; text: string; evidence: string; at: string;

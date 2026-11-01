@@ -1,4 +1,4 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";

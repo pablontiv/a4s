@@ -3,11 +3,11 @@ import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, open
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "yaml";
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { executingRunArtifact, invokeRun, runArtifactContext } from "./run-artifact.ts";
-import { isRecord } from "../../launcher/src/type-guard.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
 import { releaseProtection } from "./integration-protection.ts";
-import { cancellationReceipt } from "../../launcher/src/select.ts";
+import { cancellationReceipt } from "@a4s/launcher/select";
 
 export interface Cancellation {
   schemaVersion: 1; run: string; dag: string; checkpoint: string; iteration: number;

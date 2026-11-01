@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isRecord } from "../../launcher/src/type-guard.ts";
-import { inspectArtifact } from "../../launcher/src/artifact-cache.ts";
-import { parseArtifact } from "../../launcher/src/release.ts";
-import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
+import { isRecord } from "@a4s/launcher/type-guard";
+import { inspectArtifact } from "@a4s/launcher/artifact-cache";
+import { parseArtifact } from "@a4s/launcher/release";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS } from "./artifact-receipt.ts";
 import { cancellationState, assertNotCancelled } from "./cancellation.ts";
 

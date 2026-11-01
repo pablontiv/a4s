@@ -1,5 +1,5 @@
-import { readServiceEnvironment } from "../../../launcher/src/service-environment.ts";
-import { cachePath } from "../../../launcher/src/artifact-cache.ts";
+import { readServiceEnvironment } from "@a4s/launcher/service-environment";
+import { cachePath } from "@a4s/launcher/artifact-cache";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
