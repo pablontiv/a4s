@@ -367,7 +367,7 @@ export class Transitions {
     if (messages.length === 1) effects.wakeMessage = messages[0]!;
     else if (messages.length) effects.wakeMessages = messages;
     if (messages.length && bundle.restartPending) {
-      effects.warningMessage = "The selected a4s build differs from this extension generation. If the loader reports a registration/resource or protocol change, restart OMP; otherwise it switches after the current turn. In-flight runs keep their admitted snapshots.";
+      effects.warningMessage = "Stale a4s extension (compat=stale): it either switches after this turn or requires a restart or handover. Under an autonomous mandate, follow the sprint-planning handover rule; do not wait for the operator. In-flight runs keep their admitted snapshots.";
     }
     return effects;
   }
