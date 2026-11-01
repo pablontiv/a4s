@@ -2,18 +2,15 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Keep receipt verification, station-tool hashing, artifact restore/inspection and
   admission snapshot generation outside `.state.lock`. Run dispatch rechecks the
   immutable receipt binding and cache metadata only when committing its lease,
   so one-second OMP observers and tick/stale-recovery per-run sweeps do not block
   feature steps behind their slow work (#913).
-=======
 - Make stale loaded extensions (`compat=stale`), required extension/OMP reloads,
   and exhausted context explicit autonomous coordinator handover triggers. Direct
   stale-extension warnings to the sprint handover rule rather than assuming a
   switch after the turn or waiting for an operator restart (#917).
->>>>>>> origin/main
 - Consume launcher helpers through explicit `@a4s/launcher` package exports rather
   than relative source imports, preserving per-module loading boundaries. Move
   artifact-cache unit and live coverage into the launcher workspace.
