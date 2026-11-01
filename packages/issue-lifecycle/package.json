@@ -18,12 +18,14 @@
   },
   "exports": {
     "./status": "./src/status/index.ts",
-    "./triage": "./src/triage/native.ts"
+    "./triage": "./src/triage/native.ts",
+    "./primary-guard": "./src/primary-guard/native.ts"
   },
   "omp": {
     "extensions": [
       "./src/status/reloadable.ts",
-      "./src/triage/reloadable.ts"
+      "./src/triage/reloadable.ts",
+      "./src/primary-guard/reloadable.ts"
     ]
   },
   "scripts": {

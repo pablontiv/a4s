@@ -20,7 +20,7 @@ export class FakeHost implements Host {
   }
 }
 export function selection(generation: number): Selection {
-  const manifest = { schema: 1, loaderHelperApi: HELPER_API_VERSION, extensions: ["./src/status/index.ts", "./src/triage/native.ts"], commands: [], tools: [], resources: {} };
+  const manifest = { schema: 1, loaderHelperApi: HELPER_API_VERSION, extensions: ["./src/status/index.ts", "./src/triage/native.ts", "./src/primary-guard/native.ts"], commands: [], tools: [], resources: {} };
   const support = Object.fromEntries(SHARED_FORMATS.map(name => [name, { read: [1], write: 1 }])) as unknown as ArtifactIdentity["support"];
   const tuple = { version: `r${generation}`, commit: "a".repeat(40), digest: "b".repeat(64) };
   return { generation, directory: `/build/${generation}`, identity: { ...tuple, support, requiredLauncherProtocol: 1, requiredLoaderProtocol: 1,
@@ -65,6 +65,7 @@ export function harness() {
   const assign = (generation: number, factory = producer(String(generation)), triage: Factory<object> = () => {}) => {
     factories.set(`file:///build/${generation}/src/status/index.ts`, factory);
     factories.set(`file:///build/${generation}/src/triage/native.ts`, triage);
+    factories.set(`file:///build/${generation}/src/primary-guard/native.ts`, () => {});
   };
   assign(1); assign(2);
   const loader = new HotLoader(host, {

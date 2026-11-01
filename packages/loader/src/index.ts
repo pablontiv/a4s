@@ -1,6 +1,6 @@
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { realpath } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Dispatcher, Generation, HELPER_API_VERSION, LIFECYCLE_TIMEOUT_MS, RELOAD_INPUT, switchGeneration,
   type Factory, type Host, type ReloadContext } from "@a4s/hot-reload";
 import { assertManifest, validateRegistrations } from "./manifest.ts";
@@ -43,13 +43,11 @@ export class HotLoader {
       if (directory !== selection.directory) throw new Error("Candidate build directory changed after lease");
       // Everything above this line may safely release its lease. Import may evaluate code
       // even when its promise rejects: every subsequent outcome retains the lease to exit.
-      const statusUrl = pathToFileURL(`${directory}/src/status/index.ts`).href;
-      const triageUrl = pathToFileURL(`${directory}/src/triage/native.ts`).href;
       importStarted = true;
-      const status = await this.dependencies.importModule(statusUrl);
-      const triage = await this.dependencies.importModule(triageUrl);
-      await next.record(this.api, status.default);
-      await next.record(this.api, triage.default);
+      for (const entry of selection.identity.registrationManifest.extensions) {
+        const module = await this.dependencies.importModule(new URL(entry, pathToFileURL(`${directory}/`)).href);
+        await next.record(this.api, module.default);
+      }
       validateRegistrations(next, selection.identity);
       return next;
     } catch (error) {
@@ -119,7 +117,16 @@ export default async function loader(api: object): Promise<void> {
   const home = service.DAGU_HOME;
   const loader = new HotLoader(api, {
     select: () => stationSelection(home), lease: selection => leaseSelection(home, selection),
-    importModule: url => import(url),
+    importModule: async url => {
+      // OMP-only module: static import would break non-host consumers/tests.
+      // Its graph loader binds candidate tool imports to the running binary.
+      const { loadLegacyPiModule } = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat");
+      const module = await loadLegacyPiModule(fileURLToPath(url), { reload: false });
+      if (!module || typeof module !== "object" || !("default" in module) || typeof module.default !== "function") {
+        throw new Error("Candidate extension has no default factory");
+      }
+      return { default: module.default as Factory<object> };
+    },
   });
   await loader.initialize();
 }

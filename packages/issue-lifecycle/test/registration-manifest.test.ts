@@ -10,6 +10,7 @@ import { validateRegistrations } from "../../loader/src/manifest.ts";
 import { main } from "../src/cli.ts";
 import status from "../src/status/index.ts";
 import triage from "../src/triage/native.ts";
+import primaryGuard from "../src/primary-guard/native.ts";
 import { identity } from "../src/identity.ts";
 import { packageRoot } from "../src/executable.ts";
 import { inProcessArtifact } from "./fixtures/compiled-artifact.ts";
@@ -26,9 +27,10 @@ test("a4s version's canonical source manifest equals cached identity.json", asyn
   assert.deepEqual(version.registrationManifest, declared.registrationManifest);
   assert.equal(version.registrationManifestHash, registrationHash(declared.registrationManifest));
   const generation = new Generation(new Map());
-  // Captured facades have these two structural host surfaces; no host actions run.
+  // Captured facades record host registrations; no host actions run.
   await generation.record({}, status as unknown as Factory<object>);
   await generation.record({}, triage as unknown as Factory<object>);
+  await generation.record({}, primaryGuard as unknown as Factory<object>);
   validateRegistrations(generation, identity);
   generation.abort();
 });

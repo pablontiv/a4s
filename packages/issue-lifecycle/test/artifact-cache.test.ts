@@ -112,7 +112,11 @@ test("historical semver archives keep their original declarations and restore ex
       dispatch: "a4s-run/1", configSchemas: [1], receiptSchemas: { read: [1, 2], write: 2 }, roleJobStores: [1],
       protocols: identity.protocols,
     } };
-    const entries = artifactEntries(legacy.version, legacy.commit);
+    const entries = artifactEntries(legacy.version, legacy.commit).filter(entry => !entry.name.startsWith("src/primary-guard/"));
+    const manifest = entries.find(entry => entry.name === "package.json")!;
+    const packageJson = JSON.parse(String(manifest.content));
+    packageJson.omp.extensions = ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"];
+    manifest.content = JSON.stringify(packageJson);
     for (const entry of entries) if (entry.name === "a4s" || entry.name === "identity.json") entry.content = JSON.stringify(legacy);
     const release = writeInProcessArchive(f.releases, entries, legacy.version, legacy.commit);
     const first = await ensureArtifact(f.home, release, f.dependencies);
@@ -176,4 +180,25 @@ test("archives declaring the runner layout fail publication and inspection witho
     await assert.rejects(ensureArtifact(f.home, release, f.dependencies), /missing role-runner.ts/);
     assert.equal(existsSync(cachePath(f.home, release)), false);
   } finally { f.dispose(); }
+});
+
+test("guarded artifacts require both shipped entries and matching native registrations", async () => {
+  for (const mutation of ["reloadable", "native", "registration"] as const) {
+    const f = fixture();
+    try {
+      let entries = artifactEntries(f.release.version, f.release.commit);
+      if (mutation !== "registration") entries = entries.filter(entry => entry.name !== `src/primary-guard/${mutation}.ts`);
+      else {
+        for (const entry of entries) if (entry.name === "identity.json" || entry.name === "a4s") {
+          const declared = JSON.parse(String(entry.content));
+          declared.registrationManifest.extensions = ["./src/status/index.ts", "./src/triage/native.ts"];
+          declared.registrationManifestHash = registrationHash(declared.registrationManifest);
+          entry.content = JSON.stringify(declared);
+        }
+      }
+      const release = writeInProcessArchive(f.releases, entries);
+      await assert.rejects(ensureArtifact(f.home, release, f.dependencies), /extension metadata|missing src\/primary-guard/);
+      assert.equal(existsSync(cachePath(f.home, release)), false);
+    } finally { f.dispose(); }
+  }
 });

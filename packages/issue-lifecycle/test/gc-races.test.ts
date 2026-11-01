@@ -90,7 +90,7 @@ test("loader activation and retirement keep evaluated generations leased until O
   f.setState({ ...f.state(), current: f.builds[1]!, generation: 2 }); candidate = selected(1);
   const notices: string[] = [];
   await loader.check({ isIdle: () => true, ui: { notify: text => notices.push(text) } });
-  assert.deepEqual(notices, []); assert.equal(imports, 4);
+  assert.deepEqual(notices, []); assert.equal(imports, 6);
   loader.dispose();
   f.setState({ ...f.state(), current: f.builds[13]!, previous: f.builds[12]!, generation: 3 });
   const report = await gc(f.home, f.dependencies);

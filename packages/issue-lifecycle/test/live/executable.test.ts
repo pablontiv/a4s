@@ -89,6 +89,7 @@ test("release archives and the compiled engine work from an extracted root", {
       assert.deepEqual([...new Set(names.map(name => name.split("/")[0]))].sort(), ["a4s", "agents", "bin", "identity.json", "package.json", "role-runner.ts", "skills", "src"]);
       assert.deepEqual(names.filter(name => name.startsWith("bin/")), ["bin/", "bin/dagu-gate.cjs", "bin/gate-cache-run.cjs", "bin/gate-cache.cjs"]);
       for (const file of ["role-runner.ts", "agents/plan-reviewer.md", "agents/triage-reviewer.md", "src/status/reloadable.ts", "src/status/index.ts", "src/triage/reloadable.ts", "src/triage/native.ts",
+        "src/primary-guard/reloadable.ts", "src/primary-guard/native.ts",
         ...["feature", "poc", "discovery", "planning", "reconcile"].map(name => `skills/issue-execution/${name}.yaml`),
         ...["backlog-breakdown", "issue-execution", "refine", "repository-discovery", "sprint-planning", "sprint-retrospective", "sprint-review"].map(name => `skills/${name}/SKILL.md`),
         "skills/repository-discovery/CONTRACT.md", "skills/repository-discovery/METHOD.md"]) assert.ok(names.includes(file), `${archive}: missing ${file}`);
@@ -180,7 +181,7 @@ test("release archives and the compiled engine work from an extracted root", {
     assert.equal(JSON.parse(preload.stdout).loaded, true);
     assert.equal(JSON.parse(preload.stdout).bun, undefined);
     const plugin = JSON.parse(readFileSync(join(extracted, "package.json"), "utf8"));
-    assert.deepEqual(plugin.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]);
+    assert.deepEqual(plugin.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts", "./src/primary-guard/reloadable.ts"]);
     for (const entry of plugin.omp.extensions) {
       const imported = spawnSync("node", ["--input-type=module", "-e", `const extension = await import(${JSON.stringify(pathToFileURL(join(extracted, entry)).href)}); if (typeof extension.default !== "function") process.exit(1);`], { cwd: extracted, env, encoding: "utf8" });
       assert.equal(imported.status, 0, imported.stderr);

@@ -5,10 +5,16 @@ export function assertManifest(identity: ArtifactIdentity, current?: ArtifactIde
   const manifest = identity.registrationManifest;
   const launcher = identity.requiredLauncherProtocol;
   const loader = identity.requiredLoaderProtocol ?? 1;
+  const extensions = JSON.stringify(manifest.extensions);
+  // Immutable pre-guard artifacts remain loadable; switching registration sets still requires restart.
+  const knownExtensions = [
+    ["./src/status/index.ts", "./src/triage/native.ts"],
+    ["./src/status/index.ts", "./src/triage/native.ts", "./src/primary-guard/native.ts"],
+  ];
   if (!Number.isSafeInteger(launcher) || launcher < 1 || launcher > LAUNCHER_PROTOCOL
     || !Number.isSafeInteger(loader) || loader < 1 || loader > LOADER_PROTOCOL
     || manifest.schema !== 1 || manifest.loaderHelperApi !== HELPER_API_VERSION
-    || JSON.stringify(manifest.extensions) !== JSON.stringify(["./src/status/index.ts", "./src/triage/native.ts"])
+    || !knownExtensions.some(entries => JSON.stringify(entries) === extensions)
     || registrationHash(manifest) !== identity.registrationManifestHash
     || (current && current.registrationManifestHash !== identity.registrationManifestHash)) {
     throw new Error("Registration/resources or loader/launcher protocol changed; restart OMP. Active generation unchanged.");

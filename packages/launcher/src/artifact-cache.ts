@@ -140,10 +140,20 @@ function layout(directory: string, files: Set<string>, tuple: ArtifactTuple, dep
   if (declared.layout === "omp-role-runner/1" && !files.has("role-runner.ts")) throw new Error("Incomplete a4s artifact: missing role-runner.ts");
   const manifest = json(join(directory, "package.json"));
   if (!isRecord(manifest) || manifest.name !== "@a4s/issue-lifecycle" || manifest.version !== tuple.version) throw new Error("Artifact package manifest identity mismatch");
+  const baseExtensions = ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"];
+  const guardedExtensions = [...baseExtensions, "./src/primary-guard/reloadable.ts"];
   if (!isRecord(manifest.omp) || !Array.isArray(manifest.omp.extensions) ||
-      !isDeepStrictEqual(manifest.omp.extensions, ["./src/status/reloadable.ts", "./src/triage/reloadable.ts"]) ||
+      (!isDeepStrictEqual(manifest.omp.extensions, baseExtensions) && !isDeepStrictEqual(manifest.omp.extensions, guardedExtensions)) ||
       manifest.omp.extensions.some(path => typeof path !== "string" || !files.has(path.slice(2)))) throw new Error("Artifact OMP extension metadata does not name the shipped extension entries");
+  if (isDeepStrictEqual(manifest.omp.extensions, guardedExtensions) && !files.has("src/primary-guard/native.ts")) {
+    throw new Error("Incomplete a4s artifact: missing src/primary-guard/native.ts");
+  }
   assertIdentityContracts(declared, !tuple.version.startsWith("r"));
+  if (isRecord(declared.registrationManifest)) {
+    const nativeExtensions = manifest.omp.extensions.map(path => path === "./src/status/reloadable.ts"
+      ? "./src/status/index.ts" : path.replace("/reloadable.ts", "/native.ts"));
+    if (!isDeepStrictEqual(declared.registrationManifest.extensions, nativeExtensions)) throw new Error("Artifact extension metadata differs from registration manifest");
+  }
   return declared as unknown as ArtifactIdentity;
 }
 function entryFiles(directory: string, prefix = ""): string[] {
