@@ -2,7 +2,7 @@ import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 
 import { join } from "node:path";
 import { gc, initializeStation, promote } from "@a4s/launcher/station";
-import { readStationState } from "@a4s/launcher/station-state";
+import { readStateLocked, stationTransaction } from "@a4s/launcher/station-state";
 import { parseArtifact } from "@a4s/launcher/release";
 
 export async function main(args: string[]): Promise<void> {
@@ -12,7 +12,7 @@ export async function main(args: string[]): Promise<void> {
     return;
   }
   if (args.length === 1) {
-    if (args[0] === "state") { console.log(JSON.stringify(await readStationState(home))); return; }
+    if (args[0] === "state") { console.log(JSON.stringify(await stationTransaction(home, async () => readStateLocked(home)))); return; }
     if (args[0] === "promote") { console.log(JSON.stringify(await promote(home))); return; }
     if (args[0] === "gc") { console.log(JSON.stringify(await gc(home))); return; }
   }

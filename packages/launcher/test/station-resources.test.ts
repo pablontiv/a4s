@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -8,6 +10,9 @@ import { ARTIFACT_PROTOCOLS, DISPATCH_PROTOCOL, registrationHash, type ArtifactI
 import type { ResolvedRelease } from "../src/release.ts";
 import { initializeStation, promote, rollback, type StationDependencies } from "../src/station.ts";
 import { readStateLocked, readStationState, stationRoot, stationTransaction, type StationState } from "../src/station-state.ts";
+import { main as launcher } from "../src/cli.ts";
+import { main as stationCommand } from "../../issue-lifecycle/src/commands/station.ts";
+import { declareService } from "../../issue-lifecycle/test/fixtures/service-environment.ts";
 
 const shippedSkills = ["issue-execution", "repository-discovery", "backlog-breakdown", "refine", "sprint-planning", "sprint-review", "sprint-retrospective"];
 const skillText = (version: string, name: string) => `---\nname: ${name}\ndescription: Resource discovery fixture\n---\n${version} ${name}\n`;
@@ -253,6 +258,39 @@ test("locked resource repair reconciles an already-correct current pointer, then
   assertPublished(f, "r1", ["first", "second"]);
   assert.equal(readFileSync(join(f.cache, "state.json"), "utf8"), stateBytes, "resource repair never rewrites station selection");
   assert.deepEqual(f.conflicts, []);
+});
+
+test("operator state commands repair current, loader agents and skill links without changing selection", async t => {
+  const f = resourceFixture(t), current = f.release("r1", ["workflow"]);
+  await initializeStation(f.home, current, f.dependencies);
+  const stateBytes = readFileSync(join(f.cache, "state.json"), "utf8");
+  const previous = process.env;
+  process.env = { ...previous, ...f.dependencies.env, ...declareService(f.home, "http://127.0.0.1:18765") };
+  delete process.env.DAGU_PORT;
+  t.after(() => { process.env = previous; });
+  const output: string[] = [];
+  t.mock.method(console, "log", (line: string) => output.push(line));
+  const lock = t.mock.method(childProcess, "spawnSync", (command: string, args: string[]) => {
+    assert.equal(command, "python3");
+    assert.equal(args[2], "6", "operator repair acquires the exclusive station lock");
+    return { status: 0 };
+  });
+  syncBuiltinESMExports();
+  t.after(() => { lock.mock.restore(); syncBuiltinESMExports(); });
+
+  for (const command of [launcher, stationCommand]) {
+    rmSync(f.current);
+    symlinkSync("r999", f.current);
+    rmSync(join(f.skills, "workflow"));
+    rmSync(join(f.loader, "agents"));
+    const acquisitions = lock.mock.callCount();
+    await command(["state"]);
+    assert.equal(lock.mock.callCount(), acquisitions + 1);
+    assert.equal(JSON.parse(output.at(-1)!).current.version, "r1");
+    assert.equal(readlinkSync(f.current), "r1");
+    assertPublished(f, "r1", ["workflow"]);
+    assert.equal(readFileSync(join(f.cache, "state.json"), "utf8"), stateBytes);
+  }
 });
 
 for (const missing of ["skills", "active cache"] as const) {
