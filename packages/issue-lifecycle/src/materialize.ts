@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { LifecycleConfig } from "../../launcher/src/config.ts";
 import type { CoordinatingSession } from "./planning-transcript.ts";
-import { isScalar, parseAllDocuments, visit } from "yaml";
+import { isScalar, parseAllDocuments, Scalar, visit } from "yaml";
 
 export const LIFECYCLE_DAGS = ["feature.yaml", "poc.yaml", "discovery.yaml", "planning.yaml", "reconcile.yaml"] as const;
 export type LifecycleDag = (typeof LIFECYCLE_DAGS)[number];
@@ -82,6 +82,9 @@ export function materializeDag(root: string, name: LifecycleDag, config: Lifecyc
         Pair(_key, pair) {
           if (isScalar(pair.key) && pair.key.value === "run" && isScalar(pair.value) && typeof pair.value.value === "string") {
             pair.value.value = stationScript(pair.value.value);
+            // Keep the script literal: flow styles escape quotes and break the
+            // verbatim stage commands that role dispatch authorizes against.
+            pair.value.type = Scalar.BLOCK_LITERAL;
           }
         },
       });
