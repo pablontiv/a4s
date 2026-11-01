@@ -13,7 +13,7 @@ export interface Selection { generation: number; directory: string; identity: Ar
 export interface Lease { release(): void }
 export function stationSelection(home: string, dependencies: StateDependencies = {}): Promise<Selection> {
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     const directory = cachePath(home, state.current);
     const identity = readJsonFile(join(directory, "identity.json"));
     if (!isRecord(identity) || identity.version !== state.current.version || identity.commit !== state.current.commit) throw new Error("Invalid candidate identity");
@@ -24,7 +24,7 @@ export function stationSelection(home: string, dependencies: StateDependencies =
 export function leaseSelection(home: string, selection: Selection, dependencies: StateDependencies & { inspect?: typeof inspectArtifact } = {}): Promise<Lease> {
   let acquired: Lease | undefined;
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     if (state.generation !== selection.generation || !sameArtifact(state.current, selection.state.current)) throw new Error("Station generation changed before lease; retry at idle");
     await (dependencies.inspect ?? inspectArtifact)(home, state.current);
     const lease = createLeaseLocked(home, state.current, state.generation, "plugin", "@a4s/loader");

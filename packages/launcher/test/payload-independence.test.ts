@@ -23,3 +23,9 @@ test("launcher acquisition/verification/lease/state module graph imports no payl
   visit(resolve(root, "cli.ts"));
   for (const module of ["artifact-cache.ts", "release.ts", "lease.ts", "station-state.ts", "select.ts"]) assert.ok(seen.has(resolve(root, module)));
 });
+
+test("the stable loader manifest advertises extensions but no dead agents or skills fields", () => {
+  const source = readFileSync(new URL("../../../scripts/build-loader.mjs", import.meta.url), "utf8");
+  assert.match(source, /extensions:\s*\["\.\/loader\.ts"\]/);
+  assert.doesNotMatch(source, /\b(?:agents|skills)["']?\s*:/);
+});

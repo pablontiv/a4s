@@ -43,7 +43,7 @@ export function createLeaseLocked(home: string, artifact: ArtifactTuple, generat
  * A retiring plugin MUST keep this lease until its OMP process exits. */
 export async function selectStationBuild(home: string, kind: BuildLease["kind"], holder: string, dependencies: SelectionDependencies = {}): Promise<BuildLease> {
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     const cached = await (dependencies.inspect ?? inspectArtifact)(home, state.current);
     assertLauncher(cached.identity);
     return createLeaseLocked(home, state.current, state.generation, kind, holder);
@@ -51,7 +51,7 @@ export async function selectStationBuild(home: string, kind: BuildLease["kind"],
 }
 export async function collectDeadLeases(home: string, dependencies: LeaseDependencies = {}): Promise<number> {
   return stationTransaction(home, async () => {
-    readStateLocked(home);
+    readStateLocked(home, dependencies);
     const { dead } = readLeasesLocked(home, dependencies);
     for (const path of dead) rmSync(path);
     return dead.length;

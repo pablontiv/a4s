@@ -241,9 +241,15 @@ only. Schema 1 is `{schema:1, generation, current, previous, rejected:[], format
 where both selections are complete immutable tuples and each of the six format
 keys maps to a nonempty set of persisted positive versions. Initial `previous`
 equals `current`. There are no execution selector symlinks. The cache-local
-`current` resource symlink is derived from this state for native skills/agents
-discovery by the once-installed stable loader package; it is repaired under the
-same lock on state reads and never selects execution or authorizes a lease.
+`current` resource symlink is derived from this state and repaired under the same
+lock on state reads and commits; it never selects execution or authorizes a lease.
+That reconciliation publishes each release skill through
+`~/.agents/skills/<name>` to `$DAGU_HOME/cache/a4s/current/skills/<name>`, and exposes
+the stable loader's conventional `agents/` root through `../current/agents`.
+Only skill symlinks whose targets are under this station's `current/skills/` are
+a4s-owned: reconciliation removes stale owned links, preserves all non-owned
+entries and reports name conflicts. Neither ignored `omp.skills`/`omp.agents`
+manifest fields nor a second loader `skills/` root are used for discovery.
 The launcher, plugin loader, promotion, rollback, admission handoff and GC share
 `.state.lock`; selection and lease publication occur in the same transaction.
 State replacement writes a unique temporary regular file, fsyncs it, renames it
@@ -444,9 +450,10 @@ substitutes a `taskFile` for the definition or edits station routing. D16 role
 jobs continue passing the cached triage-reviewer definition directly to the
 native runner. `packages/loader` gates skill **and** agent digests conservatively:
 either change keeps behavior on the old generation and requests OMP restart.
-The cache-only resource pointer follows `state.current`; native catalog refresh
-is acknowledged at restart, not inferred from relinking. The historical PoC
-claims above remain limited to their retained receipts.
+The derived resource links follow `state.current`: user skills are discovered
+from `~/.agents/skills`, and agents from the stable loader's `agents/` root.
+Native catalog refresh is acknowledged at restart, not inferred from relinking.
+The historical PoC claims above remain limited to their retained receipts.
 
 
 ## Compatibility and a shared station (I6)

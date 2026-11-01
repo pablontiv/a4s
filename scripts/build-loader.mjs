@@ -10,6 +10,6 @@ execFileSync(join(root, "node_modules/.bin/bun"), ["build", "--target=node", "--
   join(root, "packages/loader/src/index.ts"), "--outfile", join(output, "loader.ts")], { cwd: root, stdio: "inherit" });
 await writeFile(join(output, "package.json"), JSON.stringify({
   name: "@a4s/loader", version: "0.1.0", private: true, type: "module",
-  omp: { extensions: ["./loader.ts"], skills: ["../current/skills"], agents: ["../current/agents"] },
+  omp: { extensions: ["./loader.ts"] },
 }, null, 2) + "\n");
 console.log(output);

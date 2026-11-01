@@ -62,13 +62,13 @@ export async function initializeStation(home: string, current: ArtifactTuple, de
     const formats = Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...(inventory.formats[name] ?? []), support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
     assertReadCoverage(support, formats);
     const state: StationState = { schema: 1, generation: 0, current, previous: current, rejected: [], formats };
-    commitStateLocked(home, state, dependencies.fault);
+    commitStateLocked(home, state, dependencies);
     return state;
   }, dependencies);
 }
 export async function promote(home: string, dependencies: StationDependencies = {}): Promise<PromotionReport> {
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
     const { references } = liveReferences(home, inventory, dependencies);
     // Post-promotion previous is old current, not the displaced previous.
@@ -108,7 +108,7 @@ export async function promote(home: string, dependencies: StationDependencies = 
       // No exception after this point may be mistaken for a skipped candidate.
       const next: StationState = { ...state, current: { version: release.version, commit: release.commit, digest: release.digest }, previous: state.current,
         generation: state.generation + 1, formats: activatedFormats(formats, formatSupport(cached.identity.support)) };
-      commitStateLocked(home, next, dependencies.fault);
+      commitStateLocked(home, next, dependencies);
       return { current: next.current, promoted: true, skipped };
     }
     return { current: state.current, promoted: false, skipped };
@@ -117,7 +117,7 @@ export async function promote(home: string, dependencies: StationDependencies = 
 /** Stable-launcher-owned operation: never imports or executes the current payload. */
 export async function rollback(home: string, dependencies: StationDependencies = {}): Promise<StationState> {
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     const target = state.previous;
     const cached = await (dependencies.inspect ?? restoreArtifact)(home, target);
     assertLauncher(cached.identity);
@@ -126,14 +126,14 @@ export async function rollback(home: string, dependencies: StationDependencies =
     assertReadCoverage(formatSupport(cached.identity.support), formats);
     if (sameArtifact(state.current, target)) return state;
     const next: StationState = { ...state, current: target, previous: target, rejected: [...new Set([...state.rejected, state.current.version])], generation: state.generation + 1, formats };
-    commitStateLocked(home, next, dependencies.fault);
+    commitStateLocked(home, next, dependencies);
     return next;
   }, dependencies);
 }
 export interface GcReport { removed: string[]; retained: Array<{ version: string; holders: string[] }> }
 export async function gc(home: string, dependencies: StationDependencies = {}): Promise<GcReport> {
   return stationTransaction(home, async () => {
-    const state = readStateLocked(home);
+    const state = readStateLocked(home, dependencies);
     const inventory = await (dependencies.inventory ? dependencies.inventory(home) : inventoryStation(home, dependencies));
     const { references, dead } = liveReferences(home, inventory, dependencies);
     const keep = new Map<string, string[]>();

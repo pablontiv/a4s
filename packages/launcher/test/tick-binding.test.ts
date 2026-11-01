@@ -13,7 +13,7 @@ test("fresh tick writes binding before handoff; A stays A after promotion to B",
   f.setState({ ...f.state, current: f.b, previous: f.a, generation: 1 });
   const replay = await selectPayload(f.home, ["tick"], { ...f.dependencies, confirm: async () => { throw new Error("binding bypasses history"); } });
   assert.deepEqual(replay.lease.artifact, f.a);
-  const next = await selectPayload(f.home, ["tick"], { ...f.dependencies, env: { DAG_RUN_ID: "tick-b" } });
+  const next = await selectPayload(f.home, ["tick"], { ...f.dependencies, env: { ...f.dependencies.env, DAG_RUN_ID: "tick-b" } });
   assert.deepEqual(next.lease.artifact, f.b);
 });
 test("missing retry or unreadable-history binding fails closed, never repins", async t => {

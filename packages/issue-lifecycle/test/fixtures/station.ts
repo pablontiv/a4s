@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -12,10 +12,12 @@ import { type StationDependencies } from "../../../launcher/src/station.ts";
 import { stationRoot, writeJsonDurable, type StationState } from "../../../launcher/src/station-state.ts";
 
 export function stationFixture(t: TestContext) {
-  const root = mkdtempSync(join(tmpdir(), "a4s-station-")), home = join(root, "dagu"), releases = join(root, "releases");
+  const root = mkdtempSync(join(tmpdir(), "a4s-station-")), home = join(root, "dagu"), userHome = join(root, "user"), releases = join(root, "releases");
+  mkdirSync(userHome);
   const artifacts = artifactDependencies(releases);
   const calls: string[] = [];
   const dependencies: StationDependencies = {
+    env: { HOME: userHome, DAGU_HOME: home },
     async withFileLock(path, body) { calls.push(path); return artifacts.withFileLock!(path, body); },
     inspect: (home, tuple) => inspectArtifact(home, tuple, artifacts),
     ensure: (home, tuple) => ensureArtifact(home, tuple, artifacts),
@@ -35,7 +37,7 @@ export function stationFixture(t: TestContext) {
     await ensureArtifact(home, tuple, artifacts);
     return tuple;
   }
-  return { root, home, releases, dependencies, calls, release,
+  return { root, home, userHome, releases, dependencies, calls, release,
     state(): StationState { return JSON.parse(readFileSync(join(stationRoot(home), "state.json"), "utf8")); },
     stateBytes(): string { return readFileSync(join(stationRoot(home), "state.json"), "utf8"); },
     setState(state: StationState): void { writeJsonDurable(join(stationRoot(home), "state.json"), state); },
