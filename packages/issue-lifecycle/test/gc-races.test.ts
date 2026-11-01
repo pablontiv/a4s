@@ -53,7 +53,7 @@ test("GC runs during promotion download/verification; only verified state public
 test("a loader selection losing the promotion/GC race cannot acquire a lease or evaluate a pruned generation", async t => {
   const f = await gcFixture(t);
   f.setState({ ...f.state(), current: f.builds[0]!, generation: 1 });
-  const selected = await stationSelection(f.home, f.dependencies);
+  const selected = await stationSelection(f.home);
   f.setState({ ...f.state(), current: f.builds[13]!, previous: f.builds[12]!, generation: 2 });
   assert.ok((await gc(f.home, f.dependencies)).removed.includes("r1"));
   await assert.rejects(leaseSelection(f.home, selected, f.dependencies), /generation changed before lease/);

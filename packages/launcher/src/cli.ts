@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { handoff, restoreArtifact } from "./select.ts";
 import { gc, initializeStation, promote, rollback } from "./station.ts";
 import { parseArtifact } from "./release.ts";
-import { readStationState } from "./station-state.ts";
+import { readStateLocked, stationTransaction } from "./station-state.ts";
 import { LAUNCHER_PROTOCOL, STATE_SCHEMAS } from "./contracts.ts";
 import { readServiceEnvironment, serviceEnvironmentCommand } from "./service-environment.ts";
 import { stationRecovery } from "./station-recovery.ts";
@@ -25,7 +25,7 @@ export async function main(args: string[]): Promise<void> {
   const home = service.DAGU_HOME;
   if (args[0] === "state" || args[0] === "rollback") {
     if (args.length !== 1) throw new Error(`Usage: a4s ${args[0]}`);
-    console.log(JSON.stringify(await (args[0] === "state" ? readStationState(home) : rollback(home))));
+    console.log(JSON.stringify(await (args[0] === "state" ? stationTransaction(home, async () => readStateLocked(home)) : rollback(home))));
     return;
   }
   if (args[0] === "station" && (args[1] === "promote" || args[1] === "gc")) {

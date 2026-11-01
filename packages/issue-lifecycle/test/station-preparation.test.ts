@@ -40,7 +40,7 @@ test("listing, acquisition and verification stay outside the station lock for ev
   assert.equal((await rollback(f.home, dependencies)).current.version, "r1");
   await selectPayload(f.home, ["status"], { ...dependencies, restore: dependencies.inspect });
   await selectStationBuild(f.home, "engine", "test", dependencies);
-  const selection = await stationSelection(f.home, dependencies);
+  const selection = await stationSelection(f.home);
   const lease = await leaseSelection(f.home, selection, dependencies);
   t.after(() => lease.release());
   assert.equal(inspections, 5);

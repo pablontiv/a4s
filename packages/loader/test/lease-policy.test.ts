@@ -7,6 +7,8 @@ import { initializeStation, promote } from "../../launcher/src/station.ts";
 import { stationTransaction } from "../../launcher/src/station-state.ts";
 import { configSupport, stationFixture } from "../../issue-lifecycle/test/fixtures/station.ts";
 import { declareService } from "../../issue-lifecycle/test/fixtures/service-environment.ts";
+import { stationSelection } from "../src/station.ts";
+import { deferred, inProcessLock } from "../../issue-lifecycle/test/fixtures/state-lock.ts";
 
 test("manifest mismatch leases nothing; retired and failed imported candidates retain leases", async t => {
   const h = harness(); t.after(() => h.loader.dispose());
@@ -53,4 +55,23 @@ test("OMP process exit removes the retired-reader barrier for a new-format write
   assert.match(held.skipped[0]!.reason, /restart OMP/);
   // Model the retired OMP PID having exited. The new process cannot retain its modules.
   assert.equal((await promote(f.home, { ...dependencies, probe: () => "dead-or-reused" })).current.version, "r3");
+});
+
+test("multiple idle loader polls never contend with a held station transaction", async t => {
+  const f = stationFixture(t);
+  const previous = { ...process.env };
+  t.after(() => { process.env = previous; });
+  Object.assign(process.env, declareService(f.home, "http://127.0.0.1:18765"));
+  delete process.env.DAGU_PORT;
+  const old = await f.release("r1");
+  const initial = await initializeStation(f.home, old, f.dependencies);
+  const entered = deferred(), release = deferred();
+  const writer = stationTransaction(f.home, async () => { entered.resolve(); await release.promise; }, { ...f.dependencies, withFileLock: inProcessLock(100) });
+  try {
+    await entered.promise;
+    for (let poll = 0; poll < 20; poll++) {
+      const sessions = await Promise.all([stationSelection(f.home), stationSelection(f.home)]);
+      for (const selection of sessions) assert.deepEqual(selection.state, initial);
+    }
+  } finally { release.resolve(); await writer; }
 });

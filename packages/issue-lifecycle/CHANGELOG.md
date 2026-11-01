@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Verify run receipts, station-tool hashes and cached artifacts outside
+  `.state.lock` on observer dispatch. Recheck immutable receipt bindings and cache
+  presence under the lock before publishing the run lease, so repeated per-run
+  verification does not block feature-step transactions (#913).
+- Keep the operator station `state` command as a locked resource-repair entry
+  point while observer state reads remain advisory and lock-free (#913).
 - Make stale loaded extensions (`compat=stale`), required extension/OMP reloads,
   and exhausted context explicit autonomous coordinator handover triggers. Direct
   stale-extension warnings to the sprint handover rule rather than assuming a

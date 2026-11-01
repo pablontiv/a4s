@@ -102,8 +102,13 @@ export async function stationTransaction<T>(home: string, body: () => Promise<T>
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   return (dependencies.withFileLock ?? withFileLockAsync)(lock, body);
 }
-export async function readStationState(home: string, dependencies: StateDependencies = {}): Promise<StationState> {
-  return stationTransaction(home, async () => readStateLocked(home, dependencies), dependencies);
+/** Atomic rename publishes a complete envelope; advisory readers need no lock or repair. */
+export async function readStationState(home: string): Promise<StationState> {
+  const root = stationRoot(home);
+  let directory = root, stat = lstatSync(directory, { throwIfNoEntry: false });
+  while (!stat) { directory = dirname(directory); stat = lstatSync(directory, { throwIfNoEntry: false }); }
+  if (!stat.isDirectory() || realpathSync(directory) !== directory) throw new Error(`Station runtime directory must not contain symlinks: ${root}`);
+  return validateState(readJsonFile(join(root, "state.json")));
 }
 export function activatedFormats(formats: PersistedFormats, support: ArtifactSupport): PersistedFormats {
   return Object.fromEntries(SHARED_FORMATS.map(name => [name, [...new Set([...formats[name], support[name].write])].sort((a, b) => a - b)])) as PersistedFormats;
