@@ -62,7 +62,8 @@ Release publication automatically requires `test:compiled`, a minimal live
 with pinned Dagu 2.24.0, same-revision digest comparisons for every archive, and
 Linux x64/macOS arm64 smoke jobs running both shipped executables. These jobs
 consume the build's archives; publication downloads those same artifacts only
-after every check succeeds. The macOS job executes `a4s version` natively.
+after every check succeeds. The macOS arm64 job uses the supported `macos-15`
+runner image and executes `a4s version` natively.
 Identity-bound snapshots keep Dagu's recognized Bash shell and enter
 `a4s station-shell` from a script preamble. This preserves JSON parameters and
 shell-local variables while retaining station verification and artifact leases.
