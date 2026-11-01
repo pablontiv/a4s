@@ -1,7 +1,7 @@
 import { readServiceEnvironment } from "../../launcher/src/service-environment.ts";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 
 import { dirname, join, resolve } from "node:path";
 import { CONFIG_PATH, POLICY_PARAMETERS, readCommittedConfig, type CommittedConfig } from "../../launcher/src/config.ts";
@@ -16,12 +16,13 @@ import { packageRoot } from "./executable.ts";
 import { artifactToken, parseArtifact, releaseRepository, sameArtifact } from "../../launcher/src/release.ts";
 import { artifactLock, inspectArtifact, type CachedArtifact } from "../../launcher/src/artifact-cache.ts";
 import { assertArtifactReceipt, assertExecutingArtifact, receiptArtifact, USED_CONTRACTS, type ArtifactReceiptFields } from "./artifact-receipt.ts";
-import { withFileLockAsync } from "../../launcher/src/file-lock.ts";
+import { withFileLock, withFileLockAsync } from "../../launcher/src/file-lock.ts";
 import { stationReadiness } from "./queue.ts";
 import { stationTransaction, readStationState, readStateLocked } from "../../launcher/src/station-state.ts";
 import { handoff } from "../../launcher/src/select.ts";
 import { createLeaseLocked } from "../../launcher/src/lease.ts";
 import { admittedCoordinator } from "./planning-transcript.ts";
+import { writeAtomicJson } from "./atomic-json.ts";
 
 export function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -221,17 +222,15 @@ export async function admit(options: AdmissionOptions, persist = true): Promise<
   return selectedAdmission(options, persist, result => result);
 }
 export function appendObservation(path: string, observation: Omit<Observation, "at">): void {
-  assertReceiptVersion(JSON.parse(readFileSync(path, "utf8")), path);
-  const lock = `${path}.lock`;
-  mkdirSync(lock);
-  try {
+  // Use a separate inode from legacy mkdir locks, and never unlink a flock file.
+  withFileLock(`${path}.flock`, () => {
     const receipt = readReceipt(path);
     if (observation.dag !== receipt.runReceipt.dag || observation.run !== receipt.runReceipt.run || !Number.isSafeInteger(observation.attempt) || observation.attempt < 1) throw new Error("Receipt observation DAG/run/attempt mismatch");
     receipt.runReceipt.observations.push({ at: new Date().toISOString(), ...observation });
     const temp = `${path}.${process.pid}.tmp`;
     writeFileSync(temp, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
     renameSync(temp, path);
-  } finally { rmSync(lock, { recursive: true }); }
+  });
 }
 export function enqueueArguments(args: string[], cwd: string): AdmissionOptions {
   const separator = args.indexOf("--");
@@ -291,8 +290,21 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
       mkdirSync(dirname(snapshot));
       writeFileSync(snapshot, receipt.initial.execution.dagSnapshot, { flag: "wx", mode: 0o600 });
       const result = spawnSync("dagu", ["enqueue", "--run-id", options.run, snapshot, "--", ...options.params], { stdio: "inherit", env: { ...process.env, ...readServiceEnvironment() } });
-      appendObservation(path, { dag: receipt.runReceipt.dag, run: options.run, attempt: 1, category: "eventsAndExternalState", kind: result.status === 0 ? "enqueued" : "incident", data: { exit: result.status, signal: result.signal, error: result.error?.message, originalDag: resolve(cwd, options.dag), snapshot, latency: Date.now() - Date.parse(receipt.initial.admittedAt) } });
-      console.log(`receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
+      const observation: Omit<Observation, "at"> = { dag: receipt.runReceipt.dag, run: options.run, attempt: 1, category: "eventsAndExternalState", kind: result.status === 0 ? "enqueued" : "incident", data: { exit: result.status, signal: result.signal, error: result.error?.message, originalDag: resolve(cwd, options.dag), snapshot, latency: Date.now() - Date.parse(receipt.initial.admittedAt) } };
+      try { appendObservation(path, observation); }
+      catch (error) {
+        // Enqueue already ran. Receipt bookkeeping must not turn its success
+        // into a rejection that invites duplicate work under a new run ID.
+        const incident: Observation = { at: new Date().toISOString(), dag: observation.dag, run: observation.run, attempt: observation.attempt,
+          category: "eventsAndExternalState", kind: "incident:enqueue-observation",
+          data: { admitted: result.status === 0, error: error instanceof Error ? error.message : String(error), observation } };
+        const incidentPath = join(dirname(path), "enqueue-incident.json");
+        let persistenceError: string | undefined;
+        try { writeAtomicJson(incidentPath, incident); }
+        catch (error) { persistenceError = error instanceof Error ? error.message : String(error); }
+        console.error(`DAGU_ADMISSION_INCIDENT: ${JSON.stringify({ receipt: path, incidentPath, incident, ...(persistenceError ? { persistenceError } : {}) })}`);
+      }
+      console.log(`${result.status === 0 ? "admitted=yes " : ""}receipt=${path} sourceVersion=${receipt.sourceVersion.version} deploymentFingerprint=${receipt.deploymentFingerprint}`);
       return result.status ?? 1;
     });
   } catch (error) {

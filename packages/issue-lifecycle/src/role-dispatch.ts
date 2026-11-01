@@ -195,16 +195,8 @@ export async function dispatchStage(stage: string, emit: (name: string, value: s
             (stage !== "triage" && git(worktree, "rev-parse", "HEAD") !== sha)) throw new Error("Role-job current candidate/iteration/step attempt changed");
       } });
     // Independent results append linked facts to #277's immutable initial receipt.
-    for (let retry = 0;; retry++) {
-      try {
-        appendObservation(receiptPath, { dag: "feature", run, attempt: receipt.runReceipt.attempt,
-          category: "runtimeAndModels", kind: "role-job", data: { id: result.id, binding, state: result.state, result: join(directory, "result.json"), native: result.native, readyToStartMs: result.readyToStartMs } });
-        break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || retry >= 120) throw error;
-        await delay(100);
-      }
-    }
+    appendObservation(receiptPath, { dag: "feature", run, attempt: receipt.runReceipt.attempt,
+      category: "runtimeAndModels", kind: "role-job", data: { id: result.id, binding, state: result.state, result: join(directory, "result.json"), native: result.native, readyToStartMs: result.readyToStartMs } });
     if (result.state !== "completed") throw new Error(`Role ${role} ${result.state}: ${result.error}; retained ${directory}`);
     return result;
   }));
