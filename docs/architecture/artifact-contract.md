@@ -279,7 +279,12 @@ schemas `[1]`; payload `identity.json.requiredLauncherProtocol` is mandatory.
 Unknown state schemas and unsupported payload protocols fail closed with
 `reinstall a4s-launch`. Installing/replacing that stable binary is an operator
 action, not promotion. `a4s station init --artifact <tuple>` performs the one-time,
-inventory-seeded cutover; `state`, `promote` and `gc` expose the locked operations.
+inventory-seeded cutover. `a4s state`, `a4s rollback`, `a4s station promote` and
+`a4s station gc` are stable-launcher-owned locked operations: none hands off to
+the current payload. Promotion validates successors with the installed launcher's
+validator, so a stale current cannot veto a validator update delivered by launcher
+reinstall. Recovery is to reinstall the verified updated launcher, then run
+`a4s station promote`; initialized state is never reseeded.
 The operator-installed tick uses this selector without a release pin.
 
 `promote` lists immutable release IDs above current and above every rejected ID,
@@ -566,7 +571,13 @@ binding, including after promotion or cache pruning; a missing retry binding or
 unreadable attempt history fails closed, never repins. A tick selected as A stays
 A through its own promote to B; the next fresh tick selects B.
 
-The payload tick promotes, reconciles, then collects cache entries. Every per-run
+The payload tick resolves `a4s` from the declared service PATH and invokes
+`station promote` through that stable launcher, reconciles, then invokes
+`station gc` through the same launcher. It preserves the promotion result JSON
+in stdout and continues reconciliation when promotion skips candidates; a failed
+launcher command still fails the tick. These station commands do not select a
+tick payload or recurse into `tick`. Older launchers that hand off retain the
+payload's direct station commands for compatibility. Every per-run
 action uses that run's receipt tuple, not the tick's tuple. Missing exact releases
 and unsupported receipts leave that run untouched and report a failure; other
 compatible runs can proceed. Tick bindings outlive cache retention while native

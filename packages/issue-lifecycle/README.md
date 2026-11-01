@@ -216,6 +216,13 @@ cache retention, and replay restores only its exact immutable release.
 Unknown state schemas and unsupported launcher protocols report
 `reinstall a4s-launch` without executing current to interpret the state.
 
+`a4s station promote` and `a4s station gc` run in the stable launcher, never the
+current payload. The tick resolves that launcher as `a4s` on the declared service
+PATH for both operations, preserving promotion JSON and continuing on skipped
+candidates. If the current payload's old validator cannot accept a successor,
+reinstall the verified updated launcher, then run `a4s station promote`.
+Subsequent ticks also use the updated validator; do not reseed station state.
+
 The tick lists runs and dispatches every per-run action through the receipt.
 Foreign artifacts are invoked with
 `a4s run --primary <canonical-primary> --run <id> -- <command> [args...]`.

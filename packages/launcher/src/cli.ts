@@ -2,7 +2,7 @@
 
 import { pathToFileURL } from "node:url";
 import { handoff, restoreArtifact } from "./select.ts";
-import { initializeStation, rollback } from "./station.ts";
+import { gc, initializeStation, promote, rollback } from "./station.ts";
 import { parseArtifact } from "./release.ts";
 import { readStationState } from "./station-state.ts";
 import { LAUNCHER_PROTOCOL, STATE_SCHEMAS } from "./contracts.ts";
@@ -26,6 +26,11 @@ export async function main(args: string[]): Promise<void> {
   if (args[0] === "state" || args[0] === "rollback") {
     if (args.length !== 1) throw new Error(`Usage: a4s ${args[0]}`);
     console.log(JSON.stringify(await (args[0] === "state" ? readStationState(home) : rollback(home))));
+    return;
+  }
+  if (args[0] === "station" && (args[1] === "promote" || args[1] === "gc")) {
+    if (args.length !== 2) throw new Error(`Usage: a4s station ${args[1]}`);
+    console.log(JSON.stringify(await (args[1] === "promote" ? promote(home) : gc(home))));
     return;
   }
   if (args[0] === "station" && args[1] === "init") {
