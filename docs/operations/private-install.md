@@ -53,6 +53,9 @@ select only top-level test files and preload `scripts/test-no-spawn.mjs`, which
 rejects child commands other than direct `git`/`tar`; they do not run native CLIs,
 YAML shell steps, builds or timing acceptance. `test/live/` is never selected by
 `npm test`, even with `A4S_LIVE_DAGU=1`.
+Workspace selection is also covered in-process by the default issue-lifecycle
+suite, including longest-path ownership, rename records, broad changes and
+transitive declared-dependency propagation. CLI/API fallback checks remain live.
 Before a package release, run
 `A4S_GATE_JOURNAL= npm run test:live --workspace @a4s/issue-lifecycle`
 with a supported Dagu runtime on `PATH`. That command sets the live opt-in,

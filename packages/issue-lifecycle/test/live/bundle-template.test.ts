@@ -279,24 +279,6 @@ test("CI selects declared package/app consumers and both sides of package-to-app
   } finally { fixture.dispose(); }
 });
 
-test("CI follows moved manifest identities, longest nested ownership and transitive consumer declarations", () => {
-  const fixture = ciFixture([
-    { dir: "packages/tools", name: "@a4s/tools" },
-    { dir: "packages/tools/routing", name: "@a4s/review-routing", scripts: { typecheck: "tsc --noEmit" } },
-    { dir: "apps/message-bus", name: "@a4s/message-bus", scripts: { test: "node --test" },
-      peerDependencies: { "@a4s/review-routing": "*" } },
-    { dir: "packages/issue-lifecycle", name: "@a4s/issue-lifecycle", optionalDependencies: { "@a4s/message-bus": "*" } },
-  ]);
-  try {
-    assert.deepEqual(fixture.select(["packages/tools/routing/src/index.ts"]), [
-      { name: "@a4s/issue-lifecycle", test: true, typecheck: true },
-      { name: "@a4s/message-bus", test: true, typecheck: false },
-      { name: "@a4s/review-routing", test: false, typecheck: true },
-    ]);
-    assert.deepEqual(fixture.select(["packages/tools/README.md"]), ciJobs("@a4s/tools"));
-  } finally { fixture.dispose(); }
-});
-
 test("CI broad changes and main push/PR events select all actual workspaces", () => {
   const branch = "main";
   for (const workspaces of [mainWorkspaces, dependencyWorkspaces]) {
