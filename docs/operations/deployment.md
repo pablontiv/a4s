@@ -584,6 +584,72 @@ while native Dagu can replay their run, independently of cache GC. Retain durabl
 acceptance evidence outside cleanup windows. Record first-tick duration,
 skipped ticks and history bytes when accepting the operator's new reconciler.
 
+## Read-only station health evidence
+
+Run the source diagnostic directly, **not** through the selecting `a4s` launcher:
+
+```sh
+node --import tsx scripts/station-health.ts --now 2026-11-01T08:00:00Z
+```
+
+It reads the declared service environment, station state/leases, Linux procfs,
+Dagu GET endpoints and GitHub release/comment metadata. It never takes a lock,
+creates a station directory, selects an artifact, promotes, or measures CPU.
+The default GET history range is explicitly bounded from the Unix epoch through
+`--now`, so it includes all retained runs (including old waits); cursor pagination
+does not limit this to the first page. `--from ISO_TIMESTAMP` narrows that range
+and is recorded in the output. Dagu and GitHub requests have 15-second timeouts.
+GitHub access uses `gh api --method GET` and the operator's existing credentials.
+
+The JSON has recursively sorted keys and stable array ordering. Pin `--now` and,
+when comparing frozen inputs, `--cpu-measurement URL` to the measured #786 comment.
+Otherwise the diagnostic selects the latest measured PoC comment at or before
+`--now`, including an inconclusive verdict; it does not claim that verdict passed.
+Missing or unreadable measurements are `null` with reasons, not healthy zeros.
+The snapshot is read-only but not atomic across external sources.
+
+Tick durations use completed run start/finish timestamps and linearly interpolated
+p50/p90/p95/p99. Skips are inferred between consecutive retained starts by rounding
+the gap to minute slots (ignoring subsecond scheduling jitter). Gaps also include
+scheduler downtime; neither the leading nor trailing missing interval is guessed.
+Waiting ages are since step start, failure ages since step finish. A missing
+timestamp makes the aggregate unknown rather than substituting the run's age.
+
+For each canonical station lock, one shared `/proc/locks` inventory is matched
+against numeric `stat` device-major/device-minor/inode, with hexadecimal kernel
+device components and decimal inode. Only granted `FLOCK ADVISORY WRITE` rows
+count; waiter rows never do. The demonstrated mapping is Linux ext4 only;
+unsupported filesystems and malformed/unreadable inventory are explicit unknowns.
+A matching kernel row means **held**, even if its reported PID is gone. In the
+Node/Python development helper, an exited Python acquiring PID can remain in that
+row while the Node parent retains the open-file-description lock. Reported-PID
+liveness and read-only cmdline/fd corroboration are separate from occupancy.
+Neither a PID nor its executable name proves ownership, and no process-wide fd
+scan or inode-only fallback is used. Missing/opaque metadata remains uncertain.
+
+For the ten most recent stable `a4s-rN` releases, GitHub `created_at` is the
+requested `createdAt` publish-time proxy. The promoting tick's start time is an
+explicitly named approximation of activation, not the exact promotion instant.
+Only when that tick is absent and the release is `state.current` does the command
+use the same state inode's mtime; later state writes or rollback can change it.
+Other releases without evidence remain unknown, with a reason.
+
+Keep snapshots outside the PRIMARY and `$DAGU_HOME`, for example in the Dagu run's
+`computations/` evidence directory. Attach the complete JSON to #882 **before F0
+starts**, again at F0 close, and again at F1 close. Cite the matching before/after
+attachments from #852, #853, #854, #738 and #855 when they change ticks, locks,
+leases or promotion. Publication and future close-time captures are operator/Dagu
+actions, not side effects of this command.
+
+Default-gate fixtures exercise skips, waits, failures, leases, held/unheld locks,
+promotion sources, uncertainty, GET-only access and an unchanged station tree.
+The separate native lock check uses only scratch files on the demonstrated mount:
+
+```sh
+HEALTH_PROBE_ROOT=<run-evidence-directory> \
+  node --import tsx --test packages/launcher/test/live/station-health.test.ts
+```
+
 ## Active runs and recovery
 
 ### Retiring plugin generations: restart and drain
