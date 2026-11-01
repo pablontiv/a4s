@@ -59,7 +59,12 @@ test("OMP process exit removes the retired-reader barrier for a new-format write
 });
 
 test("multiple idle loader polls never contend with a held station transaction", async t => {
-  const f = stationFixture(t), old = await f.release("r1");
+  const f = stationFixture(t);
+  const previous = { ...process.env };
+  t.after(() => { process.env = previous; });
+  Object.assign(process.env, declareService(f.home, "http://127.0.0.1:18765"));
+  delete process.env.DAGU_PORT;
+  const old = await f.release("r1");
   const initial = await initializeStation(f.home, old, f.dependencies);
   const entered = deferred(), release = deferred();
   const writer = stationTransaction(f.home, async () => { entered.resolve(); await release.promise; }, { ...f.dependencies, withFileLock: inProcessLock(100) });
