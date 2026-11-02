@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { inspectRun, finishRun, type Routed } from "./reconcile-run.ts";
 import { invokeRun, RunArtifactScope, type VerifiedRun } from "./run-artifact.ts";
 import { isRecord } from "@a4s/launcher/type-guard";
+import { readRunRetirement } from "@a4s/launcher/station-retirement";
 
 type Issue = { number: number; state: string; closed_at?: string | null };
 
@@ -11,6 +12,7 @@ export interface ClassifyDependencies {
   inspect?: typeof inspectRun;
   finish?: typeof finishRun;
   invoke?: typeof invokeRun;
+  retirement?: typeof readRunRetirement;
   now?: () => number;
   requestIssues?: (repo: string, page: number, timeout: number) => { status: number | null; stdout: string; stderr?: string };
 }
@@ -22,6 +24,7 @@ export async function classifyRuns(outputsFile: string, dependencies: ClassifyDe
   const scope = dependencies.scope ?? new RunArtifactScope();
   const inspect = dependencies.inspect ?? inspectRun, finish = dependencies.finish ?? finishRun;
   const invoke = dependencies.invoke ?? invokeRun, now = dependencies.now ?? Date.now;
+  const retirement = dependencies.retirement ?? readRunRetirement;
   const requestIssues = dependencies.requestIssues ?? ((repo: string, page: number, timeout: number) =>
     spawnSync("gh", ["api", "--method", "GET", "-H", "Accept: application/vnd.github+json", `repos/${repo}/issues?state=all&per_page=100&page=${page}`],
       { encoding: "utf8", timeout, killSignal: "SIGKILL" }));
@@ -52,6 +55,7 @@ export async function classifyRuns(outputsFile: string, dependencies: ClassifyDe
     }
     const row = value as Record<string, string>;
     try {
+      if (retirement(row.PRIMARY!, row.RUN!, "feature")) continue;
       const context = await scope.verify(row.PRIMARY!, row.RUN!);
       const inspected = await action(context, "inspect", () => [JSON.stringify(row)], () => inspect(row));
       const item: Routed = typeof inspected === "string" ? JSON.parse(inspected) : inspected;
@@ -91,6 +95,7 @@ export async function classifyRuns(outputsFile: string, dependencies: ClassifyDe
     if (item.route === "child") continue;
     const issue = item.route === "issue" ? issues.get(item.repo)?.find(issue => String(issue.number) === item.issue) ?? null : null;
     try {
+      if (retirement(item.primary, item.run, "feature")) continue;
       // Re-read each receipt before its write action; only cache verification is
       // memoized. A changed/unsupported receipt cannot inherit an earlier check.
       const context = await scope.verify(item.primary, item.run);

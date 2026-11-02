@@ -115,6 +115,11 @@ steps:
           row=$(jq -c --arg primary "$primary" '.PRIMARY = $primary | .BRANCH = ("dagu/issue-" + .ISSUE)' <<<"$row")
         fi
         primary=$(jq -r .PRIMARY <<<"$row")
+        retired=$("$A4S_BIN" reconcile is-retired "$primary" "$run")
+        if [[ "$retired" == "true" ]]; then
+          skipped=$((skipped + 1))
+          continue
+        fi
         if ! grep -Fxq -- "$primary" "$TMP/primaries"; then
           printf '%s\n' "$primary" >>"$TMP/primaries"
           origin=$(git -C "$primary" remote get-url origin)

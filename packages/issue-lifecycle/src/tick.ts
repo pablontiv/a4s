@@ -1,5 +1,6 @@
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { executableOnPath } from "@a4s/launcher/station-binding";
+import { readRunRetirement } from "@a4s/launcher/station-retirement";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -60,6 +61,7 @@ export async function tick(args: string[]): Promise<void> {
         env.DAGU_OUTPUT_FILE = join(directory, `run-${index}.outputs`);
         try {
           for (const step of ["observe", "transition"]) {
+            if (readRunRetirement(row.PRIMARY, row.RUN, "feature")) break;
             const result = await invokeRun(row.PRIMARY, row.RUN, ["reconcile", "step", step], { env });
             if (result.status !== 0) throw new Error(`${step} exited ${result.status}`);
           }

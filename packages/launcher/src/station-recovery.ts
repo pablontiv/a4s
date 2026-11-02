@@ -2,9 +2,10 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { assertStationBinding, executableOnPath, executableDigest } from "./station-binding.ts";
+import { assertStationBinding, assertStationTarget, executableOnPath, executableDigest } from "./station-binding.ts";
 import { readServiceEnvironment } from "./service-environment.ts";
 import { readRecoveryEvidence, receiptBindingDigest, recoveryEvidencePath } from "./station-recovery-evidence.ts";
+import { readRetirementEvidence, retirementEvidencePath, retirementReceipt, retirementStatuses, type RetirementReceipt, type RetirementEvidence } from "./station-retirement.ts";
 import { receiptTuple, restoreArtifact, runReceiptPath } from "./select.ts";
 import { isRecord } from "./type-guard.ts";
 import { withFileLockAsync } from "./file-lock.ts";
@@ -62,12 +63,53 @@ export async function recoveryContext(primary: string, run: string, restore = re
   return { primary, run, path, receipt, station, admitted, cached, dag: String(receipt.runReceipt.dag), state: dirname(path) };
 }
 
-/** The launcher owns this narrow boundary so old cached engines remain immutable.
- * Only the artifact-verified cancellation gate may resume, never normal work. */
+function retirementTarget(context: RetirementReceipt, station = readServiceEnvironment()): void {
+  if (!isRecord(context.station)) throw new Error("Station retirement receipt lacks the original station target");
+  if (context.station.schemaVersion === 1) return assertStationTarget(context.station, station);
+  if (context.station.schemaVersion !== undefined || typeof context.station.PATH !== "string") throw new Error("Station retirement receipt station binding is malformed; restore the original receipt");
+  for (const field of ["DAGU_URL", "DAGU_HOME"] as const) {
+    if (context.station[field] !== station[field]) throw new Error(`Station retirement target ${field} mismatch; select the original station target, not a replacement`);
+  }
+}
+
+async function retire(primary: string, run: string, reason: string, dependencies: RecoveryDependencies): Promise<void> {
+  const prepared = retirementReceipt(primary, run);
+  const prior = readRetirementEvidence(prepared);
+  if (prior) { console.log(JSON.stringify(prior)); return; }
+  const station = readServiceEnvironment();
+  retirementTarget(prepared, station);
+  const observed = await observeRun(station.DAGU_URL, prepared.dag, prepared.run, dependencies.fetch ?? fetch);
+  const observedAt = new Date().toISOString();
+  const nativeStatus = retirementStatuses.find(status => status === observed.statusLabel);
+  if (!nativeStatus) throw new Error(`Station retirement requires native Failed, Succeeded or Aborted; observed ${String(observed.statusLabel)}. Waiting cannot be retired: no safe native abort contract is established for historical snapshots. Use receipt-bound cancellation only at a supported verified CANCEL checkpoint; otherwise restore the genuine original station for operator-reviewed terminalization, then retry retire. Do not complete normal work or fabricate pin evidence`);
+  const response = await (dependencies.fetch ?? fetch)(`${station.DAGU_URL}/api/v1/dag-runs/${encodeURIComponent(prepared.dag)}/${encodeURIComponent(prepared.run)}/spec`, { signal: AbortSignal.timeout(5000) });
+  const spec: unknown = response.ok ? await response.json() : undefined;
+  if (!isRecord(spec) || spec.spec !== prepared.snapshot) throw new Error("Station retirement native snapshot differs from the receipt or is unavailable; restore matching original receipt/run evidence, never rewrite it");
+  // No station state lock, cache restoration or current-tool digest checks.
+  await (dependencies.lock ?? withFileLockAsync)(join(dirname(prepared.path), "station-recovery.lock"), async () => {
+    const current = retirementReceipt(prepared.primary, prepared.run);
+    if (current.receiptDigest !== prepared.receiptDigest) throw new Error("Station retirement receipt bytes changed during observation; inspect the original evidence and retry");
+    const completed = readRetirementEvidence(current);
+    if (completed) { console.log(JSON.stringify(completed)); return; }
+    const selected = readServiceEnvironment();
+    if (selected.DAGU_URL !== station.DAGU_URL || selected.DAGU_HOME !== station.DAGU_HOME) throw new Error("Station retirement target changed during observation; select the original station and retry");
+    retirementTarget(current, selected);
+    const evidence: RetirementEvidence = { schemaVersion: 1, outcome: "retired", primary: current.primary,
+      dag: current.dag, run: current.run, receiptDigest: current.receiptDigest, reason, nativeStatus,
+      observedAt, retiredAt: new Date().toISOString() };
+    writeJsonDurable(retirementEvidencePath(current.path), evidence);
+    console.log(JSON.stringify(evidence));
+  });
+}
+
+/** The launcher owns recovery/retirement so old cached engines remain immutable.
+ * Retirement observes terminal history only; cancellation alone may resume its verified gate. */
 export async function stationRecovery(args: string[], dependencies: RecoveryDependencies = {}): Promise<void> {
   const [action, ...flags] = args;
   const manifest = action === "pin" && flags.length === 6 && flags[4] === "--evidence" ? flags[5] : undefined;
-  if (!["pin", "check", "cancel"].includes(action || "") || !(flags.length === 4 || manifest) || flags[0] !== "--primary" || flags[2] !== "--run" || !flags[1] || !flags[3]) throw new Error("Usage: a4s station-recovery pin|check|cancel --primary <primary> --run <run> [pin: --evidence <verified-manifest.json>]");
+  const reason = action === "retire" && flags.length === 6 && flags[4] === "--reason" ? flags[5]?.trim() : undefined;
+  if (!["pin", "check", "cancel", "retire"].includes(action || "") || !(action === "retire" ? reason : flags.length === 4 || manifest) || flags[0] !== "--primary" || flags[2] !== "--run" || !flags[1] || !flags[3]) throw new Error("Usage: a4s station-recovery pin|check|cancel|retire --primary <primary> --run <run> [pin: --evidence <verified-manifest.json>] [retire: --reason <operator-reason>]");
+  if (action === "retire") return retire(flags[1], flags[3], reason!, dependencies);
   const context = await recoveryContext(flags[1], flags[3], dependencies.restore);
   await (dependencies.lock ?? withFileLockAsync)(join(context.state, "station-recovery.lock"), async () => {
     // Re-read under the per-run lock; no other run's state is touched.

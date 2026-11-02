@@ -42,8 +42,7 @@ export function cancellationReceipt(primary: string, run: string): { path: strin
   if (execFileSync("git", ["-C", owner, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).trim() !== common) throw new Error("Cancellation receipt belongs to a different repository");
   return { path, primary: owner };
 }
-export function receiptTuple(path: string): ArtifactTuple {
-  const value = readJsonFile(path);
+export function receiptTuple(path: string, value = readJsonFile(path)): ArtifactTuple {
   if (!isRecord(value) || value.schemaVersion !== 2 || !isRecord(value.sourceVersion) || !isRecord(value.contracts) || !isRecord(value.artifactSupport)) throw new Error(`Receipt lacks supported artifact declarations: ${path}`);
   const tuple = tupleFromJson(value.artifact);
   if (value.sourceVersion.version !== tuple.version || value.sourceVersion.commit !== tuple.commit) throw new Error(`Receipt source identity mismatch: ${path}`);

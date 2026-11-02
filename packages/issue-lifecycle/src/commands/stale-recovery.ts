@@ -1,4 +1,5 @@
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
+import { readRunRetirement } from "@a4s/launcher/station-retirement";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
 
@@ -60,6 +61,7 @@ async function run(argv: string[]): Promise<void> {
         const { spec } = await response.json() as { spec: string };
         const primary = primaryFromSpec(spec);
         if (!primary) throw new Error("Admitted PRIMARY unavailable");
+        if (readRunRetirement(primary, id, "feature")) continue;
         const result = await invokeRun(primary, id, ["stale-recovery", "recover-run", id]);
         if (result.status !== 0) throw new Error(`run artifact exited ${result.status}`);
       } catch (error) {

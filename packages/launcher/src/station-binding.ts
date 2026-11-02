@@ -41,12 +41,16 @@ export function stationBinding(station: ServiceEnvironment = readServiceEnvironm
   return { schemaVersion: 1, target: { endpoint: station.DAGU_URL, device: String(home.dev), inode: String(home.ino) },
     tools: Object.fromEntries(requiredTools().map(tool => [tool, { sha256: executableDigest(executableOnPath(tool, station.PATH)) }])) };
 }
-export function assertStationBinding(value: unknown, selected: ServiceEnvironment = readServiceEnvironment()): void {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.target) || !isRecord(value.tools)) throw new Error("Station identity evidence is missing or malformed; use station-recovery pin before changing the admitted station, or restore independently retained evidence");
+export function assertStationTarget(value: unknown, selected: ServiceEnvironment = readServiceEnvironment()): void {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.target)) throw new Error("Station target identity evidence is missing or malformed; restore the original station evidence");
   const home = statSync(selected.DAGU_HOME, { bigint: true });
   for (const [field, actual] of Object.entries({ endpoint: selected.DAGU_URL, device: String(home.dev), inode: String(home.ino) })) {
     if (value.target[field] !== actual) throw new Error(`Station target ${field} differs from admitted identity; restore the original station target (recovery cannot retarget runs)`);
   }
+}
+export function assertStationBinding(value: unknown, selected: ServiceEnvironment = readServiceEnvironment()): void {
+  if (!isRecord(value) || value.schemaVersion !== 1 || !isRecord(value.target) || !isRecord(value.tools)) throw new Error("Station identity evidence is missing or malformed; use station-recovery pin before changing the admitted station, or restore independently retained evidence");
+  assertStationTarget(value, selected);
   for (const tool of new Set([...requiredTools(), ...Object.keys(value.tools)])) {
     if (!identityTools.includes(tool) && tool !== "python3") throw new Error(`Station tool ${tool} has unsupported identity evidence`);
     const expected = value.tools[tool];
