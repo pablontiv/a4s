@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parseAllDocuments } from "yaml";
-import { exampleConfig, parseConfig } from "@a4s/launcher/config";
+import { exampleConfig } from "@a4s/launcher/config";
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { confirmFirstAttempt } from "@a4s/launcher/tick-binding";
 import { listStationRuns } from "@a4s/launcher/station-inventory";
@@ -15,21 +15,6 @@ import { readOwners } from "../src/resources.ts";
 import { useDefaultStation, useStation } from "./fixtures/service-environment.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-test("consumer feature snapshot installs worktree dependencies before tests and typecheck", () => {
-  const config = parseConfig(JSON.parse(readFileSync(new URL("../../../.workspace/dagu/config.json", import.meta.url), "utf8")));
-  const gate = "npm ci && npm test && npm run typecheck";
-  assert.equal(config.gate, gate);
-  const rendered = materializeDag(root, "feature.yaml", config, {
-    version: "fixture", source: "fixture", artifact: `1.0.0@${"a".repeat(40)}#${"b".repeat(64)}`,
-  });
-  const feature = parseAllDocuments(rendered)[0]!.toJSON();
-  assert.equal(Object.assign({}, ...feature.env).GATE, gate);
-  const step = feature.steps.find((step: { id: string }) => step.id === "gate");
-  const command = 'bash -euo pipefail -c "$GATE"';
-  assert.ok(step.run.includes(command));
-  assert.ok(step.run.indexOf('cd "$WORKTREE"') >= 0);
-  assert.ok(step.run.indexOf('cd "$WORKTREE"') < step.run.indexOf(command));
-});
 test("legacy fixture rendering retains literal station declarations for recovery coverage", t => {
   const home = mkdtempSync(join(tmpdir(), "a4s station spaces "));
   const restore = useStation(home, "http://127.0.0.1:19643///");

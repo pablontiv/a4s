@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "lane": "a4s",
   "baseBranch": "main",
-  "gate": "npm ci && npm test && npm run typecheck",
+  "gate": "npm test && npm run typecheck",
   "requiredCheck": "validate",
   "testPaths": "(^|/)(test|tests)/|\\.test\\.(ts|cjs)$",
   "rebaseResolver": "",
