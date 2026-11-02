@@ -36,8 +36,6 @@ The optional-host tool-row workspace is test-only; its renderer types come from
 the consumer's Pion host. Orca managed-worktree setup should run by default
 (`--setup run` when explicitly required). Its setup terminal can remain active
 after worktree creation returns; wait for it.
-The feature DAG consumer gate uses the same install/test/typecheck sequence in
-each issue worktree; newly rendered snapshots capture that policy.
 Default workspace scripts preload `scripts/test-no-spawn.mjs` and select only
 top-level tests, excluding `test/live/`. They exercise logic in-process, allowing
 only direct `git`/`tar` child commands; the default gate is unslotted. Native CLI,
