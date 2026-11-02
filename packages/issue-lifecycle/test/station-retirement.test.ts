@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import fs, { chmodSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { retirementFixture } from "./fixtures/station-retirement.ts";
+import { declareService } from "./fixtures/service-environment.ts";
 import { main as staleRecovery } from "../src/commands/stale-recovery.ts";
 import { STALE_PROCESS_ERROR } from "../src/stale-recovery.ts";
 import { classifyRuns, type ClassifyDependencies } from "../src/reconcile-classify.ts";
@@ -76,7 +77,10 @@ for (const invalid of [false, true]) {
     const f = retirementFixture(t); await f.retire("succeeded");
     if (invalid) writeFileSync(f.evidencePath, JSON.stringify({ ...f.evidence(), dag: "poc" }));
     const launcher = join(f.home, "bin", "a4s-launch"), payload = join(f.home, "cached-payload");
+    mkdirSync(join(f.home, "bin"));
     writeFileSync(launcher, "#!/bin/sh\nexit 0\n"); chmodSync(launcher, 0o755); symlinkSync(launcher, join(f.home, "bin", "a4s"));
+    // Prefer the isolated launcher without replacing the real Git used to locate receipts.
+    declareService(f.home, process.env.DAGU_URL!, [join(f.home, "bin"), process.env.PATH!].join(delimiter));
     Object.assign(process.env, { DAG_RUN_ID: "retirement-tick", A4S_BIN: payload,
       A4S_ARTIFACT: `r498@${"a".repeat(40)}#${"1".repeat(64)}` });
     const calls: string[][] = [], errors: string[] = [];

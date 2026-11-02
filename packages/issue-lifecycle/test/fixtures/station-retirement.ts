@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { TestContext } from "node:test";
-import { declareService } from "./service-environment.ts";
+import { stationEnv } from "./service-environment.ts";
 import { roleAdmission } from "../role-job-fixtures.ts";
 import { readServiceEnvironment } from "@a4s/launcher/service-environment";
 import { stationRecovery, type RecoveryDependencies } from "@a4s/launcher/station-recovery";
@@ -14,7 +14,7 @@ export function retirementFixture(t: TestContext, dag = "feature") {
   const home = join(root, "station"), primary = join(root, "primary"), run = "abandoned-run";
   mkdirSync(home); mkdirSync(primary);
   const previous = process.env;
-  const selected = declareService(home, "http://127.0.0.1:18765");
+  const selected = stationEnv(home, "http://127.0.0.1:18765");
   process.env = { ...previous, ...selected }; delete process.env.DAGU_PORT;
   t.after(() => { process.env = previous; rmSync(root, { recursive: true, force: true }); });
   execFileSync("git", ["-C", primary, "init", "-q"]);
