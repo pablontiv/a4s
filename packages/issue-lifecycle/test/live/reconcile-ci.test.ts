@@ -122,8 +122,11 @@ else if(a[0]==='pr'&&a[1]==='view') {
  if(a.includes('--jq')) emit(fields==='headRefOid'?head():fields==='number'?77:fields==='state'?c.prState:fields==='autoMergeRequest'?c.auto!==false:process.env.BRANCH);
  else emit({number:77,state:c.prState,mergeStateStatus:c.mergeState,autoMergeRequest:c.auto===false?null:{},headRefOid:head(),headRefName:process.env.BRANCH,baseRefName:process.env.BASE_BRANCH,statusCheckRollup:[],mergeCommit:c.mergeOid?{oid:c.mergeOid}:null});
 } else if(a[0]==='pr'&&a[1]==='checks') {
- if(c.requiredText) { emit(c.requiredText); process.exit(1); }
- if(c.requiredError) { console.error(c.requiredError); process.exit(c.requiredExit??1); }
+ if(c.requiredText || c.requiredError) {
+  if(c.requiredText) emit(c.requiredText);
+  if(c.requiredError) console.error(c.requiredError);
+  process.exit(c.requiredExit??1);
+ }
  const payload=c.required??[{name:'validate',state:c.pending?'IN_PROGRESS':c.conclusion.toUpperCase(),link:'https://github.com/example/repo/actions/runs/123/job/456'}];
  if(a.includes('--jq')) {
   const row=payload.find(x=>x.name===(process.env.REQUIRED_CHECK||'validate'));
@@ -411,7 +414,7 @@ function publish(f: Fixture, feature: string, value: string): string {
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 
-test("unpublished CLI response waits, later publication passes, and unknown or changed evidence fails closed", async t => {
+test("unpublished CLI response on stdout or stderr waits, later publication passes, and unknown or changed evidence fails closed", async t => {
   const f = fixture("unpublished411");
   try {
     git(f.worktree, "push", "origin", f.branch);
@@ -430,15 +433,32 @@ test("unpublished CLI response waits, later publication passes, and unknown or c
     assert.equal(pending.class, "PENDING");
     assert.equal(pending.action, "WAIT");
     assert.equal(pending.sha, sha);
+    update(f, { requiredText: null, requiredError: sentinel, bindingReads: 0 });
+    const stderrPending = observeCurrent();
+    assert.equal(stderrPending.class, "PENDING");
+    assert.equal(stderrPending.action, "WAIT");
+    assert.equal(stderrPending.sha, sha);
+    for (const output of [
+      { requiredText: sentinel, requiredError: null, requiredExit: 2 },
+      { requiredText: null, requiredError: sentinel, requiredExit: 2 },
+      { requiredText: "malformed output", requiredError: null, requiredExit: 1 },
+      { requiredText: null, requiredError: `${sentinel}\nwarning: unexpected output`, requiredExit: 1 },
+      { requiredText: sentinel, requiredError: sentinel, requiredExit: 1 },
+    ]) {
+      update(f, { ...output, bindingReads: 0 });
+      assert.equal(observeCurrent().class, "BLOCKED");
+    }
+    update(f, { requiredText: null, requiredError: sentinel, requiredExit: 1, bindingReads: 0 });
+    assert.equal(observeCurrent().class, "PENDING");
     const diagnostic = await readCiDiagnostic(f.primary, f.env.RUN!, false, new AbortController().signal);
     const waiting: RunDetails = { name: "feature", dagRunId: f.env.RUN!, statusLabel: "waiting", params: "OMP_SESSION_ID=owner",
       nodes: [{ step: { name: "await_ci", humanTask: {} }, statusLabel: "waiting", approvalIteration: 0 }] };
     assert.match(new Transitions("owner").observe(waiting, { ciDiagnostic: diagnostic! }).wakeMessage!, /ci=PENDING action=WAIT/);
-    update(f, { requiredText: null, checks: null });
+    update(f, { requiredText: null, requiredError: null, checks: null });
     const published = observeCurrent();
     assert.equal(published.class, "PASS");
     assert.equal(published.sha, sha);
-    t.diagnostic(JSON.stringify({ command: [a4sBin, ...args], observations: [pending, published],
+    t.diagnostic(JSON.stringify({ command: [a4sBin, ...args], observations: [pending, stderrPending, published],
       ownerDiagnostic: new Transitions("owner").observe(waiting, { ciDiagnostic: diagnostic! }) }));
     for (const error of ["HTTP 401: authentication required", "HTTP 403: permission denied", "HTTP 404: Not Found"]) {
       update(f, { requiredText: sentinel, checks: [], policyError: error, bindingReads: 0 });

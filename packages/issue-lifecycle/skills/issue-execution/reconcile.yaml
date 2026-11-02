@@ -290,10 +290,13 @@ steps:
           rc=0
           bounded gh pr checks "$PR" -R "$REPO" --required --json name,state,link >"$TMP/required" 2>"$TMP/error" || rc=$?
           unpublished=0
-          # gh's observed exit-1/stdout sentinel is not JSON. It proves neither
+          # gh's exit-1 sentinel on either stream is not JSON. It proves neither
           # protection configuration nor publication; independently establish both.
-          if [[ "$rc" == 1 && ! -s "$TMP/error" ]] &&
-             [[ "$(cat "$TMP/required")" =~ ^no\ required\ checks\ reported\ on\ the\ \'.+\'\ branch$ ]]; then
+          if [[ "$rc" == 1 ]] &&
+             { { [[ ! -s "$TMP/error" ]] &&
+                 [[ "$(cat "$TMP/required")" =~ ^no\ required\ checks\ reported\ on\ the\ \'.+\'\ branch$ ]]; } ||
+               { [[ ! -s "$TMP/required" ]] &&
+                 [[ "$(cat "$TMP/error")" =~ ^no\ required\ checks\ reported\ on\ the\ \'.+\'\ branch$ ]]; }; }; then
             unpublished=1
             if bounded "$A4S_BIN" reconcile required-policy "$REPO" "$PR" "$SHA" >"$TMP/policy" 2>"$TMP/error" &&
                jq -e '.class == "PENDING"' "$TMP/policy" >/dev/null; then

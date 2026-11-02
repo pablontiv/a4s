@@ -1853,8 +1853,9 @@ order legacy statuses/non-Actions checks. Superseded failures, cancellations
 and skips never override the latest outcome. Conclusions alone do not identify
 a failure's cause.
 
-The exact exit-1/stdout CLI response `no required checks reported on the '<branch>' branch`
-is not itself a lookup failure or proof of no protection. Reconciliation independently
+The exact exit-1 CLI response `no required checks reported on the '<branch>' branch`,
+on either stdout or stderr with the other stream empty, is not itself a lookup
+failure or proof of no protection. Reconciliation independently
 reads classic required-status-check protection and all effective branch-rule pages
 for the PR's base repository and exact `base.ref` (including encoded branch slashes).
 Only confirmed configured contexts plus a complete current-head check-run/status
