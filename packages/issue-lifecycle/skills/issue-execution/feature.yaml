@@ -106,8 +106,11 @@ env:
         evidence="$common/dagu-feature/runs/$run"
         # Admission captures the primary checkout's branch/worktree, not the
         # candidate's. Recover candidate identity from admitted params + snapshot.
+        # Split literal placeholders so Dagu env expansion cannot consume them.
         jq -se --arg run "$run" --arg primary "$canonical_primary" --arg issue "$ISSUE" \
           --arg branch "$BRANCH" --arg worktree "$canonical_worktree" \
+          --arg issue_placeholder '${IS'"SUE}" --arg primary_placeholder '${PRI'"MARY}" \
+          --arg primary_binding '${A4S_'"PRIMARY}" \
           --rawfile snapshot "$evidence/snapshot/feature.yaml" '
           if length == 1 then .[0] else error("expected one admission receipt") end |
           def env($key):
@@ -123,11 +126,11 @@ env:
           def p($key):
             [$params[] | select(startswith($key + "=")) | ltrimstr($key + "=")] |
             if length > 1 then error("ambiguous admitted parameter") else .[0] // "" end;
-          def expand: split("${ISSUE}") | join($issue) | split("${PRIMARY}") | join($primary);
+          def expand: split($issue_placeholder) | join($issue) | split($primary_placeholder) | join($primary);
           (.schemaVersion == 1 or .schemaVersion == 2) and
           .runReceipt.dag == "feature" and .runReceipt.run == $run and
           $execution.primary == $primary and $execution.dagSnapshot == $snapshot and
-          (env("PRIMARY") == $primary or env("PRIMARY") == "${A4S_PRIMARY}") and
+          (env("PRIMARY") == $primary or env("PRIMARY") == $primary_binding) and
           (p("PRIMARY") == "" or p("PRIMARY") == $primary) and p("ISSUE") == $issue and
           ((if p("BRANCH") == "" then env("BRANCH") else p("BRANCH") end | expand) == $branch) and
           ((if p("WORKTREE") == "" then env("WORKTREE") else p("WORKTREE") end | expand) == $worktree)

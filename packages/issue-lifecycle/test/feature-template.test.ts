@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { renderedFeature } from "./fixtures/templates-rendered.ts";
+import { parse } from "yaml";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/issue-execution/feature.yaml", import.meta.url))],
@@ -17,6 +18,11 @@ function extractStep(source: string, id: string): string {
 }
 
 for (const [name, definition] of definitions) {
+  test(`${name} resource guard protects literal placeholders from Dagu env expansion`, () => {
+    const guard = (parse(readFileSync(definition, "utf8")).env as Array<Record<string, string>>)
+      .find(entry => "DAGU_RESOURCE_GUARD" in entry)!.DAGU_RESOURCE_GUARD!;
+    assert.doesNotMatch(guard, /\$\{(?:ISSUE|PRIMARY|A4S_PRIMARY|BRANCH|WORKTREE|RUN)\}/);
+  });
   test(`${name} yes-triage publication follows deterministic PoC reuse or admission`, () => {
     const source = readFileSync(definition, "utf8");
     const decision = extractStep(source, "triage_decision");
