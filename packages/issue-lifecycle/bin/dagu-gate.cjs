@@ -17,8 +17,17 @@ function start(name, details = {}) {
 function end(id, code, signal) {
   emit({ id, endedAt: Date.now(), exitCode: code ?? 128 + (constants.signals[signal] ?? 0) });
 }
-// Match Node's entrypoint resolution: lifecycle scripts can omit the .js suffix.
-const npmCli = process.argv[1] && /npm(?:-cli)?\.js$/.test(require.resolve(process.argv[1]));
+// Node test workers can retain relative paths without "./"; resolve from cwd,
+// preserving extension lookup and symlink resolution without breaking preloads.
+let entrypoint = process.argv[1];
+if (entrypoint) {
+  try {
+    entrypoint = require.resolve(path.resolve(entrypoint));
+  } catch {
+    // Leave unresolved entrypoints to Node's normal loading/error handling.
+  }
+}
+const npmCli = entrypoint && /npm(?:-cli)?\.js$/.test(entrypoint);
 
 // npm's lifecycle shell is the workspace boundary, independent of its log format.
 // A cache hit replaces that shell with a successful no-op. Misses and always-run
