@@ -789,11 +789,19 @@ a4s enqueue --run-id a4s-issue-808-v2 feature -- \
 Admission durably records the terminal previous owner in the replacement run's
 `previous-owner` state. If a replacement fails before transferring the candidate,
 `start_gate` follows that recorded chain back to the resource/worktree record's
-owner, verifying every traversed run is terminal in Dagu history and belongs to
-the same canonical PRIMARY, issue, branch and worktree. It then rewrites both
-candidate records to the replacement run while preserving HEAD, staged/unstaged
-changes and untracked files. Active, missing, ambiguous, cyclic or unrelated
-predecessors fail closed; resource refusals report `resource_identity`.
+owner, verifying every traversed run is terminal and belongs to the same canonical
+PRIMARY, issue, branch and worktree. A successful exact-run history query returning
+zero rows is accepted as **terminal (history deleted)** only when a complete
+station-wide active feature inventory excludes that run and its durable admitted
+`receipt.json` and `snapshot/feature.yaml` prove the same identity. Any recorded
+`identity` or `resource.json` must agree too. Each accepted deletion prints
+`<recorded owner|predecessor> <run> history deleted; identity verified from lifecycle evidence`.
+Retain these files under `<git-common-dir>/dagu-feature/runs/<run>/`; do not
+hand-edit owner state. Read failures, malformed or ambiguous history, absent or
+mismatched lifecycle evidence, active, cyclic or unrelated predecessors still fail
+closed. Successful handoff rewrites both candidate records to the replacement run
+while preserving HEAD, staged/unstaged changes and untracked files; resource
+refusals report `resource_identity`.
 Repeating a completed `start_gate` reuses its identity without requiring older
 predecessor history. PoC resources are keyed by their own run (`poc/<run>` and
 `poc-<run>`), and discovery uses a per-run detached snapshot; neither shares this

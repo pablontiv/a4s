@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Recover retained feature ownership after native Dagu history deletion only when
+  the exact history query succeeds with zero rows, the owner is absent from the
+  station's active feature inventory, and admitted receipt/snapshot identity
+  matches. Admission and multi-hop `start_gate` handoff diagnose each verified
+  deletion and preserve candidate commits, index, worktree and untracked files;
+  uncertain, active or unrelated ownership still fails closed, including when
+  cleanup emits a preservation diagnostic (#946).
 - Resolve gate-preload entrypoints from the working directory and leave lookup
   failures to Node, preserving relative `node --test` paths, extensionless scripts,
   symlinked npm detection, and `node -e` exit statuses (#943).
