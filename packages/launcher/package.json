@@ -23,6 +23,7 @@
     "./station-inventory": "./src/station-inventory.ts",
     "./station-recovery": "./src/station-recovery.ts",
     "./station-recovery-evidence": "./src/station-recovery-evidence.ts",
+    "./station-retirement": "./src/station-retirement.ts",
     "./station-state": "./src/station-state.ts",
     "./tick-binding": "./src/tick-binding.ts",
     "./type-guard": "./src/type-guard.ts"

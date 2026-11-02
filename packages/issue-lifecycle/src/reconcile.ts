@@ -8,10 +8,12 @@ import { recordNoProgress } from "./ci-no-progress.ts";
 import { classifyRuns } from "./reconcile-classify.ts";
 import { observeRequiredCheckPolicy } from "./required-check-policy.ts";
 import { observeRequiredChecks } from "./required-check-results.ts";
+import { readRunRetirement } from "@a4s/launcher/station-retirement";
 
 export async function main(argv: string[]): Promise<void> {
   const [mode, ...args] = argv;
   if (mode === "classify" && args.length === 1) { await classifyRuns(args[0]!); return; }
+  if (mode === "is-retired" && args.length === 2) { console.log(Boolean(readRunRetirement(args[0]!, args[1]!, "feature"))); return; }
   if (mode === "inspect" && args.length === 1) { console.log(JSON.stringify(inspectRun(JSON.parse(args[0]!)))); return; }
   if (mode === "finish" && args.length === 2) { const result = finishRun(JSON.parse(args[0]!), JSON.parse(args[1]!)); if (result) console.log(result); return; }
   if (mode === "step" && args.length === 1) { executeStep(args[0]!); return; }
@@ -61,5 +63,5 @@ export async function main(argv: string[]): Promise<void> {
     } finally { for (const fd of descriptors) closeSync(fd); }
     return;
   }
-  throw new Error("Usage: a4s reconcile classify <outputs-file> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
+  throw new Error("Usage: a4s reconcile classify <outputs-file> | is-retired <primary> <run> | inspect <row> | finish <row> <issue> | step observe|transition | required-policy <repo> <pr> <sha> | required-results <sha> <required-file> <checks-file> | now | bounded <phase> <budget-seconds> <started-ms> <cap-seconds> <command> [args...] | sha256 | ci-no-progress <state> <observation-id> <threshold> | lock <command> [args...]");
 }

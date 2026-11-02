@@ -714,6 +714,10 @@ changed PATH: restore its original station to continue, or use supported
 cancellation. Active runs, snapshots without a verified CANCEL checkpoint
 (including planning, discovery and reconciler ticks), copied/moved legacy targets
 and missing native specs fail closed, naming the required operator action.
+Terminal runs the operator abandons do not need recovery pin evidence: use
+[`station-recovery retire`](#retire-an-abandoned-run) instead. Retirement works
+with an old literal PATH or old tool digests, without asserting that today's
+station tools are equivalent.
 Widget/actionable-wait UI is #850.
 
 History retention is operator policy in `$DAGU_HOME/base.yaml`; the retained
@@ -878,6 +882,57 @@ git branch dagu/issue-N FETCH_HEAD
 Cleanup verifies candidate integration (including exact squash proof), canonical
 ownership, clean resources and base freshness before worktree/ref removal. Dirty
 resources, ambiguous GitHub responses and unproved integration retain diagnostics.
+
+#### Retire an abandoned run
+
+Quiesce automatic actors and parallel operator actions while recording the
+decision. With the updated operator-installed launcher and reconciler deployed,
+use the canonical primary checkout and exact native run ID (the DAG is read
+from that run's receipt):
+
+```sh
+a4s station-recovery retire --primary <primary> --run <run> \
+  --reason 'Operator abandons this run; retain its artifacts and audit history'
+```
+
+This action accepts native **Failed**, **Succeeded** and **Aborted**, including
+already-cleaned-up feature and PoC runs. It validates the receipt's declared
+artifact contract, primary/DAG/run identity, original native target, exact native
+snapshot and terminal status. It does **not** require `pin`, historical tool
+digest evidence, a matching current PATH, current tool digests or a restored
+cached engine. A declaration must still select the original native target;
+retirement cannot retarget a run.
+
+It writes only durable `station-retirement.json` beside `receipt.json` in
+`<git-dir>/dagu-feature/runs/<run>/`. The record includes the operator reason,
+primary/DAG/run identity, SHA-256 of the **exact receipt bytes**, observed native
+terminal status and observation/retirement timestamps. Repeating a completed
+retirement returns the original record without another native request or audit
+rewrite. Preserve both files byte-for-byte: changed receipts, copied/mismatched
+records, malformed records and unsupported record schemas fail closed.
+
+Scheduled stale recovery and reconcile discovery validate this record before
+receipt/PATH verification, cache restoration or receipt-bound invocation and
+exclude the retired run. Invalid evidence is reported as an error, never ignored
+as permission to recover. Deploy the updated reconciler too: older cached tick
+engines do not know this filter. Retirement is not deletion or a global native
+access-control rule; it does not prevent a separately authorized manual native
+operation or alter history-retention policy.
+
+**Waiting is rejected**, as are all other nonterminal statuses. Historical
+snapshots do not provide a universal, verified native abort contract. Completing
+an ordinary wait could execute successors, publish or delete resources, so
+`retire` never attempts it. Use receipt-bound `station-recovery cancel` only at a
+supported verified CANCEL checkpoint with genuine original digest evidence;
+otherwise restore the genuine original station and obtain an operator-reviewed
+terminalization decision under that run's own contract. Once native status is
+Failed, Succeeded or Aborted, rerun the retirement command. Do not manufacture
+`pin` evidence or push a normal checkpoint merely to make retirement possible.
+
+Retirement performs no native abort, resume or retry, GitHub mutation, resource
+deletion, materialization, or receipt/snapshot rewrite. Native reads and hashes
+run without `.state.lock`; only audit publication takes a short per-run
+`station-recovery.lock`.
 
 ### CodeQL merge gate and correction
 

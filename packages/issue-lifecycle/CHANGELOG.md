@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Exclude receipt-bound retired runs from scheduled stale recovery, reconcile
+  discovery and tick dispatch before legacy PATH/cache verification. Reject
+  malformed or mismatched retirement evidence instead of recovering the run
+  (#922).
 - Bound launcher station promote, rollback, initialization and GC decisions:
   prepare Git/HTTP/process observations and reader verification outside
   `.state.lock`, then re-derive current receipt, SQLite/WAL, lease and tick inputs

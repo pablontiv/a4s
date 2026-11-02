@@ -41,6 +41,7 @@ export function classifyFixture(rows: unknown[]) {
   const verifications: string[] = [];
   const finished: Array<{ item: Routed; issue: { state: string; closed_at?: string | null } | null }> = [];
   const dependencies: ClassifyDependencies = {
+    retirement: () => undefined,
     scope: { artifactVerifications: 1, async verify(primary, run) { verifications.push(run); return context(primary, run); },
       async locally(_context, _phase, execute) { return { local: true, value: execute() }; } },
     inspect: row => routed(row),
