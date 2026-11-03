@@ -59,7 +59,7 @@ unobservable harness cannot appear efficient merely through missing evidence.
 
 ### Closure signals
 
-Merged PRs and closed beads are retained as optional, higher-confidence closure
+Merged changes and closed beads are retained as optional, higher-confidence closure
 signals. They never gate the universal ranking because many valid sessions have
 neither. They are presented separately and never summed with commits into a
 fabricated value score.
@@ -113,7 +113,7 @@ independently.
 
 1. **Harness:** Pi / Claude / Codex. Displays sessions, native USD coverage,
    token components, unique SHAs, commits/session, tokens/SHA, Git coverage,
-   PRs and beads. It ranks only tokens/SHA.
+   merges and beads. It ranks only tokens/SHA.
 2. **Topology:** S1–S4/unknown across every harness and a cross-tab
    `harness × topology` table. It ranks only tokens/SHA.
 3. **Pi extension:** `pi-subagents-j0k3r`, `pi-subagents`, and
@@ -128,7 +128,7 @@ coverage, and a caveat that commit volume is work output rather than value.
 ## Enrichment and error handling
 
 Git enrichment is opt-in (`--with-commits`) and immutable: failure for one
-session records a coverage state and does not abort the report. PR/bead lookups
+session records a coverage state and does not abort the report. Merge/bead lookups
 remain opt-in. A parser error emits `unknown` rather than dropping the session
 from the denominator.
 

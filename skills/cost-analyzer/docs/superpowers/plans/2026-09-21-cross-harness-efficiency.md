@@ -14,7 +14,7 @@
 
 - Rank cross-harness cohorts only by `total_tokens / unique_commit_shas`; lower is better.
 - Preserve all token components; never estimate or rank Claude/Codex USD.
-- Commits are work output, not user-value proof; retain PR/bead results separately.
+- Commits are work output, not user-value proof; retain merge/bead results separately.
 - S3/S4 require coordination evidence; malformed sources are `unknown`.
 - Deduplicate SHAs inside the displayed cohort and report commit coverage.
 - Preserve current Pi S1–S4 and j0k3r compatibility results.

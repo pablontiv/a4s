@@ -1,6 +1,6 @@
 # Ejemplo de salida — septiembre 2026
 
-Generado por `python3 assets/report.py --since 2026-09-01 --until 2026-09-21 --no-prs --no-beads`.
+Ejemplo del período `--since 2026-09-01 --until 2026-09-21`, con consultas de outcomes auxiliares deshabilitadas.
 
 ## Cuadro S1–S4
 
@@ -26,10 +26,10 @@ fecha          S1   S2   S3   S4    total     S1$     S2$     S3$      S4$   S4%
 2026-09-21      3    0    1    1$     502$      2$      0$     71$     430   86%
 ```
 
-## Outcomes por escenario (18-sept, sin PRs/beads)
+## Outcomes por escenario (18-sept, sin consultas de merges/beads)
 
 ```
-escenario     N   commits  commits/sess   PRs  beads  sub_n  max_fan
+escenario     N   commits  commits/sess  merges  beads  sub_n  max_fan
 S1 solo     107       207          1.93     0      0      0        0
 S2 subags     3        29          9.67     0      0     17        1
 S3 orq       83         8          0.10     0      0      0        0
@@ -39,7 +39,7 @@ S4 orq+sub   20        16          0.80     0      0     61        2
 ## Costo por outcome (18-sept)
 
 ```
-escenario         $   $/commit     $/PR  $/bead  $/sub_n
+escenario         $   $/commit  $/merge  $/bead  $/sub_n
 S1 solo      $   123     $  0.59    $  -    $  -    $  -
 S2 subags    $   228     $  7.86    $  -    $  -    $13.41
 S3 orq       $   183     $ 22.88    $  -    $  -    $  -
@@ -55,4 +55,4 @@ S4 orq+sub   $  3728     $233.00    $  -    $  -    $61.11
 - **S2 entrega 9.67 commits/sesión** pero a $7.86/commit (intermedio)
 - **S4 con 0.80 commits/sesión pero $3728 de gasto = claramente ineficiente**
 
-Con PRs y beads habilitados, el cuadro incluye `$/PR` y `$/bead` para que la comparación sea completa (no solo commits).
+Con merges y beads habilitados, el cuadro incluye `$/merge` y `$/bead` para que la comparación sea completa (no solo commits).

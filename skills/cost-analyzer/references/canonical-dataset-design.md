@@ -41,7 +41,7 @@ class SessionRecord:
     topology: Literal['S1', 'S2', 'S3', 'S4'] | None
     pi_extension: Literal['pi-subagents-j0k3r', 'pi-subagents', 'mixed/unknown'] | None
     commits: frozenset[str]
-    prs: frozenset[int]
+    merges: frozenset[str]
     beads_closed: frozenset[str]
 ```
 
@@ -68,7 +68,7 @@ Cada parser debe tolerar líneas inválidas y sesiones sin timestamps. El identi
 
 - Los commits se deduplican por SHA **dentro de cada cohorte/vista**.
 - Un mismo SHA puede aparecer en harness distintos; esto no prueba causalidad.
-- PRs y beads siguen siendo outcomes auxiliares. No equivalen automáticamente a valor: pueden ser docs, pruebas no solicitadas o trabajo rehecho.
+- Cambios integrados y beads siguen siendo outcomes auxiliares. No equivalen automáticamente a valor: pueden ser docs, pruebas no solicitadas o trabajo rehecho.
 - El ledger conserva evidencia bruta por sesión; una posterior clasificación de “valor aceptado” debe añadirse como dimensión separada, no inferirse de commits.
 
 ### 5. Vistas
@@ -77,7 +77,7 @@ Cada parser debe tolerar líneas inválidas y sesiones sin timestamps. El identi
 
 Agrupa por `harness`:
 
-| harness | sesiones | costo nativo | cobertura costo | tokens | SHAs únicos | PRs | beads |
+| harness | sesiones | costo nativo | cobertura costo | tokens | SHAs únicos | merges | beads |
 
 No declara ganador por dólares si cobertura de costo no es 100% o se mezclan costos nativos con estimados.
 

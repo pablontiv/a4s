@@ -79,8 +79,8 @@ orchestration lock is the single explicit exception; fixtures and subprocess
 artifact caches stay isolated, including `~/.dagu` fallbacks. Messaging and
 message-bus also expose explicit `test:live` scripts for their real CLI scenarios.
 CI discovers current workspace manifests and transitive consumers, handles both
-sides of renames, and aggregates workspace checks and PR-body validation into
-`validate` for `main`.
+sides of renames, and aggregates workspace checks into `validate` after pushes
+to `main`.
 
 ## Stable launcher installation
 

@@ -38,16 +38,17 @@ Observe the stages in this order:
 
 1. **Enqueue** — admission accepts the run into the repository queue.
 2. **Triage** — the issue's implementation path is assessed.
-3. **Implement** — the assigned change is completed in its managed worktree.
+3. **Implement** — the assigned change is completed and committed in its managed worktree.
 4. **Gate** — the candidate passes the repository's local gate.
 5. **Review** — review findings are resolved and any required operator validation
    is completed.
-6. **CI** — the published candidate satisfies required checks and the adopted
-   code-scanning policy.
-7. **Merge** — the candidate merges and the lifecycle completes its closure.
+6. **Integrate** — the tested candidate merges locally into `main`, then `main`
+   is pushed.
+7. **CI and closure** — CI runs after the push; the lifecycle completes its
+   closure after observing the pushed commit's checks.
 
-Ensure the PR includes `Closes #<n>` and confirm that merge closes the intended
-issue. Observe lifecycle completion and cleanup as described in
+Ensure the integrated commit includes `Closes #<n>` and confirm that pushing it
+to `main` closes the intended issue. Observe lifecycle completion and cleanup as described in
 [deployment.md](deployment.md); a green CI result or merge alone is not evidence
 of complete lifecycle closure.
 
@@ -71,7 +72,7 @@ station passes only after **three consecutive runs** satisfy that rule with **no
 station-caused failure**. Any station-caused failure resets the counter to zero,
 even if the affected run later succeeds after recovery.
 
-For each run, retain the issue and run IDs, PR, tested candidate SHA, merge and
+For each run, retain the issue and run IDs, tested candidate SHA, merge, push and
 issue-closure evidence, lifecycle completion/cleanup result, and any failure's
 classification and supporting diagnostics. Record that the queue limit,
 promotion freeze and attended mode held throughout the sequence. The operator
@@ -86,6 +87,6 @@ runtime evidence under the repository's source/runtime classification: do not
 commit it to the repository. Keep this template in source so that three
 consecutive passes can be audited from GitHub alone.
 
-| Attempt number | Issue | Run id | PR | Merged commit | Wall time enqueue→merge | Station-caused failure (none or cause) | Counter after the attempt |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| <attempt> | #<issue> | <run-id> | #<pr> | <merged-commit> | <elapsed time> | <none or cause> | <counter> |
+| Attempt number | Issue | Run id | Merged commit | Wall time enqueue→merge | Station-caused failure (none or cause) | Counter after the attempt |
+| --- | --- | --- | --- | --- | --- | --- |
+| <attempt> | #<issue> | <run-id> | <merged-commit> | <elapsed time> | <none or cause> | <counter> |

@@ -37,14 +37,13 @@ are recorded below.
 
 ### Main branch protection and trunk-based work
 
-Since 2026-11-02 the operator works trunk-based in the main lane: manual changes
-are committed on `main` and pushed in the same closure, so `main` and
-`origin/main` stay equal. At the operator's request, `main` protection was relaxed
-on that date to allow it:
+Since 2026-11-02 the operator works trunk-based in the main lane. Changes are
+committed in a worktree, merged locally into `main`, then pushed in the same
+closure, so `main` and `origin/main` stay equal. At the operator's request,
+`main` protection was relaxed on that date to allow it:
 
 | Rule | Before | Now |
 | --- | --- | --- |
-| Required pull request (0 approvals, dismiss stale reviews) | yes | removed |
 | Required status check `validate` (strict) | yes | removed |
 | Linear history, conversation resolution, `enforce_admins` | yes | yes |
 | Force push and deletion | blocked | blocked |
@@ -52,21 +51,9 @@ on that date to allow it:
 CI still runs `validate` on every push to `main`, but it reports after the push
 instead of blocking it. Run the full gate locally before each commit.
 
-The lifecycle has not been adapted yet; the trunk migration is phase F6 of the
-[T3/OMP roadmap](../architecture/t3-omp-roadmap.md). Until then, this lane's
-protection contradicts the adopted policy, as the code shows:
-
-- Committed `.workspace/dagu/config.json` still declares `requiredCheck: "validate"`.
-- Bootstrap `confirm` requires a strict required check that contains it
-  (`dagu-feature-bootstrap.yaml`), so it fails. An authorized `github` bootstrap
-  step can restore the required check.
-- The reconciler's required-check lookup fails closed as `BLOCKED` when no
-  required context is configured (`required-check-policy.ts`).
-- `auto_merge` merges a `CLEAN` pull request immediately. Without a required
-  check, GitHub no longer holds that merge for `validate`.
-
-Do not admit feature or PoC runs in this lane until the lifecycle integrates on
-`main` or the protection is restored with explicit operator authority.
+Integration is the local merge into `main` followed by its push. CI observes
+the pushed commit; it is not a pre-merge publication gate. Complete the local
+gate and any adopted operator validation before integration.
 
 ### Release controller versus candidate
 
@@ -122,20 +109,21 @@ committed at HEAD; an identical-config unbound clone is not protected.
 
 ## Versioned source, configuration and runtime state
 
-Git versions source and configuration. That is content a person commits, on
-`main` or through a lifecycle pull request, or content generated deterministically from a versioned revision and declared
-inputs so that regenerating it yields identical bytes. Changes to it land through
-a commit, such as a policy adoption.
+Git versions source and configuration. That is content a person commits in a
+worktree and merges locally into `main` before pushing, or content generated
+deterministically from a versioned revision and declared inputs so that
+regenerating it yields identical bytes. Changes to it land through a commit,
+such as a policy adoption.
 
 Runtime state is written by a running process and carries per-execution data:
 run identifiers, timestamps, process IDs, attempt counters, or observed external
-state such as PR heads and check results. It lives under `.git/dagu-feature/runs/`
+state such as published commit SHAs and check results. It lives under `.git/dagu-feature/runs/`
 or `$DAGU_HOME`. Bootstrap writes the consumer config file; it does not version
 receipts, observations, generated snapshots or scheduler data.
 
 Classify a file in three steps:
 
-1. Identify its producer (a person through a commit or pull request, a generator such as the
+1. Identify its producer (a person through a commit, a generator such as the
    bootstrap config-authoring step, or a running process such as a DAG step or observer) and
    the producer's declared inputs.
 2. If a generator produces it, regenerate it twice at the same revision with
@@ -900,7 +888,7 @@ Inspect `<git-dir>/dagu-feature/runs/<run>/` receipts, candidate, tested SHA,
 resource owner and cleanup proof before retry or transfer. Terminal recovery can
 reuse retained resources through a new suffixed run under the execution skill's
 ownership-transfer contract. Keep the same `ISSUE` and `OMP_SESSION_ID`, plus
-`POC_BASIS`/`PR_NUMBER` when applicable. The branch is derived from `ISSUE` as
+`POC_BASIS` when applicable. The branch is derived from `ISSUE` as
 `dagu/issue-<N>`; do not pass `BRANCH` to `a4s enqueue`, which rejects it.
 See the execution skill's concrete replacement command.
 Interrupted semantic jobs retain their native
@@ -969,40 +957,17 @@ deletion, materialization, or receipt/snapshot rewrite. Native reads and hashes
 run without `.state.lock`; only audit publication takes a short per-run
 `station-recovery.lock`.
 
-### CodeQL merge gate and correction
+### CodeQL analysis and correction
 
 This repository runs CodeQL weekly (`.github/workflows/codeql.yml`, Mondays
-06:00 UTC, plus manual dispatch) on `main` only. Pull requests and pushes do not
-run CodeQL, no ruleset gates merges on it, and the adopted `CODE_SCANNING` is
-`off`: the lifecycle neither observes nor waits for CodeQL. Weekly findings are
-triaged from the code-scanning alert list. A consumer that keeps per-PR
-enforcement adopts `required` with a matching `code_scanning` ruleset; the rest of
-this section describes that mode. Repository enforcement and controller adoption
-are separate operations requiring their respective authorization.
+06:00 UTC, plus manual dispatch) on `main` only. Pushes do not run CodeQL,
+no ruleset gates merges on it, and the adopted `CODE_SCANNING` is `off`:
+the lifecycle neither observes nor waits for CodeQL. Weekly findings are
+triaged from the code-scanning alert list.
 
-After PR publication, `code_scanning` records `codeql-policy.json` and
-`codeql-observation.json` under `<git-dir>/dagu-feature/runs/<run>/`. Evidence
-binds the candidate head SHA to the current `CodeQL` check and open alerts on
-`refs/pull/<PR>/head`; a successful check alone is insufficient. Threshold
-findings retain alert number, rule, severity, path, line, message and URL.
-Pending analysis releases the repository queue through the native waits;
-stale-head observations require fresh observation of the current head.
-
-A ruleset `BLOCKED` merge state with current-head threshold findings is
-`CODE_FAIL`. The scheduled reconciler persists the SHA-bound structured
-findings in `ci-return.json` and pushes `await_ci` back through
-`implement_budget` to implementation using the observed iteration. It disables
-any existing auto-merge request before the return. Implementation reads that
-diagnostic as untrusted data, corrects the genuine defect and retains the same
-run, branch and PR through normal capture, gate and push.
-
-The corrected head must earn fresh local gate evidence, CodeQL analysis without
-threshold findings and successful required `validate` before the reconciler
-enables guarded squash auto-merge. The reconciler owns `await_ci`, `await_merge`
-and merge observation; `authorize_ci` repeats CodeQL authorization for the
-published candidate before `close_gate` verifies integration and cleanup.
-Permission failures or unsuccessful analysis without proven threshold findings
-remain diagnosed `BLOCKED`, preserving the wait for its owner.
+Correct genuine defects in a worktree, commit and pass the local gate, then
+merge locally into `main` and push. CI runs after the push; CodeQL analysis
+follows its weekly schedule or an authorized manual dispatch.
 
 Genuine defects are fixed. A justified false positive or test-only finding
 requires an explicit recorded reason and an authorized disposition before
@@ -1037,7 +1002,7 @@ station, use the authorized drained exact-release restoration procedure instead.
 The release ([#435](https://github.com/pablontiv/a4s/issues/435)), local adoption
 ([#436](https://github.com/pablontiv/a4s/issues/436)) and main-owned post-release
 proof ([#437](https://github.com/pablontiv/a4s/issues/437), run
-`a4s-issue-605-r1`, PR #611) completed before the separately authorized retirement
+`a4s-issue-605-r1`) completed before the separately authorized retirement
 in [#438](https://github.com/pablontiv/a4s/issues/438).
 
 The temporary `a4s-v1` lane is retired: its `integration/v1` protection and remote

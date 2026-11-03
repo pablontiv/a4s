@@ -28,7 +28,7 @@ previos.
 
 | Lente | Archivo | Cadencia sugerida |
 |---|---|---|
-| 0. Cobertura funcional | [`lenses/0-cobertura-funcional.md`](lenses/0-cobertura-funcional.md) | Cada PR o merge |
+| 0. Cobertura funcional | [`lenses/0-cobertura-funcional.md`](lenses/0-cobertura-funcional.md) | Cada merge local en `main` |
 | 1. Límites de confianza | [`lenses/1-limites-de-confianza.md`](lenses/1-limites-de-confianza.md) | Semanal y al tocar entradas o parsers |
 | 2. Integridad y ciclo de vida de datos | [`lenses/2-integridad-y-ciclo-de-vida-de-datos.md`](lenses/2-integridad-y-ciclo-de-vida-de-datos.md) | Semanal y al tocar almacenamiento |
 | 3. Resiliencia y concurrencia | [`lenses/3-resiliencia-y-concurrencia.md`](lenses/3-resiliencia-y-concurrencia.md) | Semanal, en contenedor desechable |

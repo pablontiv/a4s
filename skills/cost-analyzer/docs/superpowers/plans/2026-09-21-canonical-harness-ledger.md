@@ -117,7 +117,7 @@ class SessionRecord:
     topology: str | None
     pi_extension: str | None
     commits: frozenset[str] = frozenset()
-    prs: frozenset[int] = frozenset()
+    merges: frozenset[str] = frozenset()
     beads_closed: frozenset[str] = frozenset()
 ```
 
@@ -249,7 +249,7 @@ Expected: FAIL because `enrich_records` and `unique_shas` do not exist.
 
 - [ ] **Step 3: Implement immutable enrichment**
 
-Use `dataclasses.replace()` to add git SHAs, optional PR numbers, and optional bead IDs to each record. Do not mutate a record. Pi/Claude/Codex all use the same git enrichment when their `cwd` is a local Git repository; beads remain Pi/a4s-specific.
+Use `dataclasses.replace()` to add git SHAs, optional merge commit SHAs, and optional bead IDs to each record. Do not mutate a record. Pi/Claude/Codex all use the same git enrichment when their `cwd` is a local Git repository; beads remain Pi/a4s-specific.
 
 - [ ] **Step 4: Convert existing CLIs to records**
 
@@ -297,7 +297,7 @@ Expected: FAIL because `views` does not exist.
 
 - [ ] **Step 3: Implement views**
 
-- Harness overview: sessions, native-cost sum, native-cost coverage, input/output/cache tokens, unique SHAs, PRs, beads.
+- Harness overview: sessions, native-cost sum, native-cost coverage, input/output/cache tokens, unique SHAs, merges, beads.
 - Never calculate an all-harness `$ / SHA` winner while a harness lacks native cost.
 - Pi extension overview: filter Pi, exclude `mixed/unknown` only from ranking, show it separately.
 - Pi topology overview: Pi-only S1–S4 with model/provider breakdown available through `--cross-tab topology-model`.
@@ -313,7 +313,7 @@ python3 report.py --since 2026-08-01 --until 2026-09-30 --view topology
 python3 report.py --since 2026-08-01 --until 2026-09-30 --view all
 ```
 
-Default is `--view all`; `--no-prs` and `--no-beads` remain supported.
+Default is `--view all`; `--no-beads` remains supported.
 
 - [ ] **Step 5: Run views tests and one real smoke report**
 
@@ -321,7 +321,7 @@ Run:
 
 ```bash
 python3 -m unittest -v test_views.py test_dataset.py test_outcomes.py test_quad.py test_extensions.py
-python3 report.py --since 2026-08-01 --until 2026-09-30 --view harness --no-prs --no-beads
+python3 report.py --since 2026-08-01 --until 2026-09-30 --view harness --no-beads
 ```
 
 Expected: all tests PASS; smoke output contains harness rows Pi, Claude, Codex and explicitly displays native-cost coverage.
@@ -366,7 +366,7 @@ Run:
 ```bash
 cd ~/.agents/skills/cost-analyzer/assets
 python3 -m unittest -v test_dataset.py test_outcomes.py test_views.py test_quad.py test_extensions.py test_skill_contract.py
-python3 report.py --since 2026-08-01 --until 2026-09-30 --view all --no-prs --no-beads
+python3 report.py --since 2026-08-01 --until 2026-09-30 --view all --no-beads
 ```
 
 Expected: all tests PASS; report renders Pi, Claude, Codex plus Pi extension/topology views.

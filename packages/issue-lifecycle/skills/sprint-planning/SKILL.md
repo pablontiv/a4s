@@ -51,14 +51,14 @@ Keep goal completion and issue completion separate. The goal is met when its agr
 
 | Work | Completion evidence |
 |---|---|
-| Feature | Acceptance results, the run's local gate (and any adopted operator validation), merged PR, required CI evidence from `authorize_ci`, closed issue, and successful run with reconciled worktree/branch cleanup |
+| Feature | Acceptance results, the run's local gate (and any adopted operator validation), worktree commit merged locally into `main` and pushed, required post-push CI evidence, closed issue, and successful run with reconciled worktree/branch cleanup |
 | PoC | The published verdict and findings answering the issue's question, successful PoC run and reconciled worktree/branch cleanup, and the lifecycle's issue disposition |
 | PoC PASS with promotion | Also track the promoted feature continuation against the feature evidence; distinguish a completed experiment from unfinished promoted delivery |
 | PoC PASS without promotion | The completed experiment needs no feature implementation to count as a completed PoC |
 | PoC FAIL | The published verdict explains the failed experiment; the required existing issue's disposition remains unchanged |
 | PoC INCONCLUSIVE | The published findings record the unresolved question and the operator's choice of iteration or completion with promote=no, or the coordinator's decision under [autonomous sprint](#5-autonomous-sprint); an inconclusive result is not a PASS |
 
-Use the existing run artifacts and issue/PR evidence; record their provenance and current lifecycle state. A missing condition is a no with the responsible next action, not a reason to invent another delivery gate.
+Use the existing run artifacts, issue evidence and merge commits; record their provenance and current lifecycle state. A missing condition is a no with the responsible next action, not a reason to invent another delivery gate.
 
 ## 3. Rank
 
@@ -104,14 +104,14 @@ The objective alone grants the default mandate below; extra operator wording may
   Record returned skips for the issue and all its dependents, comment on those dependents with the cause, and continue independent work.
 - Resolve design decisions through online research and an advisor instead of asking.
 - Never close issues manually. Lifecycle merge closure (`Closes #N`) and lifecycle branch cleanup are normal completion.
-- Infrastructure/station changes are allowed only through procedures in [deployment](../../../../docs/operations/deployment.md#operator-owned-station-configuration-and-readiness);
+- Infrastructure/station changes are allowed only using procedures in [deployment](../../../../docs/operations/deployment.md#operator-owned-station-configuration-and-readiness);
   attribute them in the ledger.
 - Never provision, change or rotate credentials: skip the affected issue and its dependents with an issue comment.
 - For destructive actions outside the lifecycle (force-pushing the base, deleting data/issues,
   or deleting branches not owned by lifecycle cleanup), skip the issue and its dependents with an issue comment.
 - If Dagu, the engine or the station itself prevents an issue from running (not a failure of the issue's work),
   continue manually in a separate worktree from the base, run the repository's full declared gate/checks,
-  open a PR using the repository template with `Closes #N`, and merge only after required checks pass.
+  commit in that worktree with `Closes #N`, merge locally into `main`, push, and retain the post-push CI results.
   Record this fallback as an incident for the retrospective; credential and destructive-action exclusions still apply.
 - If the loaded extension is stale (`compat=stale` or another stale-extension condition), an extension or OMP reload is required,
   or context is exhausted, perform a coordinator handover without waiting for the operator.

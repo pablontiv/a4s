@@ -25,7 +25,7 @@ a sandbox. This table records the class each cited control actually has.
 | Operator at the TUI or local Dagu HTTP | Git, the Dagu store, and human-task decisions on the station |
 | Agent process running as the station user | Tools the host grants, including paths the assignment text only asked it to avoid |
 | Local publisher on the loopback broker | Any `synagent/v2/<to>` payload, including another sender's identity |
-| Pull-request CI | The published candidate's tests and PR-body check, not the station process |
+| Post-push CI | The pushed default-branch commit's tests, not the station process |
 
 ## Controls
 

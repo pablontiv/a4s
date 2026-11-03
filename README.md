@@ -137,8 +137,8 @@ Root and CI run all nine workspace test suites and eight declared typechecks;
 the optional-host tool-row workspace is test-only because its renderer types
 belong to the consumer's Pion host. See
 [development prerequisites](docs/operations/private-install.md#prerequisites-and-development)
-for explicit live-Dagu testing. CI's SHA-bound `validate` aggregate runs on
-pushes and pull requests to `main`. Since 2026-11-02, `main` protection requires
-neither a PR nor `validate`; see
+for explicit live-Dagu testing. Commit changes in a worktree, merge locally into
+`main`, then push. CI's SHA-bound `validate` aggregate runs after pushes to
+`main`. Since 2026-11-02, `main` protection does not require `validate`; see
 [main branch protection](docs/operations/deployment.md#main-branch-protection-and-trunk-based-work).
 Historical removed-host source is preserved in `legacy`.

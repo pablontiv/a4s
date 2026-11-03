@@ -100,7 +100,7 @@ Desglose por harness y modelo (ver `render_tokens_breakdown()` view).
 Para cada sesión clasificada:
 
 1. **Commits**: `git log --since/--until` en el `cwd` de la sesión durante su ventana temporal. El reporte deduplica SHAs dentro de cada escenario: reporta commits únicos, no apariciones duplicadas por sesiones solapadas.
-2. **PRs merged**: `gh pr list --search <sha>` por cada commit, deduplicado por PR number.
+2. **Cambios integrados**: commits de merge en `main`, deduplicados por SHA. El trabajo se confirma en un worktree, se integra localmente en `main` y se publica con push; CI se ejecuta después del push.
 3. **Beads cerradas**: `bd list --status=closed --json` filtrado por `metadata.worktree` matching el cwd.
 4. **Subagentes**: conteo de `customType='subagent-notify'` + fan-out máximo (cuántos en ventana de 60s).
 5. **Atribución S3/S4 → S1 spawneadas** (`attribution.py`): grafo de qué S1 fueron lanzadas por cada S3/S4. Heurística: la S1 se inicia durante la ventana del orquestador (+buffer 60min) Y comparte worktree/repo parent. Devuelve ratio `$orch / $S1_spawned` — si >>1, el orquestador quema contexto sin entregar.
@@ -145,10 +145,10 @@ python3 assets/quad.py --since 2026-09-18 [--json] [--files]
 ### Solo outcomes (asume clasificación ya hecha)
 
 ```bash
-python3 assets/outcomes.py --since 2026-09-18 [--until 2026-09-21] [--no-prs] [--no-beads]
+python3 assets/outcomes.py --since 2026-09-18 [--until 2026-09-21] [--no-beads]
 ```
 
-`--no-prs` y `--no-beads` saltan los lookups costosos.
+`--no-beads` salta las consultas costosas de beads.
 
 ### Solo attribution S3/S4 → S1
 
@@ -193,14 +193,14 @@ Divide por el cutover verificado `2026-09-04T04:43:09Z`: sesiones antes = `pi-su
 
 Los commits como métrica de éxito son **engañosos**. Sesiones que iteran sobre trabajo especulativo (documentos no pedidos, pruebas especulativas, refactors no aprobados) pueden tener **muchos commits** y **cero valor entregado**.
 
-El usuario explícitamente rechazó esta métrica el 2026-09-21: muchas sesiones S3 de los últimos días se centraron en "retomar la idea que se repitió varias veces porque los pr/commits eran humo".
+El usuario explícitamente rechazó esta métrica el 2026-09-21: muchas sesiones S3 de los últimos días retomaban ideas repetidas porque los cambios y commits anteriores no habían entregado valor durable.
 
 **Métricas más confiables para "valor real":**
-1. **PRs merged que sobreviven 7 días** (no revertidos). Proxy: `git log` después de la fecha del PR.
+1. **Cambios integrados que sobreviven 7 días** (no revertidos). Proxy: `git log` después de la fecha del merge.
 2. **Beads cerradas con outcome durable** (no "doc", "wip", "draft").
 3. **Líneas de código en producción** (excluyendo `*.md`, `*.test.*`, `__tests__/`).
 4. **Ratio commits_revertidos / commits_total** en los 7 días post-merge.
-5. **Tiempo a "accepted"** desde el primer commit hasta el merge del PR.
+5. **Tiempo a "accepted"** desde el primer commit hasta el merge local en `main` y su push.
 
 Si solo tienes commits como proxy, **categorízalos** (code vs doc vs test) antes de comparar $/commit entre escenarios.
 
@@ -220,7 +220,7 @@ cost-analyzer/
 ├── assets/
 │   ├── quad.py                   # clasificador S1–S4 (actual + legacy)
 │   ├── test_quad.py              # regresión de serialización legacy
-│   ├── outcomes.py               # commits + PRs + beads
+│   ├── outcomes.py               # commits + cambios integrados + beads
 │   ├── attribution.py            # grafo S3/S4 -> S1 spawneadas
 │   ├── extensions.py             # j0k3r vs pi-subagents por cutover
 │   ├── test_extensions.py        # regresión de la frontera de cutover

@@ -251,7 +251,7 @@ Do not convert an implementation preference into a technical task.
 
 ### Spike
 
-Use `spike` when material uncertainty prevents a sufficiently defined defect, story, or technical task. For feasibility, uncertainty is material when implementation depends on unexercised external or runtime behavior that can change the implementation path. Reuse of behavior already demonstrated by a PASS or merged PR proceeds directly; bug reproduction is defect investigation. A spike maps to `dag: poc` with an explicit `question`. The resulting existing issue can later enter the PoC lifecycle through sprint planning, preserving feature/PoC continuations.
+Use `spike` when material uncertainty prevents a sufficiently defined defect, story, or technical task. For feasibility, uncertainty is material when implementation depends on unexercised external or runtime behavior that can change the implementation path. Reuse of behavior already demonstrated by a PASS or merged change proceeds directly; bug reproduction is defect investigation. A spike maps to `dag: poc` with an explicit `question`. The resulting existing issue can later enter the PoC lifecycle through sprint planning, preserving feature/PoC continuations.
 
 Include:
 

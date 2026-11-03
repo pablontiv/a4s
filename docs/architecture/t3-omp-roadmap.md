@@ -47,8 +47,8 @@ contexto y cada evento abría un turno:
 | Hoja de ruta (26-oct) | 27 | 24 | 22 | 133 |
 | STAB estación (2-nov) | 11 | 65 | 17 | 8 |
 
-Los mensajes del operador muestran el síntoma: no sabía en qué estado estaba un
-PR ni si el trabajo estaba bloqueado, y no encontraba la sesión a la que se había
+Los mensajes del operador muestran el síntoma: no sabía en qué estado estaba una
+integración ni si el trabajo estaba bloqueado, y no encontraba la sesión a la que se había
 hecho un handover. Se revisaron los conteos y los últimos mensajes de esas cuatro
 sesiones, no las sesiones completas.
 
@@ -75,7 +75,7 @@ delegar, decidir o escalar.
 
 Cambios respecto del corte: el coordinador y los hijos corren OMP en vez de Claude
 (acuerdos 1 y 6 del corte), y Dagu dicta los pasos por el WebSocket de T3 (el corte,
-§5, lo había descartado). El resto de los acuerdos se mantiene: trunk sin PR,
+§5, lo había descartado). El resto de los acuerdos se mantiene: trunk con merge local en `main` y push,
 worktrees de T3, `delegate_task` y sin bus MQTT.
 
 ## 2. Validado en ejecución
@@ -140,7 +140,7 @@ Además:
 - Las extensiones no pueden invocar tools MCP arbitrarias (`invokeTool` solo invoca la misma tool).
 - La CLI `t3 thread send --wait` solo espera el run, no el trabajo delegado.
 - T3 no tiene plugins en runtime. Proveedores, secretos y control de versiones son paquetes compilados. Lo extensible son los ajustes de proveedor, los scripts de proyecto, las tareas programadas, los webhooks, las APIs MCP/CLI/HTTP/WS y los parches al código.
-- `runOnSettle` corre al asentarse el thread (inactividad, merge del PR o a mano) y solo en threads con worktree; no al terminar un run.
+- `runOnSettle` corre al asentarse el thread (por inactividad o a mano) y solo en threads con worktree; no al terminar un run.
 
 ## 3. Lo que el diseño debe contemplar
 
@@ -180,21 +180,20 @@ coordinador, que delega. La dependencia real del LLM está en `poc`, `discovery`
 | Decisiones del operador | `escalation`, `start_primary_unavailable`, `close_primary_unavailable`, `poc_scope_decision`, `recover_start_gate`, `recover_push`, `validation`; `approve` en planning; `decide` en poc | Se quedan como `human.task` |
 | Identidad `OMP_SESSION_ID` | 12 archivos de `packages/issue-lifecycle/src`, entre ellos `admission.ts:112`, `registration.ts:33` y `status/progress.ts` | Identidad a4s más una asociación al thread |
 | Worktrees `.workspace/worktrees/issue-N` | `feature.yaml:48,228,813` | Los maneja T3 |
-| Flujo con PR | Pasos `pr` a `authorize_ci` (`feature.yaml:1637-1826`); `gh pr checks` y `gh pr merge` en `reconcile.yaml` | Integrar en main y hacer push |
 | Widget de estado con poll cada segundo | `packages/issue-lifecycle/src/status/index.ts`, `status/widget.ts` | Se retira; T3 no dibuja widgets (V1 del corte) |
 
 ## 6. Decisiones previas
 
 1. **Aceptar el WebSocket interno.** El dispatch idempotente, la suscripción y `queue.resume` dependen de él. Se acepta con la versión de T3 fijada y la prueba de contrato, o se busca otra vía.
-2. **La CI sin PR.** Hoy `REQUIRED_CHECK` y CodeQL filtran antes del merge. En trunk corren después del push. Hay que definir qué bloquea y qué revierte. La protección de `main` ya no exige PR ni `validate`, así que el lifecycle actual choca con ella hasta F6 ([Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work)).
+2. **La CI después del push.** En trunk, `REQUIRED_CHECK` y CodeQL corren después del merge local en `main` y push. Hay que definir qué bloquea y qué revierte. La protección de `main` permite ese flujo sin exigir `validate` antes de integrar ([Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work)).
 3. **La autoridad de push.** AGENTS.md exige autoridad explícita. Propuesta: se fija en el enqueue, y Dagu la verifica antes de integrar.
 4. **La forma de ejecutarlo.** Issues por fase, o seguir como investigación.
 
 ## 7. Roadmap
 
 Orden: F0 → F1 y F2+F3 (en paralelo) → F4 → F5 → F6 → F7. Cada fase se cierra con
-commit en main y push, pasando `npm test` y `npm run typecheck`, y su `test:live` con
-los hosts reales. Las pruebas unitarias no prueban la integración.
+commit en el worktree, merge local en `main` y push, pasando `npm test` y `npm run typecheck`, y su `test:live` con
+los hosts reales. La CI corre después del push. Las pruebas unitarias no prueban la integración.
 
 ### F0 · Plataforma (del operador, en nixos)
 
@@ -272,8 +271,8 @@ Es la fase de mayor riesgo.
 
 - Dagu pone PRIMARY en `origin/main` y dicta `implement` con `isolation: "worktree"`.
 - Lee la rama y el worktree desde la proyección, ya con el nombre final.
-- Corre el gate en ese worktree, integra en main y hace push.
-- Se retiran los pasos `pr` a `authorize_ci` y las partes de PR de `reconcile.yaml`.
+- El hijo hace commit en el worktree; Dagu corre el gate ahí, hace merge local en `main` y push. La CI corre después del push.
+- Se retiran los pasos de publicación y su reconciliación, reemplazados por la integración local y push.
 - Issues en paralelo: actualizar contra el nuevo main con el rol de conflictos.
 
 ### F7 · Avisos y retiro
@@ -308,7 +307,7 @@ Estados consultados con `gh` el 2026-11-03.
 4. **Un coordinador efímero por evento**, en vez de uno durable. Eliminaría la sesión larga; no se probó.
 5. **Pedirle a T3 que exponga `workspaceStrategy` en `delegate_task`.** El comando interno `delegated_task.request` ya lo acepta. Pedirlo es una acción externa y la decide el operador.
 6. **El observador de otra familia ante una escalada:** diseñado, no probado.
-7. **Las citas de la investigación en línea hecha con `grok-4.3`** (números de PR e issue de T3) siguen sin verificar, como dice el corte (§8).
+7. **Las citas de la investigación en línea hecha con `grok-4.3`** (referencias a cambios e issues de T3) siguen sin verificar, como dice el corte (§8).
 
 ## 10. Estado del entorno al cierre
 

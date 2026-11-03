@@ -20,7 +20,7 @@ Fuentes:
 6. **La extensión del lado de Claude es un plugin de function hooks** (`on(event, …)`), no hooks en `settings.json`.
 7. **La identidad es un nombre universal de a4s**, no atado a un harness. El host (thread de T3) se asocia aparte.
 8. **Un worktree = un feature, issue o fix**, manejado por T3 según su configuración.
-9. **Trunk-based con merge a main, sin PR.**
+9. **Trunk-based: commit en el worktree, merge local a `main` y push; la CI corre después del push.**
 10. **Ubicación de worktrees:** el valor global por defecto de T3, `~/.t3/worktrees/<repo>/<rama>`.
 11. **Todo supuesto sobre T3 se confirma en su código.**
 
@@ -40,7 +40,7 @@ Flujo por issue:
 2. El coordinador lanza `delegate_task` con `isolation: "worktree"`. T3 crea el worktree, corre el setup y nombra la rama.
 3. El hijo del issue delega a sus propios subagentes con `shared` y hace commit en su worktree.
 4. Cuando termina todo el trabajo del hijo, T3 despierta al coordinador **una sola vez**.
-5. Dagu corre el gate en el worktree del hijo, integra en main y hace push.
+5. Dagu corre el gate en el worktree del hijo, hace merge local en `main` y push; la CI corre después del push.
 6. T3 borra el worktree con la regla `worktreeUnchanged`.
 
 ## 3. Validado en ejecución
@@ -87,10 +87,9 @@ Flujo por issue:
   - El proyecto a4s hoy tiene `scripts: []`.
   - Fuentes: `ThreadLaunchService.ts:571-620`, `project/ProjectSetupScriptRunner.ts:422`, `packages/shared/src/projectScripts.ts`.
 - **`t3.json` solo acepta** `$schema`, `iconPath`, `defaultThreadEnvMode`, `worktreeSubmodules` y `scripts`. Es igual en `main` y en la 0.1.6 instalada. Fuente: `packages/contracts/src/t3ProjectFile.ts`.
-- **Limpieza sin PR:** `worktreeUnchanged` borra el worktree cuando su HEAD ya está contenido en `origin/<rama por defecto>`; antes hace un fetch.
+- **Limpieza tras integrar:** `worktreeUnchanged` borra el worktree cuando su HEAD ya está contenido en `origin/<rama por defecto>`; antes hace un fetch.
   - La frenan una sesión del agente todavía abierta, una terminal abierta, o `worktreeKeepWhen` (por defecto protege cambios sin commitear).
   - La rama no se borra.
-  - La regla `worktreeOnMerge` exige PR, así que no aplica.
   - Fuente: `storageCleanup.ts:880-1120`.
 - **Recreación:** si el worktree falta al empezar un turno, T3 lo recrea desde la rama local. **Al recrearlo no corre el setup**, así que se pierden los archivos ignorados. Fuente: `ProviderTurnStartService.ts:191-225,636-670`.
 - **Integrar en main no es trabajo de T3:** no trae una operación para eso. `defaultAutoPull` solo actúa al arrancar el servidor. Fuentes: `vcs/GitVcsDriverCore.ts`, `serverRuntimeStartup.ts:192-200,575`.
@@ -105,7 +104,6 @@ Flujo por issue:
 | Workers con `t3_thread_launch` (`existing_worktree`) | No avisa al terminar y `delegatedFrom` se descarta. |
 | `t3 thread send` o un watcher de Dagu como retorno | `delegate_task` ya avisa al terminar. |
 | `delegated_task.request` por el WebSocket interno | Protocolo interno y frágil. |
-| Flujo con PR (`link`/`watch_pull_request`, `worktreeOnMerge`) | Acuerdo 9. |
 | Dagu creando `.workspace/worktrees/issue-N` | Los worktrees los maneja T3 (acuerdo 8). |
 | Carpeta de worktrees por repo o en `t3.json` | T3 no lo soporta (§4). |
 
@@ -130,7 +128,7 @@ Flujo por issue:
 
 - Antes de cada delegación, poner PRIMARY en `origin/main`.
 - Leer la rama y el worktree del hijo desde T3, ya con el nombre final.
-- Correr el gate, integrar en main y hacer push, con las reglas de autoridad de AGENTS.md.
+- Correr el gate en el worktree con el commit del hijo, hacer merge local en `main` y push, con las reglas de autoridad de AGENTS.md; la CI corre después del push.
 - Cuando hay issues en paralelo, actualizar contra el nuevo main con el rol de conflictos.
 - Dejar de crear worktrees.
 
@@ -148,7 +146,7 @@ Flujo por issue:
 - **Cadena de identidad** (#499, #501, #503, #884, #505, #441): reescribir alrededor de la identidad y su asociación.
 - **Obsoletos o casi:** #151, #872, el widget y los transcripts de #351 y #850, la parte de #886 que cancela role jobs, y la parte de #551 sobre el runner de OMP.
 - **Falta un issue para quitar las llamadas headless.** La aceptación A5 de #882 depende de ellas.
-- **También cambian** la convención `.workspace/worktrees/issue-N`, el mensaje del guard de PRIMARY (`primary-guard/guard.ts:93`) y el flujo de PR o merge.
+- **También cambian** la convención `.workspace/worktrees/issue-N`, el mensaje del guard de PRIMARY (`primary-guard/guard.ts:93`) y el flujo de integración local en `main` y push.
 
 ## 8. Pendiente o no verificado
 
@@ -159,12 +157,12 @@ Flujo por issue:
 5. **Limpieza `worktreeUnchanged` en ejecución real:** no probada.
 6. **Integración en main desde el worktree del hijo** (gate, integración, push) e issues en paralelo: no probados.
 7. **Diseño de la identidad y su asociación:** no validado.
-8. **Números de PR e issues de T3 que citó la investigación con `grok-4.3`** (#16719, #17412, #17415, #11266): no verificados. Los nombres de mecanismos que citó sí existen en el código.
+8. **Referencias a cambios e issues de T3 que citó la investigación con `grok-4.3`** (#16719, #17412, #17415, #11266): no verificadas. Los nombres de mecanismos que citó sí existen en el código.
 
 ## 9. Estado del entorno al cierre
 
 - **Cambiado:** en la configuración de T3 (`~/.t3/userdata/settings.json`) se quitó `worktreesDirectory: ".workspace/worktrees"`. Ahora usa el valor por defecto.
-- **Cambiado después del corte:** para aplicar el acuerdo 9 (trunk), la protección de `main` dejó de exigir PR y el check `validate`. El detalle y su conflicto con el lifecycle, que todavía publica PRs, están en [Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work).
+- **Cambiado después del corte:** para aplicar el acuerdo 9 (trunk), la protección de `main` permite el merge local y push, sin exigir el check `validate` antes de integrar. El detalle está en [Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work).
 - **Restaurado:** el plugin de prueba quedó desinstalado y la configuración de Claude, idéntica a la previa.
 - **Limpio:** el checkout de a4s, y las ramas y worktrees de prueba.
 - **Por archivar:** los threads de prueba ("a4s probe …").

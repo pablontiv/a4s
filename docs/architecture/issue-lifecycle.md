@@ -282,22 +282,23 @@ U4 requirement, not a result of this experiment.
 
 ## Candidate state and publication
 
-The feature path is `implement → gate → push → pr → auto_merge → await_ci → await_merge`,
-with an optional adoption-fixed operator `validation` procedure before `push`.
-Independent triage and plan review retain their own contracts. A passing local
-gate establishes the candidate SHA; publication and CI/merge remain separate.
+The feature path is implementation and commit in a worktree, local gate, local
+merge into `main`, then push. An optional adoption-fixed operator `validation`
+procedure runs before integration. Independent triage and plan review retain
+their own contracts. A passing local gate establishes the candidate SHA; CI
+runs after the push.
 
 The native implementer supplies files, `SUMMARY`, conventional `MESSAGE` and its
 `IMPLEMENTER` role-job ID. Dagu validates canonical PRIMARY/worktree, owner,
 branch and symlink boundaries, then captures one commit through a private index.
 `candidate.json`, `diff.patch`, base and historical SHA evidence live in the
 run directory. Correction/rebase replaces the candidate and requires fresh gate
-evidence. `checkpoint_push` leases `refs/dagu/checkpoints/issue-N`; publication
-uses the tested SHA and branch lease. PR creation/reuse and guarded auto-merge
-bind that same head. The scheduled reconciler observes required CI and merge at
-the current head/approval iteration, preserves pending waits, returns code failure
-to implementation and BEHIND/DIRTY to rebase. `await_ci` and `await_merge` stay
-on child runs. Other waiting checkpoints are observed in the root tick.
+evidence. `checkpoint_push` leases `refs/dagu/checkpoints/issue-N`; integration
+locally merges the tested candidate into `main` before pushing `main`.
+The scheduled reconciler observes CI at the pushed SHA and preserves pending
+waits. Code failures return to implementation; integration conflicts require
+rebase and fresh gate evidence. Other waiting checkpoints are observed in the
+root tick.
 
 Required-check classification uses the latest workflow run for each check name
 on that head, preserving required GitHub App bindings. Workflow run IDs take

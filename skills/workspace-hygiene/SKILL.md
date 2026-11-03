@@ -1,6 +1,6 @@
 ---
 name: workspace-hygiene
-description: "Audit and clean the current session's own repository: preserve live WIP and stash variants, publish approved work as a PR, and verify approved cleanup."
+description: "Audit and clean the current session's own repository: preserve live WIP and stash variants, merge approved work locally into the default branch and push, and verify approved cleanup."
 ---
 
 # Workspace hygiene
@@ -50,28 +50,29 @@ Immediately before each approved mutation, refresh Orca worktree/session and ter
 
 ## Publication state
 
-Match remote identity, repository and exact source branch, not titles or branch names across unrelated remotes. Read existing PRs, including closed PRs:
+Match remote identity, repository and exact commit identities, not branch names across unrelated remotes. Verify that the preserved commits are ancestors of the local default branch and that its pushed head matches the remote default branch:
 
 ```sh
-gh pr list --repo <owner/repo> --state all --limit 500 --json number,state,isDraft,headRefName,baseRefName,mergedAt,closedAt,url,title
-az repos pr list --organization <url> --project <project> --repository <repository> --source-branch <branch> --status all --output json
+git -C <default-wt> merge-base --is-ancestor <preserved-sha> <default>
+git -C <default-wt> rev-parse <default>
+git -C <default-wt> ls-remote --heads origin refs/heads/<default>
 ```
 
-Resolve pagination/truncation before claiming completeness. Record PR URLs and provider state. `MERGED` (GitHub) or `completed` (Azure) establishes PR integration; verify the current local commits and dirty/untracked work are covered too. A closed/unmerged PR, a published branch, or an open PR alone does not establish integration. Unavailable provider access means publication unknown and preservation required.
+Record the preserved commit, local merge commit and remote default-branch SHA. Integration means a local merge into the default branch (`main` in a4s) followed by push; CI runs after the push. Verify that current local commits and dirty/untracked work are covered too. A published source branch alone does not establish integration. Unavailable remote access means publication unknown and preservation required.
 
 ## Classification
 
 Present the complete nine-column table, with exactly one worktree row per Git inventory entry and additional clearly labelled branch, stash and Orca-only context rows:
 
-| repo | path | branch | dirty | stash | PR | live session | class | action |
+| repo | path | branch | dirty | stash | integration | live session | class | action |
 |---|---|---|---|---|---|---|---|---|
-| <repo> | <checkout or object identity> | <branch/detached SHA> | <tracked/untracked state> | <count or stash identity> | <URL/state or unknown> | <evidence/time or unknown> | <keep/preserve/remove> | <exact proposed commands or retain> |
+| <repo> | <checkout or object identity> | <branch/detached SHA> | <tracked/untracked state> | <count or stash identity> | <merge/remote SHA or unknown> | <evidence/time or unknown> | <keep/preserve/remove> | <exact proposed commands or retain> |
 
 - **keep**: default-branch checkout and default branch, the current session checkout, and live-session WIP. Retain their branches, changes and contexts.
-- **preserve**: intentional work without a live session, identified by a deliverable in the diff, issue or documentation. Propose publication as a PR before local cleanup. Ambiguous work is always preserved: nothing ambiguous is discarded. Unknown liveness or integration is a reason to retain locally pending resolution, not automatic permission to publish.
+- **preserve**: intentional work without a live session, identified by a deliverable in the diff, issue or documentation. Propose committing it in a worktree, merging locally into the default branch and pushing before local cleanup. Ambiguous work is always preserved: nothing ambiguous is discarded. Unknown liveness or integration is a reason to retain locally pending resolution, not automatic permission to publish.
 - **remove**: demonstrably integrated, stale, duplicate or generated residue whose unique contents have been accounted for. Corrupt state requires recovery evidence before disposal. Explain the evidence per row.
 
-Enumerate exact targets and order, preservation commits/files, PR title/body/base, stash identities and any fetch, repair or pruning separately. Independently compare each repo's table worktree-row count to the number of `worktree ` records from `git worktree list --porcelain`.
+Enumerate exact targets and order, preservation commits/files, default branch and merge target checkout, push remote, stash identities and any fetch, repair or pruning separately. Independently compare each repo's table worktree-row count to the number of `worktree ` records from `git worktree list --porcelain`.
 
 ## Approval
 
@@ -79,23 +80,21 @@ Show the entire action table before requesting an explicit operator **go** for t
 
 ## Approved execution
 
-Recheck liveness and contents at every mutation. Preserve intentional dirty and untracked work in an operator-approved commit before publishing; show the exact file set and commit message. Confirm the resulting commit contains that work. An existing PR may be reused only after verifying its head includes the preserved commits.
+Recheck liveness and contents at every mutation. Preserve intentional dirty and untracked work in an operator-approved commit in its worktree before merging; show the exact file set and commit message. Confirm the resulting commit contains that work. Verify that the default-branch checkout is clean and its branch and remote match approval before merging.
 
-GitHub publication example, after approval:
-
-```sh
-local_oid=$(git -C <wt> rev-parse HEAD) &&
-git -C <wt> push -u origin <branch> &&
-remote_line=$(git -C <wt> ls-remote --heads origin refs/heads/<branch>) &&
-test "$remote_line" = "$(printf '%s\t%s' "$local_oid" 'refs/heads/<branch>')" &&
-gh pr create --repo <owner/repo> --base <default> --head <branch> --title '<type>: preserve <deliverable>' --body '<reason and originating session/issue>'
-```
-
-Azure alternative: substitute the following command for `gh pr create` as the final command of the same successful push/SHA chain:
+Local integration example, after approval, using the confirmed default branch (`main` in a4s):
 
 ```sh
-az repos pr create --organization <url> --project <project> --repository <repository> --source-branch <branch> --target-branch <default> --draft true --title '<title>' --description '<preservation evidence>'
+preserved_oid=$(git -C <wt> rev-parse HEAD) &&
+git -C <default-wt> merge --no-ff "$preserved_oid" &&
+git -C <default-wt> merge-base --is-ancestor "$preserved_oid" HEAD &&
+local_oid=$(git -C <default-wt> rev-parse HEAD) &&
+git -C <default-wt> push origin <default> &&
+remote_line=$(git -C <default-wt> ls-remote --heads origin refs/heads/<default>) &&
+test "$remote_line" = "$(printf '%s\t%s' "$local_oid" 'refs/heads/<default>')"
 ```
+
+CI runs after the push. Record the merge SHA, pushed default-branch SHA and observed CI outcome separately; do not treat a source-branch push as integration.
 
 For an intentional stash, include its exact object id, selected stash ref, new recovery path/branch, approved files and commit message, publication values and subsequent cleanup scope in the full approval table. The recovery path must be a new Git worktree distinct from the default and current-session checkouts; the recovery branch must be new. Record the immutable stash id before recovery, then substitute the approved values below:
 
@@ -137,7 +136,7 @@ Compare the entire separate index's staged path set and delta with approval befo
 
 This recipe performs no mixed reset: index-only bytes remain in the original recovered index, its backup and a reachable tree before publication. Retain the recovery worktree/branch, state directory, both recovery refs and original stash until every staged, unstaged, untracked, ignored and binary variant has positive byte/tree/mode preservation evidence and separately approved disposition. A clean status or successful ordinary worktree removal is insufficient preservation evidence, especially for ignored files or index-only variants. Symlinks, gitlinks/submodule working directories and other unusual modes require their own mode/content proof; Git's saved gitlink alone does not save a submodule's dirty files. When such proof is unavailable, keep all resources and ask the owner to resolve the uncertainty; scope remains preserved, not silently discarded. On conflicts or any preservation, commit or publication failure, stop this target's sequence and retain all resources.
 
-Publication and provider verification precede any separately approved stash disposal or recovery cleanup. Before approved stash disposal, verify that `git -C <new-recovery-wt> ls-remote --heads origin refs/heads/<recovery-branch>` returns the same SHA as `git -C <new-recovery-wt> rev-parse HEAD`, and verify the actual GitHub or Azure PR URL and its matching repository, source branch and head SHA. A successful push alone is insufficient. Account for every unapproved recovered change and retain its recovery copy and original stash until its preservation or disposal receives separate approval. Re-resolve the selected stash ref immediately before dropping:
+Local merge and remote default-branch verification precede any separately approved stash disposal or recovery cleanup. Before approved stash disposal, verify that the preserved recovery commit is an ancestor of the local default branch and that `git -C <default-wt> ls-remote --heads origin refs/heads/<default>` returns the same SHA as `git -C <default-wt> rev-parse <default>`. Record the matching repository, merge commit and pushed head SHA. A successful source-branch push alone is insufficient. Account for every unapproved recovered change and retain its recovery copy and original stash until its preservation or disposal receives separate approval. Re-resolve the selected stash ref immediately before dropping:
 
 ```sh
 test "$(git -C <primary> rev-parse --verify "$stash_ref")" = "$stash_oid" &&
@@ -146,7 +145,7 @@ git -C <primary> stash drop "$stash_ref"
 
 If the ref changed, is missing or resolves to another id, stop without dropping anything; refresh the inventory and approval rather than substituting another stash. Keep other stash mutations serialized during this identity check and drop. Recovery worktree/branch, state directory and recovery-ref removal each require their own approved scope, complete variant accounting and the same publication proof.
 
-Verify the remote head SHA and actual PR URL before any approved local removal. For Orca-managed contexts use the matched guide's command, which is itself destructive:
+Verify the preserved commit's inclusion in the default branch and the matching remote default-branch SHA before any approved local removal. For Orca-managed contexts use the matched guide's command, which is itself destructive:
 
 ```sh
 orca worktree rm --worktree 'path:<wt>' --force --json
@@ -166,7 +165,7 @@ Refresh `orca worktree ps --json` and the relevant terminal/session evidence. Co
 
 ## Report
 
-Return the complete classification table with actual action outcomes, all created/reused PR URLs, failures and retained exceptions. Give observed final counters: secondary Git worktrees, non-default local branches, stashes, repos ahead/behind, and repos whose divergence is unknown. Separate Orca-only contexts from Git worktrees. State inventory/table row counts and verification time. In audit-only mode report zero executed mutations and the actual nonclean or non-converged states; never substitute desired zeroes for observed results.
+Return the complete classification table with actual action outcomes, all local merge and pushed default-branch SHAs, failures and retained exceptions. Give observed final counters: secondary Git worktrees, non-default local branches, stashes, repos ahead/behind, and repos whose divergence is unknown. Separate Orca-only contexts from Git worktrees. State inventory/table row counts and verification time. In audit-only mode report zero executed mutations and the actual nonclean or non-converged states; never substitute desired zeroes for observed results.
 
 ## Boundaries
 

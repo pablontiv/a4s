@@ -12,7 +12,6 @@
     justificación clara
   - Acciones de CI sin fijar a un SHA, tokens con más permisos de los
     necesarios, triggers que ejecutan código ajeno con acceso a secretos
-    (p. ej. pull_request_target con checkout del PR)
   - Instaladores tipo curl | sh sin verificación de checksum o firma
   - Artefactos sin checksum, firma o attestation; builds no reproducibles
   - Actualización automática que acepta artefactos sin verificar
