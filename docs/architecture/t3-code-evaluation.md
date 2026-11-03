@@ -164,6 +164,7 @@ Flujo por issue:
 ## 9. Estado del entorno al cierre
 
 - **Cambiado:** en la configuración de T3 (`~/.t3/userdata/settings.json`) se quitó `worktreesDirectory: ".workspace/worktrees"`. Ahora usa el valor por defecto.
+- **Cambiado después del corte:** para aplicar el acuerdo 9 (trunk), la protección de `main` dejó de exigir PR y el check `validate`. El detalle y su conflicto con el lifecycle, que todavía publica PRs, están en [Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work).
 - **Restaurado:** el plugin de prueba quedó desinstalado y la configuración de Claude, idéntica a la previa.
 - **Limpio:** el checkout de a4s, y las ramas y worktrees de prueba.
 - **Por archivar:** los threads de prueba ("a4s probe …").

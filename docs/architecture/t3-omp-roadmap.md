@@ -33,6 +33,46 @@ Operador ──► Coordinador OMP (thread de T3, ACP)        ← identidad a4s
 5. El hijo entrega su resultado con una tool validada. El paso de Dagu espera, valida y sigue, reintenta o escala.
 6. `human.task` queda solo para decisiones del operador.
 
+### Por qué el bucle no puede vivir en una sesión
+
+Las sesiones OMP durables de a4s ya tenían el control en Dagu y en la extensión
+(`packages/issue-lifecycle/src/status/` inyectaba `[DAGU STATE] run=… step=…`).
+Aun así, el bucle pasaba por una sola sesión larga. Cada estado entraba al
+contexto y cada evento abría un turno:
+
+| Sesión OMP (a4s) | Compactions | Inyecciones `dagu-state` | Nudges de todo | Mensajes del operador |
+|---|---|---|---|---|
+| U6 versionado (29-oct) | 42 | 510 | 60 | 44 |
+| F0 bloqueo de versiones (1-nov) | 37 | 121 | 32 | 29 |
+| Hoja de ruta (26-oct) | 27 | 24 | 22 | 133 |
+| STAB estación (2-nov) | 11 | 65 | 17 | 8 |
+
+Los mensajes del operador muestran el síntoma: no sabía en qué estado estaba un
+PR ni si el trabajo estaba bloqueado, y no encontraba la sesión a la que se había
+hecho un handover. Se revisaron los conteos y los últimos mensajes de esas cuatro
+sesiones, no las sesiones completas.
+
+El mecanismo actual tampoco es durable (`docs/architecture/issue-lifecycle.md:553-555`,
+`status/index.ts:36-40, 220-229`):
+
+- los avisos viven en la memoria del proceso de la extensión;
+- al reiniciar, toma una línea base silenciosa y no vuelve a avisar las esperas que ya existían;
+- un dueño detenido no recibe nada.
+
+Conclusión: no basta con que el control esté fuera del LLM; tampoco el bucle puede
+pasar por una sesión durable. Con T3, cada unidad de trabajo va a un thread
+delegado corto, y al coordinador solo entra lo que pide una acción del LLM:
+delegar, decidir o escalar.
+
+### Relación con el patrón de aprendizaje de segundo orden
+
+| Principio | Cómo lo aplica esta arquitectura |
+|---|---|
+| Metacomunicación tipada | Cada dictado termina en un resultado con schema. "No puedo decidir" es un valor de retorno, no una pregunta suelta. |
+| La repetición como señal | Dagu cuenta los fallos en el mismo punto (`run:step:iteration`). Al llegar al umbral escala en lugar de aceptar otro intento. |
+| Disenso con voz y sin autoridad | Ante una escalada, el coordinador delega a un observador de otra familia de modelos, que la extensión impone con `tool_call`. El observador registra observaciones, pero no ejecuta transiciones. |
+| Meta-reglas con razón declarada | Los guards niegan con un `reason` explícito. |
+
 Cambios respecto del corte: el coordinador y los hijos corren OMP en vez de Claude
 (acuerdos 1 y 6 del corte), y Dagu dicta los pasos por el WebSocket de T3 (el corte,
 §5, lo había descartado). El resto de los acuerdos se mantiene: trunk sin PR,
@@ -58,6 +98,43 @@ worktrees de T3, `delegate_task` y sin bus MQTT.
 | B4 | Cola retenida | Una caída del proveedor o un reinicio del servidor deja la cola retenida. `queue.resume {commandId, threadId}` la libera. |
 | B5 | Sesión nativa | `orchestration.getThreadProjection` trae `providerThreads[].nativeThreadRef.nativeId`, igual al id de sesión de OMP. |
 
+Primera prueba de OMP como runtime en T3, con la misma instancia ACP:
+
+| # | Prueba | Resultado |
+|---|---|---|
+| P1 | Tools de T3 en OMP | Llegan todas con el nombre `mcp__t3_code_<tool>`; la de delegación es `mcp__t3_code_delegate_task`. OMP las expone como rutas `xd://`, y el modelo las llama escribiendo en esa ruta. |
+| P2 | Doble `tool_call` | Cada tool MCP dispara primero un `write` a la ruta `xd://…` y después la llamada real `mcp__t3_code_*`. Los guards deben mirar la llamada real. |
+| P3 | Guard sobre una tool MCP | `tool_call` rechazó un `delegate_task` con su `reason`. |
+| P4 | Reescritura del input | `tool_call` cambió el texto de la tarea, y el hijo recibió la versión reescrita. Con Claude esto no se probó. |
+| P5 | Schema de la tool registrada | OMP lo valida antes del handler: `verdict: "maybe"` volvió como `Validation failed`. Con Claude, el valor inválido llegó al handler (V3 del corte). |
+| P6 | Instrucciones de orquestación | T3 inyecta su sección "T3 Code orchestration" en la sesión OMP. |
+| P7 | Catálogo de modelos | T3 lo descubre después de la primera sesión: 34 modelos de varias familias. El motor de OMP reportó el mismo modelo pedido (`openai-codex/gpt-6.1-terra`). |
+| P8 | Sesión de descubrimiento | Para leer el catálogo, T3 abre una sesión OMP corta en su propio directorio, y la extensión también carga ahí. La extensión no puede asumir que corre dentro de un repo. |
+| P9 | `model: "default"` | T3 registra solo `default`, y no se sabe qué modelo corrió. a4s debe pedir siempre un modelo explícito. |
+| P10 | Delegación anidada | El hijo con `worktree` quedó en `~/.t3/worktrees/a4s/<carpeta>`, con base en el HEAD del coordinador, rama renombrada y `relationshipToParent: subagent`. Los sub-hijos `shared` (`wait` y `async`) trabajaron en el mismo worktree. El coordinador recibió un único aviso. |
+
+Recuento final de los puntos que dependen del agente (✔ probado en ejecución,
+código = solo visto en código, ✘ abierto):
+
+| # | Necesidad | Claude (corte) | OMP + puente |
+|---|---|---|---|
+| 1 | Saber cuál es su thread | ✔ `T3CODE_THREAD_ID` | ✔ R2 |
+| 2 | Validar el dictado al llegar | código (`prompt.submit`) | ✔ R3 |
+| 3 | Negar o reescribir una delegación | ✔ negar (V2); reescribir sin probar | ✔ R4, P3, P4 |
+| 4 | Registrar el hijo | código | ✔ R5 |
+| 5 | Tool de resultado con schema | ✘ el engine no valida (V3) | ✔ R6, P5 |
+| 6 | Impedir que se detenga sin resultado | ✘ | ✔ R7 |
+| 7 | "Terminó" o "espera a un hijo" | ✘ | ✘ R8, cubierto por la fila 4 y por B3 |
+| 8 | Retomar tras 30 min de inactividad | código | ✔ R10 |
+| 9 | Reusar las extensiones de a4s | ✘ hay que portarlas | código |
+| — | Envío idempotente, cola retenida, hijo de otra familia sin extensión | ✘ | ✔ B2, B4, R7 |
+
+La configuración previa de OMP en T3 no está en el git log de nixos, que solo
+registra la instalación del paquete. La configuración de T3 vive en
+`~/.t3/userdata/settings.json`, que nixos no versiona. La base de T3
+(`statev2.sqlite`) conserva dos sesiones `acpRegistry` con la instancia `omp` del
+2026-10-30, junto con su log ACP.
+
 Además:
 
 - Las extensiones no pueden invocar tools MCP arbitrarias (`invokeTool` solo invoca la misma tool).
@@ -74,7 +151,21 @@ Además:
 5. **El token es del operador.** Lo emite el operador. Se guarda el id del thread, nunca el token.
 6. **El servidor de T3 se arranca fuera de OMP.** Si arranca dentro, el proceso OMP hereda `PI_SESSION_ID`, `PI_SESSION_FILE` y `PI_TOOL_CALL_ID` de otra sesión. La extensión usa `ctx.sessionManager.getSessionId()`.
 
-## 4. Punto de partida en el repo
+## 4. Descartado
+
+| Opción | Motivo |
+|---|---|
+| Proveedor Pi de T3 (`omp --mode rpc`) | T3 cierra el turno solo con `agent_settled`, que OMP no emite. También manda `clear_queue`, que OMP no conoce, y escucha nombres de eventos de compaction distintos a los de OMP. Sin ese evento, `delegate_task` nunca despertaría al coordinador. Un traductor propio dependería de un protocolo sin contrato. ACP lo reemplaza sin parches. |
+| "T3 llama a Dagu" con comandos por paso (`admit`, `gate`, `integrate`) | La secuencia queda en la memoria del LLM, y un paso olvidado no lo detecta nadie. |
+| "T3 llama a Dagu" con una sola entrada (`a4s next`) | Mete el bucle autónomo dentro de una sesión LLM durable, que es el problema de las sesiones OMP (§1). |
+| "Dagu llama a T3" con `t3 thread start --worktree --wait` | El punto de entrada tiene que ser el operador en el coordinador. Además, `--wait` no espera el trabajo delegado. |
+| `t3 thread send` como canal de dictado | No es idempotente. Su campo `delivery` dice `started` aunque el mensaje quede en cola. Lo reemplaza `message.dispatch` con `commandId` (B2). |
+| La extensión consulta Dagu desde la sesión (el poll de `status`) | Muere con la sesión, y T3 libera la sesión tras 30 min de inactividad (`ProviderSessionManager.ts:57`). Ver §1. |
+| `human.task` para el trabajo del coordinador | Dagu solo se entera si el LLM recuerda completarlo, y un turno terminado no significa trabajo terminado. Se usa solo para decisiones del operador. |
+| Puntos de extensión de T3 para avisar el fin | T3 no carga plugins en runtime. `runOnSettle` no se dispara al terminar un run. Las tareas programadas y los webhooks no liberan colas retenidas (`Orchestrator.ts:5874-5879`). Un parche al código sería un fork. |
+| Bus MQTT y el adaptador `synagent` de Claude (rama `origin/legacy`) | Fuera por decisión del operador. Solo interesaba como ejemplo de mecanismo de extensión. |
+
+## 5. Punto de partida en el repo
 
 En `feature`, Dagu ya lanza los roles como pasos deterministas. Lo que cambia es el
 ejecutor: hoy es un `omp -p --no-session` headless, y pasa a ser un dictado al
@@ -92,14 +183,14 @@ coordinador, que delega. La dependencia real del LLM está en `poc`, `discovery`
 | Flujo con PR | Pasos `pr` a `authorize_ci` (`feature.yaml:1637-1826`); `gh pr checks` y `gh pr merge` en `reconcile.yaml` | Integrar en main y hacer push |
 | Widget de estado con poll cada segundo | `packages/issue-lifecycle/src/status/index.ts`, `status/widget.ts` | Se retira; T3 no dibuja widgets (V1 del corte) |
 
-## 5. Decisiones previas
+## 6. Decisiones previas
 
 1. **Aceptar el WebSocket interno.** El dispatch idempotente, la suscripción y `queue.resume` dependen de él. Se acepta con la versión de T3 fijada y la prueba de contrato, o se busca otra vía.
-2. **La CI sin PR.** Hoy `REQUIRED_CHECK` y CodeQL filtran antes del merge. En trunk corren después del push. Hay que definir qué bloquea y qué revierte.
+2. **La CI sin PR.** Hoy `REQUIRED_CHECK` y CodeQL filtran antes del merge. En trunk corren después del push. Hay que definir qué bloquea y qué revierte. La protección de `main` ya no exige PR ni `validate`, así que el lifecycle actual choca con ella hasta F6 ([Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work)).
 3. **La autoridad de push.** AGENTS.md exige autoridad explícita. Propuesta: se fija en el enqueue, y Dagu la verifica antes de integrar.
 4. **La forma de ejecutarlo.** Issues por fase, o seguir como investigación.
 
-## 6. Roadmap
+## 7. Roadmap
 
 Orden: F0 → F1 y F2+F3 (en paralelo) → F4 → F5 → F6 → F7. Cada fase se cierra con
 commit en main y push, pasando `npm test` y `npm run typecheck`, y su `test:live` con
@@ -136,10 +227,16 @@ En `packages/issue-lifecycle`, junto a `status/` y `triage/`.
 - `session_start`: asociación al thread con `acp-mcp-call`. Guarda solo el id del thread.
 - `before_agent_start`: valida el dictado contra el paso pendiente en Dagu.
 - `tool_call` sobre `delegate_task`: impone rol, aislamiento y modelo de otra familia, con las políticas de `review-routing`.
+  - Mira la llamada real `mcp__t3_code_delegate_task`, no el `write` previo a `xd://` (P2).
+  - Exige un modelo explícito; rechaza `default` (P9).
+  - Bloquea la tool nativa `task` de OMP, para que toda delegación sea un thread de T3 visible.
+- `tool_call` niega push y merge a `main` fuera de Dagu. Así el coordinador no puede saltarse la puerta. Mejor todavía: que la credencial de push exista solo en Dagu.
 - `tool_result`: registra `taskId` y `childThreadId` en el estado del run.
 - `a4s_submit_result`: schema por paso, validado dentro de a4s.
 - `session_stop`: bloquea sin resultado, salvo con un `taskId` pendiente.
 - Los hijos cargan la misma extensión (R7) y toman su rol del dictado.
+- La extensión tolera la sesión de descubrimiento de modelos, que no corre en un repo (P8).
+- Solo inyecta en el coordinador lo que pide una acción. El estado de rutina se queda en Dagu.
 
 ### F3 · Identidad (en paralelo con F2)
 
@@ -153,6 +250,10 @@ Es la primera migración: el flujo ya es determinista.
 
 - `role-jobs stage` pasa a `a4s dictate`. `REBASE_RESOLVER` pasa a un dictado de `conflict-resolution`.
 - Se conservan `JobBinding`, `JobResult` y la capacidad de `RoleJobStore`. La evidencia nativa pasa a ser el thread, el run y el modelo de T3 (V4 del corte).
+- El prompt del rol pasa al dictado.
+  - Hoy triage usa `packages/issue-lifecycle/agents/triage-reviewer.md`.
+  - Implement y conflict-resolution usan el agente `task` que trae OMP, cuyo prompt no está en el repo (`role-runner.ts:67,77`). Hay que darles una definición propia del repo, por ejemplo `.omp/agents/implementer.md`.
+- El modelo de cada rol lo fija hoy OMP con sus overrides de `task` (`role-runner.ts:78-79`). Pasa a fijarlo a4s en `target.model`.
 - Se retiran `role-runtime.ts` y `role-runner.ts`.
 
 ### F5 · Migrar el trabajo del LLM en `poc`, `discovery` y `planning`
@@ -178,8 +279,37 @@ Es la fase de mayor riesgo.
 - Se retiran el widget y el poll de `status`.
 - Retiro a decidir: `agent-messaging` y `message-bus` (MQTT), y `orca-integration` si T3 reemplaza a Orca.
 
-## 7. Pendiente o no verificado
+## 8. Relación con los issues
+
+Estados consultados con `gh` el 2026-11-03.
+
+| Issue | Estado | Qué dice | Con esta arquitectura |
+|---|---|---|---|
+| #918 (épica P0) | abierto | Cada rol corre como subagente nativo de la sesión coordinadora. Ningún rol es headless. OMP es el coordinador semántico en una sesión TUI. | La regla sin headless se cumple en F4 y F5. La coordinadora pasa de una TUI a un thread de T3, y los roles pasan a hijos de `delegate_task`. Hay que reescribir las invariantes 1 a 4 sin atarlas a un host, como pide el corte (§7). |
+| #919, #920 (spikes P0) | abiertos | #919 es la línea base A. #920 compara la coordinación LLM corregida (B) con el control procedimental determinista (C), y exige cero headless. | Esta arquitectura es un candidato para C. #920 depende de #919. |
+| #893 (fachada MCP) | abierto | Guard tipado, portabilidad de host y push de eventos sobre la CLI de a4s | Se cruza con F1 y F2. Hay que decidir si el puente o la tool de resultado viven ahí. |
+| #510, #513, #791 | cerrados | Origen de la ruta headless: roles independientes del coordinador y sin sus turnos, sobre el `omp` compilado | F4 la retira. Todavía no hay un issue para eso; según #918 se deriva después de #920. |
+| #885 | cerrado | Sesiones especialistas independientes | Cancelado en #918. |
+| #731, #496, #270, #551 | abiertos | Coordinadora TUI dirigible, aceptación integrada con hijos de la TUI, documentación y compatibilidad OMP de la delegación nativa | Hay que reescribirlos para un thread de T3 con `delegate_task`. El riesgo de #551 pasa a ser la prueba de contrato de F1 y la compatibilidad de OMP por ACP. |
+| #501 | abierto | Un único ingreso de eventos de Dagu, con replay tras una ausencia | Lo reemplaza el dictado durable e idempotente de F1. |
+| #505 | abierto | Bus de mensajes como canal lateral | Obsoleto: no se usa MQTT. |
+| #499, #503, #884, #441 | abiertos | Lease del coordinador, admisión por el coordinador efectivo, traspaso a una sesión sucesora, sesiones ligadas al repo | Hay que rehacerlos sobre la identidad a4s y su asociación al thread (F3). |
+| #882 | abierto | Tracker de estabilización | Hay que ubicar aquí las fases si se adoptan. |
+
+## 9. Pendiente o no verificado
 
 1. **Que la extensión vea `creationSource`.** Lo necesita F7.
 2. **Rendimiento con varios runs.** El coordinador atiende un dictado a la vez. Con la regla de `session_stop`, su turno termina al delegar y entra el siguiente. Falta medirlo con issues en paralelo.
 3. **Los pendientes del corte (§8)** sobre setup, nombres de rama, limpieza e integración en main siguen abiertos.
+4. **Un coordinador efímero por evento**, en vez de uno durable. Eliminaría la sesión larga; no se probó.
+5. **Pedirle a T3 que exponga `workspaceStrategy` en `delegate_task`.** El comando interno `delegated_task.request` ya lo acepta. Pedirlo es una acción externa y la decide el operador.
+6. **El observador de otra familia ante una escalada:** diseñado, no probado.
+7. **Las citas de la investigación en línea hecha con `grok-4.3`** (números de PR e issue de T3) siguen sin verificar, como dice el corte (§8).
+
+## 10. Estado del entorno al cierre
+
+- **Restaurado:** el `settings.json` de T3 tiene un sha256 idéntico al del respaldo; la instancia `omp` ya no existe.
+- **Revocado:** el token del puente, y su archivo está borrado.
+- **Fuera del repo:** las extensiones de prueba, el cliente del puente y sus logs están en directorios temporales, sin adoptar.
+- **Por archivar en T3 (proyecto Scratch):** los threads de prueba "a4s probe OMP …", el coordinador de la prueba de delegación y su hijo.
+- **Cambiado:** la protección de `main` (ver [Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work)).

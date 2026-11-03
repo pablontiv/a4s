@@ -35,6 +35,39 @@ The temporary v1 integration lane completed its release into main and was retire
 under #438. Its final integration, run outcomes and preserved recovery evidence
 are recorded below.
 
+### Main branch protection and trunk-based work
+
+Since 2026-11-02 the operator works trunk-based in the main lane: manual changes
+are committed on `main` and pushed in the same closure, so `main` and
+`origin/main` stay equal. At the operator's request, `main` protection was relaxed
+on that date to allow it:
+
+| Rule | Before | Now |
+| --- | --- | --- |
+| Required pull request (0 approvals, dismiss stale reviews) | yes | removed |
+| Required status check `validate` (strict) | yes | removed |
+| Linear history, conversation resolution, `enforce_admins` | yes | yes |
+| Force push and deletion | blocked | blocked |
+
+CI still runs `validate` on every push to `main`, but it reports after the push
+instead of blocking it. Run the full gate locally before each commit.
+
+The lifecycle has not been adapted yet; the trunk migration is phase F6 of the
+[T3/OMP roadmap](../architecture/t3-omp-roadmap.md). Until then, this lane's
+protection contradicts the adopted policy, as the code shows:
+
+- Committed `.workspace/dagu/config.json` still declares `requiredCheck: "validate"`.
+- Bootstrap `confirm` requires a strict required check that contains it
+  (`dagu-feature-bootstrap.yaml`), so it fails. An authorized `github` bootstrap
+  step can restore the required check.
+- The reconciler's required-check lookup fails closed as `BLOCKED` when no
+  required context is configured (`required-check-policy.ts`).
+- `auto_merge` merges a `CLEAN` pull request immediately. Without a required
+  check, GitHub no longer holds that merge for `validate`.
+
+Do not admit feature or PoC runs in this lane until the lifecycle integrates on
+`main` or the protection is restored with explicit operator authority.
+
 ### Release controller versus candidate
 
 The [artifact contract](../architecture/artifact-contract.md) is normative.
@@ -89,8 +122,8 @@ committed at HEAD; an identical-config unbound clone is not protected.
 
 ## Versioned source, configuration and runtime state
 
-Git versions source and configuration. That is content written through a pull
-request, or generated deterministically from a versioned revision and declared
+Git versions source and configuration. That is content a person commits, on
+`main` or through a lifecycle pull request, or content generated deterministically from a versioned revision and declared
 inputs so that regenerating it yields identical bytes. Changes to it land through
 a commit, such as a policy adoption.
 
@@ -102,7 +135,7 @@ receipts, observations, generated snapshots or scheduler data.
 
 Classify a file in three steps:
 
-1. Identify its producer (a person through a pull request, a generator such as the
+1. Identify its producer (a person through a commit or pull request, a generator such as the
    bootstrap config-authoring step, or a running process such as a DAG step or observer) and
    the producer's declared inputs.
 2. If a generator produces it, regenerate it twice at the same revision with
@@ -114,7 +147,7 @@ Classify a file in three steps:
    IDs, attempt counters, or observed external state) is runtime state, regardless
    of format or how often it changed.
 
-Hand-written test fixtures, and a pull-request document that quotes a finished
+Hand-written test fixtures, and a committed document that quotes a finished
 operation, stay source. A process-owned receipt (`receipt.json` with `admittedAt`,
 `admissionPid`, `observerPid`, `dagRunId`, `finishedAt`), `ci-observation.json`,
 `status.jsonl`, or `$DAGU_HOME/data/**` is runtime state. Move a tracked file in
