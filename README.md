@@ -30,6 +30,8 @@ workspaces, not public npm publication.
   spike #692 decision, descartar.
 - [1Password Agents](docs/architecture/onepassword-agents.md):
   spike #693 decision, descartar.
+- [a4s on T3 Code](docs/architecture/t3-code-evaluation.md):
+  2026-11-02 evaluation cut-off, agreements and validations; nothing adopted.
 
 ## Delivered components
 
