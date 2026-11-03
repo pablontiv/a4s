@@ -95,12 +95,12 @@ tracked it. The consumer config file `.workspace/dagu/config.json`, and hand-wri
 `package.json` and `.workspace/config/refine.json`, are configuration. Generated per-run DAG snapshots are runtime state.
 [Deployment](docs/operations/deployment.md) states the same rule beside adoption.
 
-## Commits and pull requests
+## Commits and integration
 
-Manual work is trunk-based: commit on `main`, without a branch or PR, and push
-in the same closure so `main` and `origin/main` stay equal. `main` protection no
-longer requires a PR or the `validate` check, so run the full gate before
-committing; CI reports after the push. The lifecycle still publishes PRs until
-its trunk migration; see [Deployment](docs/operations/deployment.md#main-branch-protection-and-trunk-based-work).
-
-Every PR, including syncs and adoptions, uses `.github/pull_request_template.md`: `Closes #<N>` or `Refs #<N>`, at most five Summary bullets, one command/result per Verification line, and Risk notes or `None`. Use repository-relative paths or placeholders (`<primary>`, `<worktree>`, `~`, `$DAGU_HOME`); keep host absolute paths, usernames and private repository names out of public bodies. Logs stay in run artifacts. CI validates the required structure and host-path rule on PR events, including body edits.
+All work is trunk-based, with no pull requests. Edit in a linked worktree (the
+primary guard blocks tool writes in the PRIMARY checkout), commit there, run the
+full gate, then merge locally into `main` from the PRIMARY and push in the same
+closure so `main` and `origin/main` stay equal. `main` protection requires
+neither a PR nor the `validate` check; CI reports after the push. Lifecycle code
+that still opens PRs is pending its trunk migration (roadmap F6) and is not the
+official path; see [Deployment](docs/operations/deployment.md#main-branch-protection-and-trunk-based-work).

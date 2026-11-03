@@ -199,6 +199,7 @@ los hosts reales. Las pruebas unitarias no prueban la integración.
 ### F0 · Plataforma (del operador, en nixos)
 
 - Fijar T3 0.1.6.
+- Pin the OMP package as well; the native probes in §11 used `omp/18.16.0`. The OMP version for the earlier ACP evidence was not recorded here.
 - Registrar la instancia `omp`: `acpRegistry`, fuente local, `omp acp -e <extensión del release en cache>`.
 - Arrancar el servidor de T3 fuera de OMP.
 - Definir el procedimiento del token (`t3 auth session issue`).
@@ -212,10 +213,13 @@ los hosts reales. Las pruebas unitarias no prueban la integración.
 Un workspace nuevo, por ejemplo `packages/t3-bridge`.
 
 - Cliente RPC sobre WS: `Request`, `Chunk` con `Ack`, `Exit`, `Ping`/`Pong`.
+  - This is T3's orchestration WebSocket framing, not OMP's native RPC protocol or its request correlation IDs.
 - `queue.resume` antes de dictar.
 - `message.dispatch` idempotente con la clave `run:step:iteration` como `commandId`.
+  - This deduplicates T3 dispatches, not tool side effects replayed during recovery; it is not an exactly-once execution guarantee.
 - Espera por `subscribeThread` hasta que terminen el run y su trabajo delegado.
 - Lee el resultado del estado del run y lo valida.
+  - Derive Dagu's exit code from the final run status and validated structured result, not the parent CLI exit code. A present but invalid result is a failure, distinct from an absent result; parent exit 0 is not evidence of child success.
 - Sale con códigos que Dagu reintenta (el mismo patrón que `exit_code: [75]`). Si falta el resultado, vuelve a dictar y cuenta; agotado el presupuesto, va a `escalation`.
 - Prueba de contrato en `test:live` contra el T3 fijado.
 - Salida: un DAG de prueba dicta, espera y valida.
@@ -313,3 +317,44 @@ Estados consultados con `gh` el 2026-11-03.
 - **Fuera del repo:** las extensiones de prueba, el cliente del puente y sus logs están en directorios temporales, sin adoptar.
 - **Por archivar en T3 (proyecto Scratch):** los threads de prueba "a4s probe OMP …", el coordinador de la prueba de delegación y su hijo.
 - **Cambiado:** la protección de `main` (ver [Deployment](../operations/deployment.md#main-branch-protection-and-trunk-based-work)).
+
+## 11. Addendum 2026-11-03: installed OMP and integration boundaries
+
+The decision remains **T3 Code + OMP**, with the existing F0–F7 order and scope. These native-runtime and alternative-host probes do not rewrite the R/P/B evidence in §2 or the 2026-11-02 evaluation. The OMP version used for those earlier ACP rows was not recorded here. The native delegation and RPC acceptance records identify the installed runtime as `omp/18.16.0`; F0 must pin OMP as well as T3. Native OMP success does not itself validate T3 integration: F2 continues to block native `task` so delegation remains visible as T3 threads.
+
+### Dispatch, correlation and result validation
+
+- B2 remains evidence for T3 `message.dispatch`: the same `commandId` returns the same `sequence` without a second run. It was not retested in this session.
+- F1's `Request`, `Chunk`/`Ack`, `Exit` and `Ping`/`Pong` belong to T3's orchestration WebSocket. They are not OMP RPC request IDs. Two sequential, completed OMP RPC prompts with the same request ID both ran: the ID correlated responses rather than deduplicating execution.
+- Native strict `yield` rejected an invalid payload and accepted a corrected payload. In a separate exhaustion probe, its fourth invalid submission was accepted by the tool with `schemaOverridden: true`, but final strict task validation still returned a failed job and `structured.status: invalid`. The parent CLI exited 0 despite that child failure. Neither a tool-level "Result submitted" message nor the presence of structured data proves success. F1 must use final status and validate the result. Invalid data is a failure, not an absent result to handle through the missing-result path. This is native result validation, distinct from registered-tool input validation in P5; permissive result mode was not tested.
+
+### Recovery and delivery
+
+OMP's RPC `--resume` retained session identity, history and a recalled nonce; wire messages were not byte-identical because a live `errorId: 0` field was absent after reload. RPC `--restore` was rejected as interactive-only. Separate interactive hard-crash probes restored an active parent turn and an active child with persisted identity and history. The child probe killed the original parent only: an interrupted `bash` sleep was replayed, while one child write and one `yield` were recorded. Completion arrived through both the parent's `wait` and an additional async-result notice. This is recovery evidence, not exactly-once tool execution or exactly-once delivery.
+
+R10's ACP `initialize` + `session/load` after inactivity is a different mechanism; R10 and B4's retained queue were not retested. There was no end-to-end Dagu–a4s–OMP crash-recovery test or equivalent T3 crash retest in this session. The native findings neither close those integration questions nor establish an absence of T3 recovery.
+
+The alternative host was **Stencil's Tern 0.9.10 (`2ad447b`)**, not `tern.build` and not OMP itself. Its results must stay scoped to that host and probe:
+
+- Two distinct CLI sends with the same terminal-input label produced two effects; this was not a retry using one transport request ID. Acknowledged but unconsumed input produced no effect after daemon restart, and the generic receiver was not relaunched. Terminal-input acknowledgement was not a durable application commit.
+- Reconnecting observers could inspect completed terminal scrollback, but the completion event was not replayed. Repeated `wait` calls reread completed status; they were not evidence of duplicate structured-result acceptance.
+- The real isolated daemon automatically relaunched the same pane with OMP `--restore` pointing to the original persisted parent. The previously active child showed no progress, effect, result or delivery within 100 seconds after restart. No manual restore was issued and no normal graphical window was attached; successful restore initialization and the effect of attaching a window remain unverified. This is not a production failure finding for T3 or OMP.
+- Standalone headless `serve` excludes restored sessions by design and is not an equivalent daemon-recovery test. The attempted agent-API launching-VM reset did not establish a recovery guarantee.
+
+### Workspaces and models
+
+Native OMP ran parallel shared and isolated children, and a nested shared grandchild, with valid strict results. Workspace lifetime differed between native probes: one isolated worktree was removed after patch capture; another retained the completed child's artifact while the parent was alive but disappeared on full parent exit. Neither establishes a retained workspace for a later Dagu gate. Separately, a gate in an externally owned worktree retained the same path, HEAD and content across an isolated Tern daemon stop/start. That is not a T3 worktree test. F6 still reads branch and worktree from T3's projection; `worktreeUnchanged` and the other execution gaps in §9.3 remain open.
+
+Explicit GPT role routing completed native tasks. An explicit Gemini override resolved to the requested effective model without fallback but timed out without a structured result. Automatic load-, token- or quota-aware model balancing was not exercised; explicit role/agent routing is not evidence of such balancing. Substantive GPT and `deepseek-v4-flash-0731` reviews were observed through Tern's CLI, not T3 `delegate_task`. Effective model metadata does not independently verify upstream weights. The cross-family escalation observer in §9.6 remains untested. The §2 summary's phrase "hijo de otra familia sin extensión" does not establish an extension-free child: R7 used the shared extension, as F2 requires.
+
+### Evidence scope
+
+The inspected records below are temporary probe artifacts, not durable committed evidence. Paths are relative to their temporary parent directory:
+
+- `omp-native-delegation.ca8bAF/acceptance.json`, `omp-native-delegation.ca8bAF/acceptance-addendum.json`, and `omp-native-delegation.ca8bAF/acceptance-exhaustion.json`.
+- `omp-child-restore-boY26i/exact-run/acceptance.json`.
+- `omp-interactive-restore-Ck6Sw7/hard-crash-persisted/acceptance.json`.
+- `omp-rpc-recovery-wu9gnIYf/acceptance.json`.
+- `tern-transport.Oxzehu/acceptance.json`.
+- `tern-workspace-review.eeCJfI/evidence.json`.
+- `tern-recovery.pLSksp/daemon-run-absolute/acceptance.json`.
