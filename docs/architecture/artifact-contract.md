@@ -80,7 +80,7 @@ The artifact MUST include:
   Consumer `units.jsonl`, optional `source.md`/`plan.md`, approvals and generated
   planning output are inputs or run state, not release assets.
 
-The executable MUST provide `gate`, `pr-body`, `codeql`, `poc-scope`, `protect`,
+The executable MUST provide `gate`, `codeql`, `poc-scope`, `protect`,
 `role-jobs`, `admit`, `enqueue`, `queue`, `observe`, `escalation`, `stale-recovery`,
 `prioritize`, `reconcile` and `planning`. Python helper behavior MUST be ported,
 including its locking semantics; the released engine MUST NOT depend on the old
@@ -123,7 +123,7 @@ tooling is not an instruction to ship development wrappers in the release.
 
 - `bin/`: `dagu-codeql.ts`, `dagu-feature-bundle.ts`,
   `dagu-feature-prioritize.ts`, `dagu-feature-protect.ts`, `dagu-gate.cjs`,
-  `dagu-poc-scope.ts`, `dagu-pr-body.mjs`, `dagu-role-jobs.ts`,
+  `dagu-poc-scope.ts`, `dagu-role-jobs.ts`,
   `dagu-stale-recovery.ts`, `gate-cache.cjs`, `gate-cache-run.cjs`, `heavy-slot.py`.
 - `src/` top-level: `admission.ts`, `agent-directory.ts`, `artifact-cache.ts`,
   `artifact-receipt.ts`, `artifact-support.ts`, `bundle.ts`, `cli.ts`, `code-scanning.ts`, `config.ts`,
@@ -548,7 +548,7 @@ compatibility neither waives I1 nor supplies missing artifact identity.
 
 The artifact contract uses dispatch protocol `a4s-run/1`, config schema 2 for
 new admissions (schema 1 for historical decoding), receipt schema 2, role-job-store contract 1, and checkpoint protocols `triage=role-job/1`,
-`implement=role-job/1`, `publication=pr-checkpoint/1`. A receipt lacking the full
+`implement=role-job/1`, and the publication checkpoint protocol. A receipt lacking the full
 artifact tuple or required contract declarations MUST be rejected even if its
 numeric schema version is otherwise supported. Legacy receipts MUST NOT be
 upgraded by reconstructing a digest from a checkout or the current tag.

@@ -11,7 +11,7 @@ with a short status: **Goal**, **Done**, **Next**, **Needs you** (or "nothing").
 ## Evidence
 
 `AGENTS.md` is the operating contract: scope, setup, ownership, versioned
-source, and pull-request descriptions. It is 5240 bytes and loads on every
+source, and commit integration. It is 5240 bytes and loads on every
 turn. Reply shape for delegated work lives in the role prompts.
 
 All six [`.omp/agents/`](agents.md) definitions require `status`, `summary`,
@@ -31,12 +31,9 @@ source line is 140 bytes. The cost that fails the hypothesis is that duplicate
 status on every delegated turn, inside a file that also governs turns the
 source leaves alone.
 
-Pull-request bodies already have one fixed shape: `## Summary`,
-`## Verification`, and `## Risk`
-(`packages/issue-lifecycle/bin/dagu-pr-body.mjs`). A body that adds `## Goal`
-is rejected with "Body requires exactly Summary, Verification and Risk
-sections, in that order." A second heading set in the operating contract sits
-on the path agents use for publication.
+Integration is a local merge into `main` followed by a push; it has no
+publication body that a second heading set could collide with. A status block
+in the operating contract would still sit on every delegated turn.
 
 ## Why there is no skill
 
