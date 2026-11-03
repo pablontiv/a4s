@@ -32,6 +32,8 @@ workspaces, not public npm publication.
   spike #693 decision, descartar.
 - [a4s on T3 Code](docs/architecture/t3-code-evaluation.md):
   2026-11-02 evaluation cut-off, agreements and validations; nothing adopted.
+- [a4s on T3 Code with an OMP coordinator](docs/architecture/t3-omp-roadmap.md):
+  2026-11-03 alternative research, runtime validations and roadmap; nothing adopted.
 
 ## Delivered components
 
