@@ -100,7 +100,7 @@ requires keeping the old generation and reporting “restart OMP”, never parti
 activation. Bundles embed the build ID/commit, so each published build reloads.
 
 `support` is uniform: each of `receipt`, `roleJobStore` (SQL schema),
-`roleJobPayload` (JSON), `config`, `runState` (`.git/dagu-feature`) and `prCheckpoint`
+`roleJobPayload` (JSON), `config`, `runState` (`.git/dagu-feature`) and the publication checkpoint
 has `{ "read": [versions], "write": version }`. Exact protocol authorization is
 separate from format support, never inferred from build distance. Historical
 SemVer declarations retain their original decoder. Neither identity contains
