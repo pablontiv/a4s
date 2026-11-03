@@ -34,6 +34,8 @@ workspaces, not public npm publication.
   2026-11-02 evaluation cut-off, agreements and validations; nothing adopted.
 - [a4s on T3 Code with an OMP coordinator](docs/architecture/t3-omp-roadmap.md):
   2026-11-03 alternative research, runtime validations and roadmap; nothing adopted.
+- [Super-agent on T3 Code, a4s and Dagu](docs/architecture/super-agent-roadmap.md):
+  2026-11-03 intake-plane research (DeepSeek super-agent prototype) and S0–S6 roadmap; nothing adopted.
 
 ## Delivered components
 
