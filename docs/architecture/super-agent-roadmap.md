@@ -134,15 +134,55 @@ operador ─► thread coordinador T3 ──a4s enqueue────────�
    registrados. Queda pendiente reescribir en #918 las invariantes "coordinador en TUI" y
    "subagente nativo" en términos independientes del host: cada rol es un hijo visible y
    dirigible del coordinador, sin modo headless.
-2. **Fuentes de trabajo.** Propuesta: GitHub (issues y comentarios del repo) y el operador
-   en T3. Nada más hasta S6.
-3. **Modo de aceptación inicial.** Propuesta: explícito siempre; trabajo inferido en `observe`
-   hasta revisar decisiones registradas.
-4. **Modelo del router y de los hijos.** Propuesta: fijarlos por rol en a4s (`target.model`),
-   router más barato que los ejecutores, y medirlo, no asumirlo (la guía no lo prueba).
-5. **Dónde vive el store.** Propuesta: JSONL append-only con lock bajo `$DAGU_HOME`, como
-   receipts y #863. Alternativa: SQLite transaccional, como el prototipo (`src/app/store.ts`),
-   que da `afterCommit` para el outbox. Elegir antes de S1.
+2. **Fuentes de trabajo. Decidido el 2026-11-03:** el operador en T3, más issues y comentarios
+   de GitHub de personas permitidas. La primera fuente automática es la CI de `main` en rojo
+   (en trunk corre después del push); el resto espera a S6.
+3. **Trabajo inferido. Decidido el 2026-11-03:** lo explícito se acepta siempre; lo inferido
+   empieza en `observe`. Se pasa a `auto` una regla a la vez, tras revisar las decisiones
+   registradas; la primera candidata es "CI de `main` en rojo".
+4. **Modelos. Decidido el 2026-11-03:** el coordinador usa el modelo de mejor juicio y los
+   hijos usan modelos distintos por rol, con revisión de otra familia. Los modelos ya están
+   fijados en la configuración global de OMP (sesión OMP `01a1a249`, del 2026-11-03):
+   `modelRoles`, `retry.fallbackChains` y `task.agentModelOverrides`, todos a través de CLIProxy.
+   Ver §3.1.
+5. **Store. Decidido el 2026-11-03:** JSONL append-only con lock bajo `$DAGU_HOME`, como
+   receipts y #863, con un log por Ticket y claves idempotentes por Trigger. El estado se
+   deriva del log. Si hacen falta consultas entre Tickets, se agrega un índice derivado.
+
+### 3.1 Modelos por rol con `delegate_task`
+
+Configuración leída con `omp config get` el 2026-11-03 (prefijo `cliproxy/` omitido):
+
+| Rol en esta arquitectura | Rol u override de OMP | Modelo | Fallbacks |
+|---|---|---|---|
+| Coordinador (thread de T3) | `default` | `claude-opus-5-5:high` | `gpt-6.1-sol` → `grok-4.7` |
+| Assessment (S3), hijo corto | `default` | igual que el coordinador | igual |
+| Observador de escalada | `judge` | `gpt-6-astra` | `grok-4.7` → `claude-fable-5-1` |
+| Planificación | `plan` | `gpt-6-astra` | `claude-fable-5-1` → `grok-4.7` → `qwen3.8-max` |
+| Implement, conflict-resolution | `implementer` → `@task` | `gpt-6.1-sol` | `grok-4.7` → `claude-sonnet-5-5` → `composer-2.5` → `qwen3.7-max` |
+| Triage | `triage-reviewer` → `@slow` | `claude-fable-5-1` | `grok-4.7` → `qwen3.8-max` → `@task` |
+| Revisión | `reviewer` | `grok-4.7` | `qwen3.8-max` → `@slow` |
+| Revisión de seguridad | `security-reviewer` | `grok-4.7` | `glm-5.3` → `@slow` |
+| Exploración | `explorer`, `scout` | `composer-2.5` | `deepseek-v4.1-flash` → `@smol` |
+
+Con esto el coordinador (Anthropic) y el observador de escalada (OpenAI) son de familias
+distintas, como pide el diseño.
+
+**Brecha que cierra F2.** `task.agentModelOverrides` y las cadenas por rol las aplica la tool
+`task` nativa de OMP, que F2 bloquea. Los hijos de `delegate_task` reciben el modelo en
+`target.model`. Por eso la extensión debe:
+
+- resolver rol → modelo leyendo la configuración de OMP, no duplicarla en a4s;
+- reescribir o rechazar un `delegate_task` cuyo `target.model` no corresponda a su rol (P4, P3);
+- seguir rechazando `default` como valor literal (P9).
+
+Sin verificar:
+
+- que una sesión OMP hija lanzada por T3 aplique `retry.fallbackChains` a su modelo;
+- que el catálogo de T3 (P7, 34 modelos cuando se probó) liste hoy los modelos de CLIProxy;
+- cómo se fija y se comprueba el modelo del thread coordinador al crearlo.
+
+CLIProxy es un único punto de fallo: si se cae, ninguna cadena de fallback tiene salida.
 
 ## 4. Roadmap
 
@@ -153,7 +193,7 @@ alcance. Cada fase S se cierra igual: commit en el worktree, merge local en `mai
 
 ### S0 · Decisión y protocolo
 
-- El operador resuelve las decisiones 2 a 5 de §3 (la 1 ya está decidida).
+- Las decisiones de §3 están tomadas; falta reescribir las invariantes de #918.
 - Se decide si este plan es la variante C de #920 o un roadmap propio, y se reconcilia en #882.
 - Métricas fijadas antes de construir, compatibles con #920: mensajes al operador por Ticket,
   preguntas innecesarias, correcciones repetidas por punto de decisión (#929), tiempo en
@@ -183,7 +223,7 @@ En `packages/issue-lifecycle`, sin host.
 
 ### S3 · Eval y Mandate (tras S2 y F4)
 
-- El Assessment es un dictado (F1) con schema `Decision`; propuesta: en un hijo efímero para
+- El Assessment es un dictado (F1) con schema `Decision`; corre en un hijo corto con el modelo del coordinador (§3.1), para
   no crecer la sesión del coordinador (abierto en [t3-omp-roadmap §9.4](t3-omp-roadmap.md#9-pendiente-o-no-verificado)).
 - Expira → reencola; tras dos reintentos → `unavailable` y aviso al operador.
 - `accept` crea Ticket y Mandate y encola el run de Dagu; `a4s enqueue` del operador produce
@@ -240,7 +280,7 @@ Estados consultados con `gh` el 2026-11-03.
 
 1. `message.dispatch` idempotente a un thread hijo (no al coordinador). Bloquea S4.
 2. Reserva de un slot para el operador en la cola de Dagu.
-3. Coste y calidad del router con un modelo más barato que los ejecutores.
+3. Coste y calidad reales de cada modelo por rol (§3.1); la configuración no lo prueba.
 4. Si el Assessment en un hijo efímero es más barato que en la sesión del coordinador.
 5. Las cifras y afirmaciones de la guía de adopción y del artículo de DeepSeek que no están en el código del prototipo.
 6. La fuerza de las garantías del prototipo: no se ejecutó; todo lo citado viene de su documentación y código leído.
