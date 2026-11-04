@@ -148,6 +148,12 @@ operador ─► thread coordinador T3 ──a4s enqueue────────�
 5. **Store. Decidido el 2026-11-03:** JSONL append-only con lock bajo `$DAGU_HOME`, como
    receipts y #863, con un log por Ticket y claves idempotentes por Trigger. El estado se
    deriva del log. Si hacen falta consultas entre Tickets, se agrega un índice derivado.
+6. **Sin agentes headless. Decidido el 2026-11-04:** ningún agente (OMP, Claude, Pi u otro)
+   corre headless: ni `-p`/print, ni RPC/`--mode json` manejado por un script, ni SDK sin
+   interfaz (`hasUI: false`). Todo agente corre con su interfaz (TUI de OMP bajo Tern, thread
+   de T3) y sus hijos son subagentes visibles y dirigibles desde ella. La infraestructura no
+   es un agente y puede correr sin interfaz (servidor de Temporal, Dagu, workers en Bun).
+   Una prueba que ejecute un agente headless no cuenta como evidencia de esta arquitectura.
 
 ### 3.1 Modelos por rol con `delegate_task`
 

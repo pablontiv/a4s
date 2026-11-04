@@ -321,6 +321,8 @@ Estados consultados con `gh` el 2026-11-03.
 
 The decision remains **T3 Code + OMP**, with the existing F0–F7 order and scope. These native-runtime and alternative-host probes do not rewrite the R/P/B evidence in §2 or the 2026-11-02 evaluation. The OMP version used for those earlier ACP rows was not recorded here. The native delegation and RPC acceptance records identify the installed runtime as `omp/18.16.0`; F0 must pin OMP as well as T3. Native OMP success does not itself validate T3 integration: F2 continues to block native `task` so delegation remains visible as T3 threads.
 
+**Evidence scope after the 2026-11-04 no-headless-agents decision** ([super-agent roadmap §3, decision 6](super-agent-roadmap.md#3-decisiones-del-operador-previas-al-roadmap)): no agent may run headless (`-p`/print, script-driven RPC/JSON mode, or SDK without UI). The RPC rows below (`--resume`, request-ID correlation, RPC acceptance) describe OMP behavior but are not evidence for this architecture's runtime path; they must be reproduced with OMP in its TUI under Tern before an F-phase depends on them. Infrastructure without UI (Temporal server, Dagu, Bun workers) is unaffected.
+
 ### Dispatch, correlation and result validation
 
 - B2 remains evidence for T3 `message.dispatch`: the same `commandId` returns the same `sequence` without a second run. It was not retested in this session.
