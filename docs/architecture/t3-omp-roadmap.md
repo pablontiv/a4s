@@ -359,3 +359,46 @@ The inspected records below are temporary probe artifacts, not durable committed
 - `tern-transport.Oxzehu/acceptance.json`.
 - `tern-workspace-review.eeCJfI/evidence.json`.
 - `tern-recovery.pLSksp/daemon-run-absolute/acceptance.json`.
+
+## 12. Addendum 2026-11-04: Temporal loop inside the OMP TUI with native role subagents
+
+This addendum records a variant of the execution plane probed after the [no-headless-agents decision](super-agent-roadmap.md#3-decisiones-del-operador-previas-al-roadmap): an OMP extension hosts a Temporal worker inside an interactive OMP TUI, and each loop step runs as a native OMP `task` subagent. It does not change F0–F7. Whether Temporal replaces the Dagu loop, and Dagu's resulting role, is an open operator decision. Every agent ran as an interactive OMP TUI (`omp/18.16.0`) inside Tern; none ran headless. Temporal ran as a local dev server. These probes ran under Tern, not under T3: they say nothing about how T3 shows or interrupts native grandchildren of a T3 thread.
+
+### Results
+
+| # | Probe | Verdict | Key evidence |
+|---|---|---|---|
+| 1 | Temporal worker inside the extension, OMP in the TUI | Pass | Worker polled queue `corenative-native` from the TUI process (PID 712825). |
+| 2 | An activity launches a native `task` and waits for a validated result | Pass | Workflow `corenative-autonomous-three` completed 3 steps. An `INVALID_JSON` result was rejected by the activity and Temporal retried it (attempt 2, history event 12). |
+| 3 | Loop progress visible in the TUI | Pass, with `PI_TUI_NATIVE=0` | The capture shows `Subagents · 1 running` and the extension widget with step, attempt and heartbeat. With the native renderer the widget did not appear in the capture. |
+| 4 | Extension hooks run inside native subagents | Pass | `tool_call` blocked a forbidden command in `explorer`, `implementer` and `reviewer` with `ctx.agent.kind: "sub"`. `agent_end` and `session_shutdown` ran. `session_stop` runs only in the main session (`omp://extensions.md:533-536`), observed there. |
+| 5 | Effective model from `task.agentModelOverrides`, with fallback | Pass | `explorer` ran `composer-2.5`, `implementer` `gpt-6.1-sol`, `reviewer` `grok-4.7`. With a nonexistent first model, the next entry in the list resolved. |
+| 6 | The leader detects a failed subagent from its final state | Partial | A failure reported as text ends as `completed`. Only `yield({error})` in structured mode ends as `failed`. A failed job was reported as `cancelled` in the XML result, with `structured.status: valid` for content that violated the schema (reported upstream). |
+| 7 | `kill -9` of OMP and recovery | Temporal pass, Tern fail | Tern left the pane `exited 1`. After a manual `omp --resume`, the worker resumed at step 2, attempt 2, without repeating step 1; the workflow completed. |
+| 7b | Automatic relaunch after `kill -9` | Pass, with a shell supervisor | Tern 0.9.11 has no respawn option (`tern new --help`). A shell loop in the pane relaunches `omp --resume <session file>` on a non-zero exit (137 after the kill) and stops on `/exit` (0). Five workflows completed, one with a native child in flight at the kill, without repeating completed steps. An empty session is not persisted; `--resume` needs at least one turn. A Tern plugin on `pane_exited` is feasible but untested. |
+| 8 | Shutdown within OMP's 2 s budget with work in flight | Pass after the fix | First run: `handler timed out after 2000ms` with an activity in flight; idle worker stopped in 60 ms. With cancellable activities: timer in flight 706 and 658 ms, native `sonic` child in flight 654 and 674 ms, idle 108 ms; no handler timeout in eight PID logs. Interrupted activities were retried after relaunch and workflows completed without repeating steps. |
+| 9 | Workflow bundle without `debugMode` | Pass | The a4s build also bundled the Temporal workflow thread as a separate file. With `debugMode: false` the workflow completed (`bundlebuild-ok`). |
+| 10 | Queues with several OMP processes | Pass | One queue per worktree: `issue-1` and `issue-2` ran in parallel and isolated (workflows `queues-issue1-three`, `queues-issue2-three`). Two OMP processes on the same worktree compete for the queue; a lock in `.git/worktrees/<wt>/` keeps one active and the other on standby until `/exit`. |
+| 11 | Idempotency of push and PR effects | Pass | OMP was killed after the effect and before the activity completed. Naive activities created 2 PR records for the same key; activities that check external state first created 1, and the remote SHA matched the expected one. Both workflows completed. Effects were local (bare remote and a fake PR store), not GitHub. |
+
+### Design consequences
+
+- **The extension cannot call `task` itself.** `ctx.invokeTool` is undefined. What worked: `pi.sendMessage(..., { deliverAs: "nextTurn", triggerTurn: true })` wakes the main agent, which calls `task`; the extension waits for the `tool_result`. With `followUp`, the request queues while OMP is busy.
+- **A subagent's own report is not evidence.** A reviewer claimed to have run a forbidden command it never executed. Each activity validates the result and the external state itself, and treats the final job status, not "finished", as the signal (probes 2 and 6).
+- **Activities must be cancellable.** They wait with `Context.sleep` and the cancellation signal and heartbeat every 200 ms. The worker uses `shutdownGraceTime: 500ms` and `shutdownForceTime: 1200ms`.
+- **`debugMode` is not usable for the loop.** It raises the workflow block timeout from 5 s to about 49 days and runs workflows on the TUI thread. The build patch depends on the Temporal SDK version, so the SDK version must be pinned.
+- **A relauncher is required.** A shell supervisor in the Tern pane relaunches `omp --resume` on abnormal exit. A native subagent in flight at a crash is lost; `--resume` does not restore it, and Temporal relaunches it on the next attempt.
+- **One queue per worktree**, with one worker elected by a lock. The tested lock is released cleanly only by `/exit`; after a crash a lease that expires is still needed.
+- **Every activity may run more than once.** Before each effect, check external state with a stable key: push only to the expected SHA and fast-forward only; one PR per repo, branch and operation; comments carry an own marker; merge only if not already merged.
+- **Native grandchildren keep the operator's model configuration** (probe 5), and the extension guards apply to them (probe 4). If this variant is adopted, F2 blocks `task` only in the coordinator and allows it in issue leaders.
+
+### Open
+
+- Recovering the worktree lock after a worker crash (`kill -9`).
+- Two activities creating the same PR concurrently; probe 11 was sequential and does not establish concurrency safety.
+- Dagu's role if Temporal holds the loop: operator decision.
+- T3 visibility and interruption of native grandchildren under an ACP-hosted leader, and T3's 30-minute inactivity close (R10) with a grandchild in flight.
+
+### Evidence scope
+
+Temporary probe artifacts, not durable committed evidence: `/tmp/omp-tui-{corenative,subagentprops,recovery,bundlebuild}*/` for probes 1–9 (their OMP sessions archived in `/tmp/omp-probe-session-archive/`), and `/tmp/omp-tui-{shutdown,relauncher,queues,idempotency}/` for probes 7b, 8, 10 and 11 (`/tmp/omp-tui-shutdown/.workspace/worktrees/issue-1/acceptance.md`, `/tmp/omp-tui-queues/.workspace/worktrees/issue-1/evidence-summary.json`, `/tmp/omp-tui-idempotency/.workspace/worktrees/issue-1/prs.json`).

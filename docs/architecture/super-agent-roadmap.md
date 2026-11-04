@@ -154,6 +154,8 @@ operador ─► thread coordinador T3 ──a4s enqueue────────�
    de T3) y sus hijos son subagentes visibles y dirigibles desde ella. La infraestructura no
    es un agente y puede correr sin interfaz (servidor de Temporal, Dagu, workers en Bun).
    Una prueba que ejecute un agente headless no cuenta como evidencia de esta arquitectura.
+   Las pruebas que cumplen esta regla (OMP en la TUI bajo Tern, loop en Temporal, subagentes
+   nativos por rol) están en [t3-omp-roadmap §12](t3-omp-roadmap.md#12-addendum-2026-11-04-temporal-loop-inside-the-omp-tui-with-native-role-subagents).
 
 ### 3.1 Modelos por rol con `delegate_task`
 
