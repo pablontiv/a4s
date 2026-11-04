@@ -127,10 +127,13 @@ operador ─► thread coordinador T3 ──a4s enqueue────────�
 
 ## 3. Decisiones del operador (previas al roadmap)
 
-1. **Invariantes de #918.** Exigen coordinador en TUI y roles como subagentes nativos. Esta
-   arquitectura y F0–F7 ponen el coordinador en un thread de T3 y los roles como hijos de
-   `delegate_task`. Hay que reescribir las invariantes sin atarlas a un host, o tratar esta
-   arquitectura solo como candidata C de #920. Sin esta decisión, S1 en adelante no tiene destino.
+1. **Invariantes de #918. Decidido por el operador el 2026-11-03:** el coordinador es un
+   thread de T3 que corre OMP por ACP, y todo lo demás (roles, Assessment, follow-ups) se
+   delega con `delegate_task` de T3, con los guards de F2: modelo explícito, `worktree` para
+   los roles que editan, tool `task` nativa de OMP bloqueada y `taskId`/`childThreadId`
+   registrados. Queda pendiente reescribir en #918 las invariantes "coordinador en TUI" y
+   "subagente nativo" en términos independientes del host: cada rol es un hijo visible y
+   dirigible del coordinador, sin modo headless.
 2. **Fuentes de trabajo.** Propuesta: GitHub (issues y comentarios del repo) y el operador
    en T3. Nada más hasta S6.
 3. **Modo de aceptación inicial.** Propuesta: explícito siempre; trabajo inferido en `observe`
@@ -150,7 +153,7 @@ alcance. Cada fase S se cierra igual: commit en el worktree, merge local en `mai
 
 ### S0 · Decisión y protocolo
 
-- El operador resuelve las decisiones de §3.
+- El operador resuelve las decisiones 2 a 5 de §3 (la 1 ya está decidida).
 - Se decide si este plan es la variante C de #920 o un roadmap propio, y se reconcilia en #882.
 - Métricas fijadas antes de construir, compatibles con #920: mensajes al operador por Ticket,
   preguntas innecesarias, correcciones repetidas por punto de decisión (#929), tiempo en
@@ -224,7 +227,7 @@ Estados consultados con `gh` el 2026-11-03.
 
 | Issue | Relación |
 |---|---|
-| #918, #919, #920 | S0 depende de su decisión. Esta arquitectura es candidata a C; sus invariantes hoy la contradicen (§3.1). |
+| #918, #919, #920 | Host decidido (§3.1): falta reescribir en #918 las invariantes de TUI y subagente nativo. Esta arquitectura es la candidata C de #920. |
 | #929 | Insumo directo de la métrica de repetición; independiente de la arquitectura. |
 | #893 | Alternativa para exponer `a4s_submit_result`, el gate y la suscripción a eventos como tools MCP. Decidir antes de S3. |
 | #501 | Lo reemplaza S2. |
