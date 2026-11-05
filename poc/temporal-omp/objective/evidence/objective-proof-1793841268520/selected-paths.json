@@ -1,0 +1,62 @@
+[
+  {
+    "name": "sqlite",
+    "path": "poc/temporal-omp/sqlite/evidence.json",
+    "expectedScenario": "real-server-sqlite-graceful-restart",
+    "references": [
+      "poc/temporal-omp/sqlite/runtime-evidence.json",
+      "poc/temporal-omp/sqlite/server.yaml",
+      "poc/temporal-omp/sqlite/probe.cjs",
+      "poc/temporal-omp/sqlite/workflows.cjs"
+    ]
+  },
+  {
+    "name": "objective",
+    "path": "poc/temporal-omp/objective/evidence/objective-proof-1793841014953/summary.json",
+    "expectedScenario": "bounded-objective-independent-succession",
+    "references": [
+      "poc/temporal-omp/objective/evidence/objective-proof-1793841014953/history.json",
+      "poc/temporal-omp/objective/evidence/objective-proof-1793841014953/evidence-manifest.json",
+      "poc/temporal-omp/objective/evidence/objective-proof-1793841014953/inventory-validation.json"
+    ]
+  },
+  {
+    "name": "safety",
+    "path": "poc/temporal-omp/safety/evidence/latest.json",
+    "expectedScenario": "safety-real-git-reconciliation",
+    "references": [
+      "poc/temporal-omp/safety/index.ts",
+      "poc/temporal-omp/safety/scenario.ts",
+      "poc/temporal-omp/safety/lost-result-worker.ts"
+    ]
+  },
+  {
+    "name": "ownership",
+    "path": "poc/temporal-omp/ownership/evidence.json",
+    "expectedScenario": "replacement-rejects-late-result-and-effect",
+    "references": [
+      "poc/temporal-omp/ownership/authority.mjs",
+      "poc/temporal-omp/ownership/process.mjs",
+      "poc/temporal-omp/ownership/probe.mjs"
+    ]
+  },
+  {
+    "name": "receipt-gate",
+    "path": "poc/temporal-omp/ownership/receipt-evidence.json",
+    "expectedScenario": "connected-local-receipt-gate",
+    "references": [
+      "poc/temporal-omp/ownership/receipt-gate.mjs",
+      "poc/temporal-omp/ownership/receipt-probe.mjs",
+      "poc/temporal-omp/safety/index.ts"
+    ]
+  },
+  {
+    "name": "update",
+    "path": "poc/temporal-omp/update/evidence/artifact-update-1793841081431/summary.json",
+    "expectedScenario": "temporal-compatible-artifact-update",
+    "references": [
+      "poc/temporal-omp/update/evidence/artifact-update-1793841081431/manifest.json",
+      "poc/temporal-omp/update/evidence/artifact-update-1793841081431/history.json"
+    ]
+  }
+]

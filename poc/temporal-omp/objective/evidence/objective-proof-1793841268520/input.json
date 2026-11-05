@@ -1,0 +1,28 @@
+{
+  "mandateId": "objective-proof-1793841268520",
+  "revision": 1,
+  "generation": 1,
+  "items": [
+    {
+      "id": "await-host-authorization",
+      "dependencies": [],
+      "operation": "inventory",
+      "blocker": {
+        "name": "native-host-not-admitted",
+        "reason": "Native OMP host execution is outside this command bootstrap admission."
+      }
+    },
+    {
+      "id": "inventory-evidence",
+      "dependencies": [],
+      "operation": "inventory"
+    },
+    {
+      "id": "validate-evidence",
+      "dependencies": [
+        "inventory-evidence"
+      ],
+      "operation": "validate-inventory"
+    }
+  ]
+}

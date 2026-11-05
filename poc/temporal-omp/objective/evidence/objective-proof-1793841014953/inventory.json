@@ -1,0 +1,73 @@
+{
+  "kind": "evidence-inventory",
+  "observedAt": "2026-11-05T01:10:25.279Z",
+  "records": [
+    {
+      "path": "input.json",
+      "schema": "objective-input",
+      "bytes": 629,
+      "sha256": "d90c2b2ba1fc73cf811b6412f378df8d77085f0c34084541c5bd40f2006880ec"
+    },
+    {
+      "path": "admission.json",
+      "schema": "admission",
+      "bytes": 250,
+      "sha256": "f10ea62d1159b6256d77d7e7a1d28572bf5b67314a118dcbe412acdbe3b2bd5a"
+    },
+    {
+      "path": "workflows.ts",
+      "schema": "source",
+      "bytes": 4467,
+      "sha256": "a4d089c42cb3ecc40cc147770e1d5f4701a91a2edda133fe429ff9d6c242c7b3"
+    },
+    {
+      "path": "activities.mjs",
+      "schema": "source",
+      "bytes": 2059,
+      "sha256": "aeb1c8fc480f61c67fe328f5fe77d85d22fc35a825c671c8877b1ec69743a1fd"
+    },
+    {
+      "path": "commands.mjs",
+      "schema": "source",
+      "bytes": 5388,
+      "sha256": "7f00d02e3e1e9fcd61ebc39061c1a708b0b06d5aba3d293153f504e86660888b"
+    },
+    {
+      "path": "runner.mjs",
+      "schema": "source",
+      "bytes": 9156,
+      "sha256": "3dd465180a495b80c08632b81767e27ccb8fb8f807d1e5c947c93bb36fbda596"
+    },
+    {
+      "path": "package.json",
+      "schema": "source",
+      "bytes": 299,
+      "sha256": "00d72d2a422bb4177400baafe91b72329ed1bf9c8af06c3923a1eb59c32b9e38"
+    },
+    {
+      "path": "package-lock.json",
+      "schema": "source",
+      "bytes": 77678,
+      "sha256": "a48d5c767a50b5a7b8b248278e10a9906c62cfe71cbf27f95f29e3ec295a49af"
+    },
+    {
+      "path": "selected-0-safety.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "bytes": 8058,
+      "sha256": "f91c7f9524e6336df1cf3f334834824ae1bd8bb09106896c99fca2a14a34b2bf"
+    },
+    {
+      "path": "selected-0-reference-0",
+      "schema": "source",
+      "bytes": 7732,
+      "sha256": "3e75b9229a0f4891d616699e25998b6bb4cbad2e4d24655aa7503524185df10c"
+    },
+    {
+      "path": "selected-0-reference-1",
+      "schema": "source",
+      "bytes": 7066,
+      "sha256": "c630034f048ac2a302ed7fb502428596242a0735438ee760d36c41524ba6c533"
+    }
+  ]
+}

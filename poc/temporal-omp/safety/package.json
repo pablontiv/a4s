@@ -1,0 +1,7 @@
+{
+  "name": "@a4s/temporal-omp-safety-probe",
+  "private": true,
+  "type": "module",
+  "scripts": { "probe": "node scenario.ts" },
+  "engines": { "node": ">=22.19.0" }
+}

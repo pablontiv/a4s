@@ -1,0 +1,34 @@
+{
+  "workflowArtifact": "workflow-v2",
+  "phase": "completed",
+  "active": {
+    "attempt": 2,
+    "generation": 2,
+    "workerArtifact": "0100aaafbf184f80118857aaf75b017435d4cfa0f61fbdde435fba6a7e416d69"
+  },
+  "rejected": [
+    {
+      "receipt": {
+        "binding": {
+          "attempt": 1,
+          "generation": 1,
+          "workerArtifact": "4aea81d29da4528d9446a8f6f3098414b5676d3e4b9e263cc528fc619c655c80"
+        },
+        "implementation": "v1-sum",
+        "value": 10
+      },
+      "reason": "superseded-attempt"
+    }
+  ],
+  "accepted": [
+    {
+      "binding": {
+        "attempt": 2,
+        "generation": 2,
+        "workerArtifact": "0100aaafbf184f80118857aaf75b017435d4cfa0f61fbdde435fba6a7e416d69"
+      },
+      "implementation": "v2-sum-of-squares",
+      "value": 38
+    }
+  ]
+}

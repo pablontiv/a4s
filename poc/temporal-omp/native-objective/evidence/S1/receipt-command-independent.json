@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-11-05T05:02:51.957Z",
+  "startedAt": "2026-11-05T05:02:51.527Z",
+  "scenario": "inventory",
+  "result": {
+    "binding": {
+      "mandateId": "native-succession-S1-0502",
+      "itemId": "command-independent",
+      "stage": "execute",
+      "attempt": 1,
+      "revision": 1,
+      "generation": 1
+    },
+    "kind": "bootstrap_command_activity",
+    "nativeHostProof": false,
+    "artifact": "inventory.json",
+    "digest": "2c2cd86b2dbec9f799baa5d8b419cff861d2cbbef093a04684aa955f99ea5fc4"
+  },
+  "command": [
+    "/nix/store/z00clixvf009lpzwz7z6mbha2yy7h6gv-nodejs-slim-26.13.0/bin/node",
+    "/home/shared/harness/a4s/poc/temporal-omp/objective/commands.mjs",
+    "inventory",
+    "/home/shared/harness/a4s/poc/temporal-omp/native-objective/evidence/S1"
+  ],
+  "stdout": "{\"artifact\":\"inventory.json\",\"checkedFiles\":3}\n",
+  "stderr": "",
+  "limitations": [
+    "Command activity bootstrap; no native OMP host turn/context/reload proof."
+  ]
+}

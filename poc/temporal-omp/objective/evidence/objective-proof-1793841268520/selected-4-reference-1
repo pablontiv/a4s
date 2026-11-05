@@ -1,0 +1,68 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { LeaseAuthority } from './authority.mjs';
+import { acceptReceipt } from './receipt-gate.mjs';
+import { observeGitEffect } from '../safety/index.ts';
+
+const root = mkdtempSync(join(tmpdir(), 'ownership-receipt-'));
+const repo = join(root, 'work');
+const remote = join(root, 'remote.git');
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+let authority;
+try {
+  git('init', '--bare', remote);
+  git('init', '--initial-branch=proof', repo);
+  git('-C', repo, 'config', 'user.name', 'Ownership Probe');
+  git('-C', repo, 'config', 'user.email', 'ownership-probe@example.invalid');
+  writeFileSync(join(repo, 'proof.txt'), 'actual local remote receipt proof\n');
+  git('-C', repo, 'add', 'proof.txt');
+  git('-C', repo, 'commit', '-m', 'Record isolated receipt proof');
+  const revision = git('-C', repo, 'rev-parse', 'HEAD');
+  git('-C', repo, 'push', remote, 'HEAD:refs/heads/proof');
+  authority = new LeaseAuthority(join(root, 'authority.sqlite'));
+  const first = authority.acquire('receipt-proof', 'first', 5000);
+  const firstAttempt = authority.beginAttempt(first, 'item-1', 2);
+  const binding = (lease, attempt) => ({ mandateId: lease.mandateId, itemId: 'item-1', stage: 'execute', attempt, revision, generation: lease.generation });
+  const oldBinding = binding(first, firstAttempt.attempt);
+  const observe = (expected) => observeGitEffect({ binding: expected, repo, remote, ref: 'refs/heads/proof', commitSha: revision });
+  const receipt = (expected, evidence) => ({ schemaVersion: 1, status: 'completed', binding: expected,
+    evidence: { kind: 'git-push', commitSha: revision, remoteSha: evidence.remoteSha, ref: evidence.ref }, completion: false });
+  const oldEvidence = observe(oldBinding);
+  const oldReceipt = receipt(oldBinding, oldEvidence);
+  authority.release(first);
+  const current = authority.acquire('receipt-proof', 'replacement', 5000);
+  const next = authority.beginAttempt(current, 'item-1', 2);
+  const expected = binding(current, next.attempt);
+  const currentEvidence = observe(expected);
+  const valid = receipt(expected, currentEvidence);
+  assert.throws(() => acceptReceipt(authority, first, oldBinding, oldReceipt, oldEvidence), /stale-lease/);
+  assert.throws(() => acceptReceipt(authority, current, expected, oldReceipt, currentEvidence), /receipt-rejected:wrong-binding/);
+  const wrongEvidence = { ...currentEvidence, remoteSha: '0'.repeat(40) };
+  assert.throws(() => acceptReceipt(authority, current, expected, valid, wrongEvidence), /receipt-rejected:independent-evidence-not-complete/);
+  assert.equal(authority.db.prepare('SELECT count(*) AS n FROM accepted').get().n, 0);
+  acceptReceipt(authority, current, expected, valid, currentEvidence);
+  const rows = authority.db.prepare('SELECT generation,kind,binding,payload FROM accepted').all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].generation, current.generation);
+  assert.deepEqual(JSON.parse(rows[0].binding), expected);
+  assert.equal(JSON.parse(rows[0].payload).completion, false);
+  const output = {
+    schemaVersion: 1, runtime: process.version,
+    command: 'node poc/temporal-omp/ownership/receipt-probe.mjs poc/temporal-omp/ownership/receipt-evidence.json',
+    observedAt: new Date().toISOString(), scenario: 'connected-local-receipt-gate',
+    result: { staleLease: 'rejected', staleReceipt: 'wrong-binding', invalidEvidence: 'independent-evidence-not-complete',
+      rejectedRows: 0, acceptedRows: rows.length, acceptedGeneration: current.generation, attempt: next.attempt,
+      completionFlag: false, binding: expected, gitEvidence: currentEvidence },
+    limitations: ['Git observation occurs before SQLite transaction; not atomic Git plus SQLite.',
+      'Only local receipt acceptance is fenced; no distributed or exactly-once external effect claim.',
+      'Native OMP supervisor/session recovery is not exercised.'],
+  };
+  if (process.argv[2]) writeFileSync(process.argv[2], `${JSON.stringify(output, null, 2)}\n`);
+  console.log(JSON.stringify(output, null, 2));
+} finally {
+  authority?.close();
+  rmSync(root, { recursive: true, force: true });
+}

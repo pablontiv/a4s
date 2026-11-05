@@ -1,0 +1,60 @@
+{
+  "observedAt": "2026-11-05T01:14:39.848Z",
+  "scenario": "bounded-objective-independent-succession",
+  "result": "passed",
+  "workflowId": "objective-proof-1793841268520",
+  "runId": "01a1a945-a914-743e-ac6b-2be756daee8a",
+  "evidenceRoot": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841268520",
+  "completed": [
+    "inventory-evidence",
+    "validate-evidence"
+  ],
+  "blockers": [
+    {
+      "itemId": "await-host-authorization",
+      "name": "native-host-not-admitted",
+      "reason": "Native OMP host execution is outside this command bootstrap admission."
+    }
+  ],
+  "selectedEvidence": [
+    {
+      "name": "sqlite",
+      "scenario": "real-server-sqlite-graceful-restart",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/evidence.json"
+    },
+    {
+      "name": "objective",
+      "scenario": "bounded-objective-independent-succession",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953/summary.json"
+    },
+    {
+      "name": "safety",
+      "scenario": "safety-real-git-reconciliation",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/evidence/latest.json"
+    },
+    {
+      "name": "ownership",
+      "scenario": "replacement-rejects-late-result-and-effect",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/evidence.json"
+    },
+    {
+      "name": "receipt-gate",
+      "scenario": "connected-local-receipt-gate",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/receipt-evidence.json"
+    },
+    {
+      "name": "update",
+      "scenario": "temporal-compatible-artifact-update",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/update/evidence/artifact-update-1793841081431/summary.json"
+    }
+  ],
+  "historyEvents": 53,
+  "stateTransitions": 6,
+  "liveQueries": 17,
+  "nativeHostProof": false,
+  "executionKind": "bootstrap_command_activity",
+  "limitations": [
+    "Not an interactive OMP native host, turn/context continuity or reload proof.",
+    "Numeric binding revision is the objective experiment sequence, not the safety gate Git SHA; independent slice evidence is reviewed, not integrated gate execution."
+  ]
+}

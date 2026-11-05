@@ -1,0 +1,79 @@
+{
+  "mandateId": "objective-proof-1793841461459",
+  "status": "blocked",
+  "sequence": 6,
+  "observedAt": "2026-11-05T01:17:51.450Z",
+  "items": [
+    {
+      "id": "await-host-authorization",
+      "status": "blocked",
+      "binding": {
+        "mandateId": "objective-proof-1793841461459",
+        "itemId": "await-host-authorization",
+        "stage": "execute",
+        "attempt": 1,
+        "revision": 1,
+        "generation": 1
+      }
+    },
+    {
+      "id": "inventory-evidence",
+      "status": "completed",
+      "binding": {
+        "mandateId": "objective-proof-1793841461459",
+        "itemId": "inventory-evidence",
+        "stage": "execute",
+        "attempt": 1,
+        "revision": 1,
+        "generation": 1
+      },
+      "receipt": {
+        "binding": {
+          "mandateId": "objective-proof-1793841461459",
+          "itemId": "inventory-evidence",
+          "stage": "execute",
+          "attempt": 1,
+          "revision": 1,
+          "generation": 1
+        },
+        "kind": "bootstrap_command_activity",
+        "nativeHostProof": false,
+        "artifact": "inventory.json",
+        "digest": "97d27d3af9967c62e29c736aedcf65ceace1ec380e016fffff98d214a9bc757e"
+      }
+    },
+    {
+      "id": "validate-evidence",
+      "status": "completed",
+      "binding": {
+        "mandateId": "objective-proof-1793841461459",
+        "itemId": "validate-evidence",
+        "stage": "execute",
+        "attempt": 1,
+        "revision": 1,
+        "generation": 1
+      },
+      "receipt": {
+        "binding": {
+          "mandateId": "objective-proof-1793841461459",
+          "itemId": "validate-evidence",
+          "stage": "execute",
+          "attempt": 1,
+          "revision": 1,
+          "generation": 1
+        },
+        "kind": "bootstrap_command_activity",
+        "nativeHostProof": false,
+        "artifact": "inventory-validation.json",
+        "digest": "2464f5e67fe4c82f72c1c1c5d26e630a30be46e59093d918d6e32c505549d095"
+      }
+    }
+  ],
+  "blockers": [
+    {
+      "itemId": "await-host-authorization",
+      "name": "native-host-not-admitted",
+      "reason": "Native OMP host execution is outside this command bootstrap admission."
+    }
+  ]
+}

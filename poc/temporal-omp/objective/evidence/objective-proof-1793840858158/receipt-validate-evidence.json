@@ -1,0 +1,30 @@
+{
+  "observedAt": "2026-11-05T01:07:48.988Z",
+  "startedAt": "2026-11-05T01:07:48.563Z",
+  "scenario": "validate-inventory",
+  "result": {
+    "binding": {
+      "mandateId": "objective-proof-1793840858158",
+      "itemId": "validate-evidence",
+      "stage": "execute",
+      "attempt": 1,
+      "revision": 1,
+      "generation": 1
+    },
+    "kind": "bootstrap_command_activity",
+    "nativeHostProof": false,
+    "artifact": "inventory-validation.json",
+    "digest": "36b3c5f61dcb219f4a66943b08a11b9a54e60bd54366cc2a658d723f8382c248"
+  },
+  "command": [
+    "/nix/store/z00clixvf009lpzwz7z6mbha2yy7h6gv-nodejs-slim-26.13.0/bin/node",
+    "/home/shared/harness/a4s/poc/temporal-omp/objective/commands.mjs",
+    "validate-inventory",
+    "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793840858158"
+  ],
+  "stdout": "{\"artifact\":\"inventory-validation.json\",\"checkedFiles\":8}\n",
+  "stderr": "",
+  "limitations": [
+    "Command activity bootstrap; no native OMP host turn/context/reload proof."
+  ]
+}

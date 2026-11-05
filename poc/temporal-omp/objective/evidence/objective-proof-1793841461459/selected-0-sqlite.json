@@ -1,0 +1,95 @@
+{
+  "observedAt": "2026-11-05T01:07:49.215Z",
+  "scenario": "real-server-sqlite-graceful-restart",
+  "phase": "completed",
+  "result": "passed",
+  "observation": "Activity completion, workflow history/result and visibility survive real server graceful stop/restart without worker",
+  "address": "127.0.0.1:17233",
+  "namespace": "default",
+  "serverVersion": "1.32.2",
+  "sdkVersion": "1.25.0",
+  "workflowId": "sqlite-persistence-1793840868196",
+  "runId": "01a1a93f-6bbe-7cd1-a990-4f70aeb589a2",
+  "binding": {
+    "mandateId": "sqlite-runtime-proof",
+    "itemId": "sqlite-persistence-1793840868196",
+    "stage": "activity",
+    "attempt": 1,
+    "revision": 1,
+    "generation": 1
+  },
+  "activityCalls": 1,
+  "before": {
+    "result": {
+      "binding": {
+        "mandateId": "sqlite-runtime-proof",
+        "itemId": "sqlite-persistence-1793840868196",
+        "stage": "activity",
+        "attempt": 1,
+        "revision": 1,
+        "generation": 1
+      },
+      "activityCompleted": true
+    },
+    "eventTypes": [
+      1,
+      5,
+      6,
+      7,
+      10,
+      11,
+      12,
+      5,
+      6,
+      7,
+      2
+    ],
+    "eventCount": 11,
+    "visibility": [
+      {
+        "workflowId": "sqlite-persistence-1793840868196",
+        "runId": "01a1a93f-6bbe-7cd1-a990-4f70aeb589a2",
+        "status": "COMPLETED"
+      }
+    ]
+  },
+  "limitations": [
+    "Single local process, graceful stop/restart only.",
+    "Not a backup restore, crash durability, HA, or production readiness proof."
+  ],
+  "after": {
+    "observedAt": "2026-11-05T01:12:42.661Z",
+    "result": {
+      "binding": {
+        "mandateId": "sqlite-runtime-proof",
+        "itemId": "sqlite-persistence-1793840868196",
+        "stage": "activity",
+        "attempt": 1,
+        "revision": 1,
+        "generation": 1
+      },
+      "activityCompleted": true
+    },
+    "eventTypes": [
+      1,
+      5,
+      6,
+      7,
+      10,
+      11,
+      12,
+      5,
+      6,
+      7,
+      2
+    ],
+    "eventCount": 11,
+    "visibility": [
+      {
+        "workflowId": "sqlite-persistence-1793840868196",
+        "runId": "01a1a93f-6bbe-7cd1-a990-4f70aeb589a2",
+        "status": "COMPLETED"
+      }
+    ]
+  }
+}

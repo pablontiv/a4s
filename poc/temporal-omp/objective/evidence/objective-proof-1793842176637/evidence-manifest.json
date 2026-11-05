@@ -1,0 +1,225 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "input.json",
+      "schema": "objective-input"
+    },
+    {
+      "path": "admission.json",
+      "schema": "admission"
+    },
+    {
+      "path": "workflows.ts",
+      "schema": "source"
+    },
+    {
+      "path": "activities.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "commands.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "runner.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "package.json",
+      "schema": "source"
+    },
+    {
+      "path": "package-lock.json",
+      "schema": "source"
+    },
+    {
+      "path": "selected-0-omp.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "omp",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/omp/evidence.json",
+      "expectedScenario": "interactive-native-main-task-receipt"
+    },
+    {
+      "path": "selected-0-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/omp/events.jsonl",
+      "name": "omp-reference-0"
+    },
+    {
+      "path": "selected-0-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/omp/extension.ts",
+      "name": "omp-reference-1"
+    },
+    {
+      "path": "selected-0-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/omp/workflow.ts",
+      "name": "omp-reference-2"
+    },
+    {
+      "path": "selected-0-reference-3",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/omp/launch.sh",
+      "name": "omp-reference-3"
+    },
+    {
+      "path": "selected-1-sqlite.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "sqlite",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/evidence.json",
+      "expectedScenario": "real-server-sqlite-graceful-restart"
+    },
+    {
+      "path": "selected-1-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/runtime-evidence.json",
+      "name": "sqlite-reference-0"
+    },
+    {
+      "path": "selected-1-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/server.yaml",
+      "name": "sqlite-reference-1"
+    },
+    {
+      "path": "selected-1-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/probe.cjs",
+      "name": "sqlite-reference-2"
+    },
+    {
+      "path": "selected-1-reference-3",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/sqlite/workflows.cjs",
+      "name": "sqlite-reference-3"
+    },
+    {
+      "path": "selected-2-objective.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "objective",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953/summary.json",
+      "expectedScenario": "bounded-objective-independent-succession"
+    },
+    {
+      "path": "selected-2-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953/history.json",
+      "name": "objective-reference-0"
+    },
+    {
+      "path": "selected-2-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953/evidence-manifest.json",
+      "name": "objective-reference-1"
+    },
+    {
+      "path": "selected-2-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953/inventory-validation.json",
+      "name": "objective-reference-2"
+    },
+    {
+      "path": "selected-3-safety.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "safety",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/evidence/latest.json",
+      "expectedScenario": "safety-real-git-reconciliation"
+    },
+    {
+      "path": "selected-3-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/index.ts",
+      "name": "safety-reference-0"
+    },
+    {
+      "path": "selected-3-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/scenario.ts",
+      "name": "safety-reference-1"
+    },
+    {
+      "path": "selected-3-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/lost-result-worker.ts",
+      "name": "safety-reference-2"
+    },
+    {
+      "path": "selected-4-ownership.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "ownership",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/evidence.json",
+      "expectedScenario": "replacement-rejects-late-result-and-effect"
+    },
+    {
+      "path": "selected-4-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/authority.mjs",
+      "name": "ownership-reference-0"
+    },
+    {
+      "path": "selected-4-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/process.mjs",
+      "name": "ownership-reference-1"
+    },
+    {
+      "path": "selected-4-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/probe.mjs",
+      "name": "ownership-reference-2"
+    },
+    {
+      "path": "selected-5-receipt-gate.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "receipt-gate",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/receipt-evidence.json",
+      "expectedScenario": "connected-local-receipt-gate"
+    },
+    {
+      "path": "selected-5-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/receipt-gate.mjs",
+      "name": "receipt-gate-reference-0"
+    },
+    {
+      "path": "selected-5-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/ownership/receipt-probe.mjs",
+      "name": "receipt-gate-reference-1"
+    },
+    {
+      "path": "selected-5-reference-2",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/index.ts",
+      "name": "receipt-gate-reference-2"
+    },
+    {
+      "path": "selected-6-update.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "update",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/update/evidence/artifact-update-1793841081431/summary.json",
+      "expectedScenario": "temporal-compatible-artifact-update"
+    },
+    {
+      "path": "selected-6-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/update/evidence/artifact-update-1793841081431/manifest.json",
+      "name": "update-reference-0"
+    },
+    {
+      "path": "selected-6-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/update/evidence/artifact-update-1793841081431/history.json",
+      "name": "update-reference-1"
+    }
+  ]
+}

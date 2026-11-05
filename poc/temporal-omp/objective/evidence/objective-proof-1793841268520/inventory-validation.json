@@ -1,0 +1,14 @@
+{
+  "kind": "evidence-inventory-validation",
+  "observedAt": "2026-11-05T01:14:39.187Z",
+  "valid": true,
+  "checkedFiles": 32,
+  "schemas": [
+    "objective-input",
+    "admission",
+    "source",
+    "retained-evidence"
+  ],
+  "inventorySha256": "455f0570d5bf139fed9305fc08958a6131d839662e05ea8b8079dff72ba8479f",
+  "nativeHostProof": false
+}

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "input.json",
+      "schema": "objective-input"
+    },
+    {
+      "path": "admission.json",
+      "schema": "admission"
+    },
+    {
+      "path": "workflows.ts",
+      "schema": "source"
+    },
+    {
+      "path": "activities.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "commands.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "runner.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "package.json",
+      "schema": "source"
+    },
+    {
+      "path": "package-lock.json",
+      "schema": "source"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "source": "proc://native-objective-host-s3 terminal read during this assignment",
+  "commandInput": "/compact\\n then carriage return",
+  "observedTerminalError": "Error: Compaction failed: Nothing to compact (session too small)",
+  "sessionCompactEventObserved": false,
+  "resolution": "Separate S3-rotation run lowered compaction.keepRecentTokens to 1 and recorded session_compact before native completion."
+}

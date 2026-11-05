@@ -1,0 +1,68 @@
+{
+  "observedAt": "2026-11-05T01:27:11.043Z",
+  "scenario": "interactive-native-main-task-receipt",
+  "result": "passed",
+  "scope": "Minimal real interactive UI session -> embedded Temporal worker -> nextTurn activity request -> main native task -> correlated tool_result -> completed Temporal workflow",
+  "command": "bash poc/temporal-omp/omp/launch.sh",
+  "interactive": {
+    "pty": true,
+    "print": false,
+    "sessionId": "01a1a950-c27d-70ef-8dbf-068280bd1641",
+    "hasUI": true,
+    "activeTools": [
+      "task"
+    ],
+    "terminalMarkers": [
+      "NATIVE_HOST_WORKFLOW_COMPLETED",
+      "NATIVE_HOST_DONE"
+    ]
+  },
+  "versions": {
+    "omp": "18.16.0",
+    "hostDistribution": "npm @oh-my-pi/pi-coding-agent",
+    "bun": "1.4.4",
+    "temporalSdk": "1.25.0",
+    "temporalServer": "1.32.2"
+  },
+  "temporal": {
+    "address": "127.0.0.1:17233",
+    "namespace": "default",
+    "debugMode": false,
+    "workflowId": "native-host-e8a1a165-631e-4cbf-a687-ad658817191f",
+    "receiptId": "native-receipt-283d707c-af07-4446-b1e6-1194ea53a23a"
+  },
+  "receipt": {
+    "type": "native_task_result",
+    "at": "2026-11-05T01:27:10.864Z",
+    "receiptId": "native-receipt-283d707c-af07-4446-b1e6-1194ea53a23a",
+    "toolCallId": "call_8EK3brlyQNrecr2cASn6aMNW",
+    "isError": false,
+    "inputSha256": "2548a38f908cabff570e32b8c2da152d261dca01f9b426fba25d4f867321e71a",
+    "resultSha256": "f29b9c8c3bf87d3aceb1d6498e42de76cce49c0f778fd49adf8ebc939282a885",
+    "markerObserved": true
+  },
+  "sourceSha256": {
+    "extension.ts": "18831d76af2367cdaf5f5d13b4e256e57e700af3b57f52d95d074f52f0186df9",
+    "workflow.ts": "cf9063274877e08b4594a3549bcccf7942b4be0ea387d974b59dc56f77c21c06",
+    "workflow-bundle.js": "e64c16a77ff78167aac6278e929e0ef210801ae935b2630b57ba2fbfcc483486",
+    "prepare.mjs": "dc308b8adcbeea19bbd4785bc3852a974d6413ce62037eb0f11769f801c9b3de",
+    "launch.sh": "42eccdf7ebcc656d94a69ec8bc1b4370e6301da2babacc224580265377ac4be5",
+    "smoke-config.yml": "ec5e5b13420588478d3e925cddf301847f35d30d47433d8020ce15b32cf1f9d9",
+    "package.json": "32a1cfdc7b4da192a58e2031b80ff2704e24cca9af70968de675b230dc0b6c85",
+    "installedExtensionTypes": "9c15b24c59427aae39d02aa792198bcf449062d17b0928b6f95ce1f15cde47c6",
+    "upstreamExtension": "968e7aed1383ffb65d79a939bf6fe5266d8470f6e665d5bc2b3ae53b48b9fd44",
+    "upstreamWorker": "aea553f4348c9596c67afb8a270a6e420c8f1974f78041c5ece4b227e1af8eaf",
+    "npmHostCli": "1fa4bfb097c688fe73975940459ae171c5ea769f5a35be253896e60030476cb7",
+    "bunRuntime": "10702245766b225e70bbf6235fd6b47214fd94b4760d00ffaed8ab0df57ac235"
+  },
+  "gateInteroperability": "Not claimed; no ownership/update/safety gate was executed through this native host",
+  "limitations": [
+    "Installed compiled omp binary18.16.0 could not resolve @temporalio/common inside Temporal worker thread; NODE_PATH did not fix it. Passing host is explicitly npm OMP18.16.0 plus Bun1.4.4.",
+    "System Bun1.4.2 is below npm host minimum1.4.4; private exact runtime is required.",
+    "Synchronous task overlay is required for this minimal tool_result receipt contract. Prior async spawn acknowledgment correctly failed; async completion hooks are unproven.",
+    "Context compaction, reload, crash/restart recovery, ownership/deduplication, authorization and update gates remain unexercised.",
+    "Private credential/config snapshots are ignored and not published; main native user host was not terminated.",
+    "Only bound runtime smoke and preparation were run, no broad build/test/lint or prior-proof rerun."
+  ],
+  "eventsPath": "poc/temporal-omp/omp/events.jsonl"
+}

@@ -1,0 +1,18 @@
+{
+  "result": "passed",
+  "workflowId": "artifact-update-1793841003373",
+  "runId": "01a1a941-9c6e-7912-b90f-d81387489385",
+  "evidenceRoot": "/home/shared/harness/a4s/poc/temporal-omp/update/evidence/artifact-update-1793841003373",
+  "actualOldImplementation": "v1-sum => 10",
+  "actualNewImplementation": "v2-sum-of-squares => 38",
+  "compatibleContinuation": "New workflow source replayed the same live execution while the old activity remained in flight",
+  "rejectedOldResult": "superseded-attempt",
+  "successorAccepted": true,
+  "historyEvents": 21,
+  "limitations": [
+    "Not native OMP extension reload or turn/context continuation.",
+    "Explicit signal changes experiment attempt authority; not wired to SafetyProbe receipts.",
+    "Explicit separate activity queues route artifacts; not Temporal server Worker Deployment Versioning.",
+    "Compatible source change only; arbitrary incompatible workflow updates require a separate gate."
+  ]
+}

@@ -1,0 +1,253 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-11-05T01:08:00.928Z",
+  "scenario": "safety-real-git-reconciliation",
+  "result": "passed",
+  "runtime": "v26.13.0",
+  "command": "node poc/temporal-omp/safety/scenario.ts",
+  "isolatedRepository": "/tmp/temporal-omp-safety-Gu3IcY/work",
+  "localBareRemote": "/tmp/temporal-omp-safety-Gu3IcY/remote.git",
+  "bindingKey": "[\"safety-mandate\",\"git-effect\",\"push\",1,\"994d8c9fed51d2734591b784a85ce84cf485e217\",1]",
+  "sourceSha256": {
+    "index.ts": "3e75b9229a0f4891d616699e25998b6bb4cbad2e4d24655aa7503524185df10c",
+    "scenario.ts": "c630034f048ac2a302ed7fb502428596242a0735438ee760d36c41524ba6c533",
+    "lost-result-worker.ts": "716be04498045ad3fe95670b5ae1371cc14841063aae37e57e180997201b1d7d"
+  },
+  "observations": [
+    {
+      "scenario": "lost-result-after-real-commit-and-push",
+      "result": "passed",
+      "workerExit": 73,
+      "recovery": {
+        "state": "observed-complete",
+        "evidence": {
+          "kind": "git-push",
+          "binding": {
+            "mandateId": "safety-mandate",
+            "itemId": "git-effect",
+            "stage": "push",
+            "attempt": 1,
+            "revision": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "generation": 1
+          },
+          "observedAt": "2026-11-05T01:08:00.313Z",
+          "commitSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "localSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "remoteSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "ref": "refs/heads/main",
+          "clean": true,
+          "branchMatches": true
+        }
+      },
+      "retry": {
+        "state": "unknown"
+      },
+      "repeatedOperations": 0,
+      "commitCount": 1
+    },
+    {
+      "scenario": "completion-flag-not-authority",
+      "result": "passed",
+      "completionFlag": false,
+      "validation": {
+        "accepted": true,
+        "receipt": {
+          "schemaVersion": 1,
+          "status": "completed",
+          "binding": {
+            "mandateId": "safety-mandate",
+            "itemId": "git-effect",
+            "stage": "push",
+            "attempt": 1,
+            "revision": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "generation": 1
+          },
+          "completion": false,
+          "evidence": {
+            "kind": "git-push",
+            "commitSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "remoteSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "ref": "refs/heads/main"
+          }
+        }
+      }
+    },
+    {
+      "scenario": "malformed-output",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "malformed-json"
+      }
+    },
+    {
+      "scenario": "schema-mismatch",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "schema-or-status-mismatch"
+      }
+    },
+    {
+      "scenario": "status-mismatch",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "schema-or-status-mismatch"
+      }
+    },
+    {
+      "scenario": "false-completion",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "independent-evidence-not-complete"
+      }
+    },
+    {
+      "scenario": "wrong-sha",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-sha-or-ref"
+      }
+    },
+    {
+      "scenario": "wrong-evidence-binding",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "independent-evidence-not-complete"
+      }
+    },
+    {
+      "scenario": "stale-generation-late-result",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "stale-or-invalid-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-mandateId",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-itemId",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-stage",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-attempt",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-revision",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "wrong-binding-generation",
+      "result": "passed",
+      "validation": {
+        "accepted": false,
+        "reason": "wrong-binding"
+      }
+    },
+    {
+      "scenario": "changed-local-state-blocks",
+      "result": "passed",
+      "reconciliation": {
+        "state": "blocked",
+        "reason": "changed-git-state",
+        "evidence": {
+          "kind": "git-push",
+          "binding": {
+            "mandateId": "safety-mandate",
+            "itemId": "git-effect",
+            "stage": "push",
+            "attempt": 1,
+            "revision": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "generation": 1
+          },
+          "observedAt": "2026-11-05T01:08:00.486Z",
+          "commitSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "localSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "remoteSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "ref": "refs/heads/main",
+          "clean": false,
+          "branchMatches": true
+        }
+      }
+    },
+    {
+      "scenario": "changed-remote-state-blocks",
+      "result": "passed",
+      "reconciliation": {
+        "state": "blocked",
+        "reason": "changed-git-state",
+        "evidence": {
+          "kind": "git-push",
+          "binding": {
+            "mandateId": "safety-mandate",
+            "itemId": "git-effect",
+            "stage": "push",
+            "attempt": 1,
+            "revision": "994d8c9fed51d2734591b784a85ce84cf485e217",
+            "generation": 1
+          },
+          "observedAt": "2026-11-05T01:08:00.798Z",
+          "commitSha": "994d8c9fed51d2734591b784a85ce84cf485e217",
+          "localSha": "cd541a826d1a45cd12ffbd12ff6739917785fbc2",
+          "remoteSha": "cd541a826d1a45cd12ffbd12ff6739917785fbc2",
+          "ref": "refs/heads/main",
+          "clean": true,
+          "branchMatches": true
+        }
+      }
+    },
+    {
+      "scenario": "unresolvable-state-blocks",
+      "result": "passed",
+      "reconciliation": {
+        "state": "blocked",
+        "reason": "unresolvable-git-state: Error: Command failed: git -C /tmp/temporal-omp-safety-Gu3IcY/work ls-remote --refs --exit-code /tmp/temporal-omp-safety-Gu3IcY/missing.git refs/heads/main\nfatal: '/tmp/temporal-omp-safety-Gu3IcY/missing.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
+      }
+    },
+    {
+      "scenario": "stale-generation-late-effect-rejected-before-dispatch",
+      "result": "passed",
+      "lateDispatches": 0
+    }
+  ],
+  "limitations": [
+    "Single-host local-filesystem probe; no Temporal server, OMP runtime or runtime crash recovery exercised.",
+    "Worker exits deliberately after actual push but before a result; not a power loss or filesystem durability test.",
+    "Generation fence checks before dispatch only; cannot retract an in-flight external effect or close the check-to-dispatch race.",
+    "Trusted caller must obtain current generation from its authority and atomically gate final acceptance there.",
+    "Git observer is read-only and point-in-time; state may change after observation. Bare remote is local, not hosted GitHub.",
+    "Claims assume trusted local filesystem and are retained. No distributed consensus or fsync power-loss guarantee."
+  ]
+}

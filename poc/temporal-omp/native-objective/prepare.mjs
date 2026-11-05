@@ -1,0 +1,10 @@
+import { mkdirSync, copyFileSync, writeFileSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+const root = import.meta.dir;
+mkdirSync(join(root, '.runtime'), { recursive: true, mode: 0o700 });
+for (const name of ['config.yml', 'models.yml', 'agent.db']) copyFileSync(join(root, '../omp/.runtime', name), join(root, '.runtime', name));
+const require = createRequire(join(root, '../objective/package.json'));
+const { bundleWorkflowCode } = require('@temporalio/worker');
+const bundle = await bundleWorkflowCode({ workflowsPath: join(root, 'workflow.ts'), webpackConfigHook: config => { config.resolve.modules.push(realpathSync(join(root, '../objective/node_modules'))); return config; } });
+writeFileSync(join(root, 'workflow-bundle.js'), bundle.code);

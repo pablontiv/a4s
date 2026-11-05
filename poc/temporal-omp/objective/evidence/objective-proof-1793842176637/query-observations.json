@@ -1,0 +1,1074 @@
+[
+  {
+    "observedAt": "2026-11-05T01:29:45.329Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 1,
+      "observedAt": "2026-11-05T01:29:44.762Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.428Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.529Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.620Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.709Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.806Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.895Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:45.993Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 2,
+      "observedAt": "2026-11-05T01:29:45.313Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "pending",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.104Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.199Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.283Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.364Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.452Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.536Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.620Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 4,
+      "observedAt": "2026-11-05T01:29:46.041Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "running",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.728Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "running",
+      "sequence": 5,
+      "observedAt": "2026-11-05T01:29:46.665Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "validate-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory-validation.json",
+            "digest": "bec3a6d9e91ad842fb6e2773213a4efa94612da58f9b303105f371c2bc9d0c6d"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  },
+  {
+    "observedAt": "2026-11-05T01:29:46.844Z",
+    "state": {
+      "mandateId": "objective-proof-1793842176637",
+      "status": "blocked",
+      "sequence": 6,
+      "observedAt": "2026-11-05T01:29:46.724Z",
+      "items": [
+        {
+          "id": "await-host-authorization",
+          "status": "blocked",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "await-host-authorization",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          }
+        },
+        {
+          "id": "inventory-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "inventory-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "inventory-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory.json",
+            "digest": "a6543248e0bfadec519124b5437f5a9ecbdadd237c384bb6e2c004d2c30466b1"
+          }
+        },
+        {
+          "id": "validate-evidence",
+          "status": "completed",
+          "binding": {
+            "mandateId": "objective-proof-1793842176637",
+            "itemId": "validate-evidence",
+            "stage": "execute",
+            "attempt": 1,
+            "revision": 1,
+            "generation": 1
+          },
+          "receipt": {
+            "binding": {
+              "mandateId": "objective-proof-1793842176637",
+              "itemId": "validate-evidence",
+              "stage": "execute",
+              "attempt": 1,
+              "revision": 1,
+              "generation": 1
+            },
+            "kind": "bootstrap_command_activity",
+            "nativeHostProof": false,
+            "artifact": "inventory-validation.json",
+            "digest": "bec3a6d9e91ad842fb6e2773213a4efa94612da58f9b303105f371c2bc9d0c6d"
+          }
+        }
+      ],
+      "blockers": [
+        {
+          "itemId": "await-host-authorization",
+          "name": "native-host-not-admitted",
+          "reason": "Native OMP host execution is outside this command bootstrap admission."
+        }
+      ]
+    }
+  }
+]

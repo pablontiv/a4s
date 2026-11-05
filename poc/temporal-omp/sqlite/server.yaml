@@ -1,0 +1,82 @@
+# Run with the private runtime directory as cwd; relative SQLite paths stay private.
+log:
+  stdout: true
+  level: warn
+persistence:
+  defaultStore: sqlite-default
+  visibilityStore: sqlite-visibility
+  numHistoryShards: 1
+  datastores:
+    sqlite-default:
+      sql:
+        pluginName: sqlite
+        databaseName: temporal-default.db
+        connectAddr: 127.0.0.1
+        connectProtocol: tcp
+        connectAttributes:
+          mode: rwc
+          setup: "true"
+          journal_mode: wal
+          busy_timeout: "10000"
+        maxConns: 1
+        maxIdleConns: 1
+    sqlite-visibility:
+      sql:
+        pluginName: sqlite
+        databaseName: temporal-visibility.db
+        connectAddr: 127.0.0.1
+        connectProtocol: tcp
+        connectAttributes:
+          mode: rwc
+          setup: "true"
+          journal_mode: wal
+          busy_timeout: "10000"
+        maxConns: 1
+        maxIdleConns: 1
+global:
+  membership:
+    maxJoinDuration: 30s
+    broadcastAddress: 127.0.0.1
+services:
+  frontend:
+    rpc:
+      grpcPort: 17233
+      membershipPort: 16933
+      bindOnLocalHost: true
+      httpPort: 17243
+  matching:
+    rpc:
+      grpcPort: 17235
+      membershipPort: 16935
+      bindOnLocalHost: true
+  history:
+    rpc:
+      grpcPort: 17234
+      membershipPort: 16934
+      bindOnLocalHost: true
+  worker:
+    rpc:
+      grpcPort: 17239
+      membershipPort: 16939
+      bindOnLocalHost: true
+clusterMetadata:
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: active
+  currentClusterName: active
+  clusterInformation:
+    active:
+      enabled: true
+      initialFailoverVersion: 1
+      rpcName: frontend
+      rpcAddress: 127.0.0.1:17233
+      httpAddress: 127.0.0.1:17243
+dcRedirectionPolicy:
+  policy: noop
+archival:
+  history:
+    state: disabled
+    enableRead: false
+  visibility:
+    state: disabled
+    enableRead: false

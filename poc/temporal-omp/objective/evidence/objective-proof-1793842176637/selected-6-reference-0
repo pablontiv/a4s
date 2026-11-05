@@ -1,0 +1,25 @@
+{
+  "address": "127.0.0.1:17233",
+  "namespace": "default",
+  "workflowId": "artifact-update-1793841081431",
+  "workflowQueue": "artifact-update-1793841081431-workflow",
+  "hashes": {
+    "runner.mjs": "6769e741d03bd46acd2fd684a0cad651e8f6b557a8ef1064789ca74ee77377ff",
+    "version-binding.ts": "06737ab95ca5d2c735bda1d8ad1edd2f095ede3676acc5275713bdbb01b31199",
+    "workflow.ts": "19d1817c2ec5c79aca936f1cf4452a5b6a1a9d00bc4ab1a1588835e9e854089a",
+    "workflow-v1.ts": "b49173be95434fc1693ed4ea5a8753fa810976f1b68cf675be06072a9362299f",
+    "workflow-v2.ts": "3aaa3d05cd847c8d2ecd8cc121448f2a90efa73223edfb8959a440b6c0d2a924",
+    "worker-v1.mjs": "4aea81d29da4528d9446a8f6f3098414b5676d3e4b9e263cc528fc619c655c80",
+    "worker-v2.mjs": "0100aaafbf184f80118857aaf75b017435d4cfa0f61fbdde435fba6a7e416d69",
+    "workflow-v1.bundle.js": "faafc646ac5e62d6ffb484f1a7208472bf550180cc62ad5299d6936e27eec923",
+    "workflow-v2.bundle.js": "efadbdd16e4656951e8a4834d1bae46a6cc28ff50fe6efeaf5b567692f79845d"
+  },
+  "sdk": {
+    "client": "1.25.0",
+    "worker": "1.25.0",
+    "workflow": "1.25.0",
+    "common": "1.25.0"
+  },
+  "bindingScope": "Isolated update experiment, not SafetyProbe acceptance binding",
+  "nativeOMPReloadProven": false
+}

@@ -1,0 +1,12 @@
+{
+  "name": "temporal-omp-objective-proof",
+  "private": true,
+  "type": "module",
+  "scripts": { "proof": "node runner.mjs" },
+  "dependencies": {
+    "@temporalio/client": "1.25.0",
+    "@temporalio/worker": "1.25.0",
+    "@temporalio/workflow": "1.25.0",
+    "@temporalio/common": "1.25.0"
+  }
+}

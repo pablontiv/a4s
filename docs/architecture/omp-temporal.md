@@ -57,11 +57,14 @@ executable scheduled wait, or a named external blocker. Idle is never completion
 
 ## Baseline evidence (step 2, done)
 
-The base tests ran on the local branch `architecture/temporal-omp`. Their code and
-evidence live, **uncommitted**, under `poc/temporal-omp/` in that working tree
-(`/home/shared/harness/a4s`), indexed by `poc/temporal-omp/evidence-index.json`.
-The previous long-form contract is `docs/architecture/execution-architecture.md`
-in that same working tree.
+The base tests' code and retained evidence are in
+[`poc/temporal-omp/`](../../poc/temporal-omp/README.md), indexed by
+[`evidence-index.json`](../../poc/temporal-omp/evidence-index.json). `node_modules`
+is not committed: only `objective/` has a lockfile, and `update/` reused it through a
+symlink. The detailed normative
+contract (mandate, item states, reconciliation, gates, acceptance scenarios) is
+[execution-architecture.md](execution-architecture.md); where its branch and
+roadmap sections differ from this document, this document wins.
 
 | Slice | Observed | Open (becomes backlog, not more probes) |
 | --- | --- | --- |

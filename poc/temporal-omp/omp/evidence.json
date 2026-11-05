@@ -1,0 +1,119 @@
+{
+  "observedAt": "2026-11-05T04:42:59.224Z",
+  "scenario": "compiled-interactive-native-main-task-receipt",
+  "result": "passed",
+  "scope": "Official compiled interactive OMP -> embedded Temporal worker -> nextTurn activity request -> main native task -> correlated tool_result -> completed Temporal workflow",
+  "command": "bash poc/temporal-omp/omp/launch.sh",
+  "host": {
+    "binary": "/home/pones/.local/share/tern/omp/bin/omp",
+    "sha256": "6498ed785bab00d2926e0387e0ec02362d6d45f1c3d0d1b57c1618b7f95c9264",
+    "cwd": "/home/shared/harness/a4s/poc/temporal-omp/omp/.runtime/compiled-cwd",
+    "nodePathUnset": true
+  },
+  "interactive": {
+    "pty": true,
+    "print": false,
+    "sessionId": "01a1aa04-1394-738a-8afa-790553872714",
+    "hasUI": true,
+    "activeTools": [
+      "task"
+    ],
+    "terminalMarkers": [
+      "NATIVE_HOST_WORKFLOW_COMPLETED",
+      "NATIVE_HOST_DONE"
+    ]
+  },
+  "versions": {
+    "omp": "18.16.0",
+    "hostDistribution": "official-compiled",
+    "bun": "1.4.4",
+    "buildBun": "1.4.4",
+    "temporalSdk": "1.25.0",
+    "temporalServer": "1.32.2"
+  },
+  "temporal": {
+    "address": "127.0.0.1:17233",
+    "namespace": "default",
+    "debugMode": false,
+    "workflowId": "native-host-3aecfa50-f891-4271-98a7-f468beccf7ec",
+    "receiptId": "native-receipt-4afed631-1953-4074-b430-6234c74e2bc4"
+  },
+  "worker": {
+    "type": "worker_started",
+    "at": "2026-11-05T04:42:48.199Z",
+    "taskQueue": "native-host-adef8f9c-8ed2-4c88-91ef-8b7f2704bd97",
+    "debugMode": false
+  },
+  "request": {
+    "type": "activity_request",
+    "at": "2026-11-05T04:42:49.637Z",
+    "receiptId": "native-receipt-4afed631-1953-4074-b430-6234c74e2bc4",
+    "sessionId": "01a1aa04-1394-738a-8afa-790553872714",
+    "deliverAs": "nextTurn"
+  },
+  "receipt": {
+    "type": "native_task_result",
+    "at": "2026-11-05T04:42:59.056Z",
+    "receiptId": "native-receipt-4afed631-1953-4074-b430-6234c74e2bc4",
+    "toolCallId": "call_CbD0mTin7iSfyIsJuGHUbV9o",
+    "isError": false,
+    "inputSha256": "0c19094251b681cf1664c9a98baadacbf464ec9e1e60dce9ae3fa228ddf87b5c",
+    "resultSha256": "a568f050e2ee2b6f9b497922935143104692607d9ac1747d01d525e856d6531e",
+    "markerObserved": true
+  },
+  "completed": {
+    "type": "workflow_completed",
+    "at": "2026-11-05T04:42:59.224Z",
+    "workflowId": "native-host-3aecfa50-f891-4271-98a7-f468beccf7ec",
+    "result": {
+      "receiptId": "native-receipt-4afed631-1953-4074-b430-6234c74e2bc4",
+      "toolCallId": "call_CbD0mTin7iSfyIsJuGHUbV9o",
+      "resultSha256": "a568f050e2ee2b6f9b497922935143104692607d9ac1747d01d525e856d6531e"
+    }
+  },
+  "shutdown": {
+    "type": "session_shutdown",
+    "at": "2026-11-05T04:43:33.723Z"
+  },
+  "sourceSha256": {
+    "build.ts": "603a21b69e560786c1e09351428f77bd140d9b35f54887e6c1950f8175a6cd8b",
+    "runtime-paths.ts": "fb9fec052730ca1cda992fa598b80ba6105190b32a0c7364ecbcc7fadfd2b380",
+    "extension.ts": "d17dcd12dd280f1bfb51ec25c9fbb55c92a78a7294febfcee62c9f81580776ce",
+    "workflow.ts": "cf9063274877e08b4594a3549bcccf7942b4be0ea387d974b59dc56f77c21c06",
+    "workflow-bundle.js": "e64c16a77ff78167aac6278e929e0ef210801ae935b2630b57ba2fbfcc483486",
+    "prepare.mjs": "dc308b8adcbeea19bbd4785bc3852a974d6413ce62037eb0f11769f801c9b3de",
+    "package.json": "32a1cfdc7b4da192a58e2031b80ff2704e24cca9af70968de675b230dc0b6c85",
+    "../objective/package-lock.json": "a48d5c767a50b5a7b8b248278e10a9906c62cfe71cbf27f95f29e3ec295a49af",
+    "launch.sh": "35918f8eaf6ae20899fa903abd98b1ab36ead4157137498d91790c53d08062d7",
+    "smoke-config.yml": "ec5e5b13420588478d3e925cddf301847f35d30d47433d8020ce15b32cf1f9d9",
+    "summarize.mjs": "0ebc95f694bee70ce4115ddd1a1f221ad40a2dff3e3fecfaaebdee2a6cb9bd68"
+  },
+  "sdkInputSha256": {
+    "@temporalio/worker/lib/workflow/workflow-worker-thread.js": "595b576d40f53334cb4316778f5e45e8e989f7be35ad26daf91f06d224e5c3df",
+    "@temporalio/worker/lib/workflow/bundler.js": "8b9a95a64d21d6b1d38aafcb62cc87f7177de08b28e6d350119ba0506a732337",
+    "@temporalio/worker/lib/workflow/threaded-vm.js": "104da20947ddc5523d7f3d9aeeba9b049e7f49a2df81d45baf8987abd5e521f7",
+    "@temporalio/core-bridge/common.js": "53f73f76fd90eaf6b227a1f0396f6cc8984d1b3c20eb37e3accfe5d83d1dd3c2",
+    "source-map/lib/read-wasm.js": "26bd15735c12fd5d2ca0dd7688a1fe645703590d7ec58dbed270a2823523d348"
+  },
+  "deployedSha256": {
+    "extension.js": "6099d7d34fee6b5e0c5670e5aa8d31b95ba4bdea2a91fbce7e0d5185cf2fe602",
+    "workflow-worker-thread.js": "2924a17a9a29a9f80408e64ccc4daa27453bbf0c655ecedfa2316ca266ec0b3e",
+    "workflow-bundle.js": "e64c16a77ff78167aac6278e929e0ef210801ae935b2630b57ba2fbfcc483486",
+    "mappings.wasm": "37cefcf2a41eb27127de929980441657b7443c3fecfe7adeb69b1eb2e45e2abe",
+    "releases/x86_64-unknown-linux-gnu/index.node": "c302594f866af3ea7c4aaf572fe0f0de887f8bbd815a5aa52d7f8591da438a33",
+    "build-manifest.json": "f62213047435643415db4c37840abf5fafff0ea995e23c590eea053fe86b202d"
+  },
+  "gateInteroperability": "Not claimed; no ownership/update/safety gate was executed through this native host",
+  "limitations": [
+    "Historical unbundled compiled host failed to resolve @temporalio/common in its workflow worker thread; NODE_PATH did not fix it. Prior npm-host pass and failures remain in events.jsonl and README.md. This pass uses two self-contained bundles.",
+    "SDK 1.25.0 source-rewrite needles are a build dependency; changing the SDK requires reviewing bundler stubbing and rewritten thread/addon/WASM lookups.",
+    "Native addon deployment is platform-specific: x86_64-unknown-linux-gnu only.",
+    "Remaining hardcoded build paths in @grpc/grpc-js channelz/orca proto loading and Temporal debug-replayer worker-thread are not exercised or made portable by this smoke.",
+    "Synchronous task overlay is required for this tool_result receipt contract; async completion hooks remain unproven.",
+    "v8.promiseHooks.createHook is unavailable in this embedded runtime; Temporal reports stack trace collection disabled.",
+    "Context compaction, reload, crash/restart recovery, ownership/deduplication, authorization and update gates remain unexercised.",
+    "Private credential/config snapshots are ignored and unpublished; original user host and existing Temporal server were not stopped.",
+    "Only the targeted deployment build, interactive smoke and evidence reconciliation were run; no broad build/test/lint or prior-proof rerun."
+  ],
+  "eventsPath": "poc/temporal-omp/omp/events.jsonl"
+}

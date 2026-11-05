@@ -1,0 +1,8 @@
+{
+  "name": "temporal-omp-native-host-proof",
+  "private": true,
+  "type": "module",
+  "engines": { "bun": ">=1.4.4" },
+  "dependencies": { "@oh-my-pi/pi-coding-agent": "18.16.0" },
+  "scripts": { "prepare:proof": "bun prepare.mjs" }
+}

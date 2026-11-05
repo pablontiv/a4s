@@ -1,0 +1,54 @@
+{
+  "stage": "S4-recovery",
+  "status": "pass",
+  "workflowIds": [
+    "native-objective-native-succession-S4-recovery-0506"
+  ],
+  "checks": [
+    {
+      "name": "all eligible completed or named blocker",
+      "passed": true
+    },
+    {
+      "name": "single workflow admission",
+      "passed": true
+    },
+    {
+      "name": "two native receipts",
+      "passed": true
+    },
+    {
+      "name": "one accepted receipt per full binding",
+      "passed": true
+    },
+    {
+      "name": "one send per full binding",
+      "passed": true
+    },
+    {
+      "name": "binding exact native receipts",
+      "passed": true
+    },
+    {
+      "name": "automatic successor after predecessor",
+      "passed": true
+    },
+    {
+      "name": "independent command progresses during native handoff",
+      "passed": true
+    },
+    {
+      "name": "clean host exit",
+      "passed": true
+    },
+    {
+      "name": "new extension instance attaches",
+      "passed": true
+    },
+    {
+      "name": "pending handoff recovered before first result",
+      "passed": true
+    }
+  ],
+  "eventCount": 48
+}

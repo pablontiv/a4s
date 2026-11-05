@@ -1,0 +1,32 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+const stage = process.argv[2];
+const root = resolve(import.meta.dirname, 'evidence', stage);
+const events = readFileSync(resolve(root, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+const checks = [];
+const check = (name, passed) => checks.push({ name, passed: !!passed });
+const select = type => events.filter(event => event.type === type);
+const first = type => events.findIndex(event => event.type === type);
+const completed = select('workflow_completed').at(-1)?.result;
+check('all eligible completed or named blocker', completed && completed.items.every(item => item.status === 'completed' || item.status === 'blocked' && !!item.blocker));
+check('single workflow admission', select('workflow_started').length === 1);
+const receipts = select('native_task_result');
+check('two native receipts', receipts.length === 2);
+check('one accepted receipt per full binding', new Set(receipts.map(event => JSON.stringify(event.binding))).size === receipts.length);
+check('one send per full binding', select('handoff_sent').length === 2 && new Set(select('handoff_sent').map(event => JSON.stringify(event.binding))).size === 2);
+check('binding exact native receipts', receipts.every(event => event.receipt.kind === 'native_host_activity' && event.receipt.nativeHostProof === true && JSON.stringify(event.binding) === JSON.stringify(event.receipt.binding)));
+const predecessor = events.findIndex(event => event.type === 'native_task_result' && event.binding.itemId === 'native-first');
+const successor = events.findIndex(event => event.type === 'activity_request' && event.binding.itemId === 'native-successor');
+check('automatic successor after predecessor', predecessor >= 0 && successor > predecessor);
+check('independent command progresses during native handoff', first('command_completed') > first('activity_request') && first('command_completed') < predecessor);
+check('clean host exit', select('host_exit').length > 0 && select('host_exit').every(event => event.code === 0) && select('session_shutdown').length > 0);
+if (stage === 'S2') check('turn end in flight', events.some((event, index) => event.type === 'turn_end' && index > first('activity_request') && index < predecessor));
+if (stage.startsWith('S3')) check('context rotated in flight', first('session_compact') > first('activity_request') && first('session_compact') < predecessor);
+if (stage.startsWith('S4')) {
+  check('new extension instance attaches', new Set(select('session_start').map(event => event.instanceId)).size >= 2 && select('workflow_attached').length >= 1);
+  check('pending handoff recovered before first result', first('activity_recovered') > first('activity_request') && first('activity_recovered') < predecessor);
+}
+const result = { stage, status: checks.every(check => check.passed) ? 'pass' : 'fail', workflowIds: [...new Set(select('session_start').map(event => event.workflowId))], checks, eventCount: events.length };
+writeFileSync(resolve(root, 'summary.json'), JSON.stringify(result, null, 2) + '\n');
+console.log(JSON.stringify(result, null, 2));
+process.exitCode = result.status === 'pass' ? 0 : 1;

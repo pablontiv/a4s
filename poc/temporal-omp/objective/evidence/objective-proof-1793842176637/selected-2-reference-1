@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "input.json",
+      "schema": "objective-input"
+    },
+    {
+      "path": "admission.json",
+      "schema": "admission"
+    },
+    {
+      "path": "workflows.ts",
+      "schema": "source"
+    },
+    {
+      "path": "activities.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "commands.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "runner.mjs",
+      "schema": "source"
+    },
+    {
+      "path": "package.json",
+      "schema": "source"
+    },
+    {
+      "path": "package-lock.json",
+      "schema": "source"
+    },
+    {
+      "path": "selected-0-safety.json",
+      "schema": "retained-evidence",
+      "acceptance": "accepted",
+      "name": "safety",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/evidence/latest.json",
+      "expectedScenario": "safety-real-git-reconciliation"
+    },
+    {
+      "path": "selected-0-reference-0",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/index.ts",
+      "name": "safety-reference-0"
+    },
+    {
+      "path": "selected-0-reference-1",
+      "schema": "source",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/scenario.ts",
+      "name": "safety-reference-1"
+    }
+  ]
+}

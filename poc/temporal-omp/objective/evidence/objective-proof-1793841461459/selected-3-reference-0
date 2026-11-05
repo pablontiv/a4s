@@ -1,0 +1,123 @@
+import { DatabaseSync } from 'node:sqlite';
+
+/** Single-host authority. The DB must be on a local filesystem with SQLite locks/fsync. */
+export class LeaseAuthority {
+  constructor(path) {
+    this.db = new DatabaseSync(path);
+    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS leases (
+        mandate TEXT PRIMARY KEY, generation INTEGER NOT NULL, owner TEXT NOT NULL,
+        expires INTEGER NOT NULL, released INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS attempts (
+        mandate TEXT NOT NULL, item TEXT NOT NULL, attempt INTEGER NOT NULL,
+        generation INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(mandate,item));
+      CREATE TABLE IF NOT EXISTS inbox (
+        id INTEGER PRIMARY KEY, lease TEXT NOT NULL, binding TEXT NOT NULL, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS accepted (
+        id INTEGER PRIMARY KEY, mandate TEXT NOT NULL, generation INTEGER NOT NULL,
+        kind TEXT NOT NULL, binding TEXT NOT NULL, payload TEXT NOT NULL);`);
+  }
+  transaction(fn) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = fn(); this.db.exec('COMMIT'); return result; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  current(mandateId) {
+    const row = this.db.prepare('SELECT * FROM leases WHERE mandate=?').get(mandateId);
+    return row ? { mandateId: row.mandate, generation: row.generation, ownerId: row.owner,
+      expiresAt: row.expires, released: Boolean(row.released) } : null;
+  }
+  acquire(mandateId, ownerId, ttlMs) {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('invalid-ttl');
+    return this.transaction(() => {
+      const old = this.current(mandateId);
+      if (old && !old.released && old.expiresAt > Date.now()) throw new Error('lease-busy');
+      const generation = (old?.generation ?? 0) + 1;
+      if (!Number.isSafeInteger(generation)) throw new Error('generation-exhausted');
+      this.db.prepare(`INSERT INTO leases VALUES (?,?,?,?,0) ON CONFLICT(mandate)
+        DO UPDATE SET generation=excluded.generation,owner=excluded.owner,expires=excluded.expires,released=0`)
+        .run(mandateId, generation, ownerId, Date.now() + ttlMs);
+      return this.current(mandateId);
+    });
+  }
+  assertCurrent(lease) {
+    const current = this.current(lease.mandateId);
+    if (!current || current.released || current.expiresAt <= Date.now() ||
+      current.generation !== lease.generation || current.ownerId !== lease.ownerId) {
+      throw new Error('stale-lease');
+    }
+    return current;
+  }
+  renew(lease, ttlMs) {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('invalid-ttl');
+    return this.transaction(() => {
+      this.assertCurrent(lease);
+      this.db.prepare('UPDATE leases SET expires=? WHERE mandate=?').run(Date.now() + ttlMs, lease.mandateId);
+      return this.current(lease.mandateId);
+    });
+  }
+  release(lease) {
+    return this.transaction(() => {
+      this.assertCurrent(lease);
+      this.db.prepare('UPDATE leases SET released=1 WHERE mandate=?').run(lease.mandateId);
+    });
+  }
+  beginAttempt(lease, itemId, maxAttempts) {
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1) throw new Error('invalid-attempt-bound');
+    return this.transaction(() => {
+      this.assertCurrent(lease);
+      const old = this.db.prepare('SELECT * FROM attempts WHERE mandate=? AND item=?').get(lease.mandateId, itemId);
+      if (old?.state === 'done') return { state: 'done', attempt: old.attempt };
+      if (old?.state === 'running' && old.generation === lease.generation) throw new Error('attempt-in-flight');
+      if ((old?.attempt ?? 0) >= maxAttempts) return { state: 'exhausted', attempt: old.attempt };
+      const attempt = (old?.attempt ?? 0) + 1;
+      this.db.prepare(`INSERT INTO attempts VALUES (?,?,?,?,'running') ON CONFLICT(mandate,item)
+        DO UPDATE SET attempt=excluded.attempt,generation=excluded.generation,state='running'`)
+        .run(lease.mandateId, itemId, attempt, lease.generation);
+      return { state: 'running', attempt };
+    });
+  }
+  deliver(lease, binding, payload) {
+    // Untrusted late delivery is intentionally allowed into the inbox, never into accepted effects.
+    this.db.prepare('INSERT INTO inbox(lease,binding,payload) VALUES (?,?,?)')
+      .run(JSON.stringify(lease), JSON.stringify(binding), JSON.stringify(payload));
+  }
+  commit(lease, kind, binding, payload, validate) {
+    return this.transaction(() => {
+      const current = this.assertCurrent(lease);
+      if (!['result', 'effect'].includes(kind)) throw new Error('invalid-kind');
+      if (binding.mandateId !== lease.mandateId || binding.generation !== lease.generation) throw new Error('stale-binding');
+      // A trusted synchronous validator may reject under the acquisition write lock.
+      // Returning anything (including a Promise) is forbidden: never await inside this transaction.
+      if (validate && validate(current) !== undefined) throw new Error('validator-must-return-void');
+      this.assertCurrent(lease);
+      const storedBinding = JSON.stringify({ mandateId: binding.mandateId, itemId: binding.itemId,
+        stage: binding.stage, attempt: binding.attempt, revision: binding.revision, generation: binding.generation });
+      const storedPayload = JSON.stringify(payload);
+      const previous = this.db.prepare(`SELECT payload FROM accepted WHERE mandate=? AND generation=?
+        AND kind=? AND binding=?`).all(lease.mandateId, lease.generation, kind, storedBinding);
+      if (previous.length) {
+        if (previous.some((row) => row.payload !== storedPayload)) throw new Error('conflicting-delivery');
+        return;
+      }
+      const attempt = this.db.prepare('SELECT * FROM attempts WHERE mandate=? AND item=?')
+        .get(lease.mandateId, binding.itemId);
+      if (!attempt || attempt.attempt !== binding.attempt || attempt.generation !== binding.generation || attempt.state !== 'running') {
+        throw new Error('stale-attempt');
+      }
+      this.db.prepare('INSERT INTO accepted(mandate,generation,kind,binding,payload) VALUES (?,?,?,?,?)')
+        .run(lease.mandateId, lease.generation, kind, storedBinding, storedPayload);
+    });
+  }
+  complete(lease, binding) {
+    return this.transaction(() => {
+      this.assertCurrent(lease);
+      if (binding.mandateId !== lease.mandateId) throw new Error('stale-binding');
+      const result = this.db.prepare(`UPDATE attempts SET state='done' WHERE mandate=? AND item=?
+        AND generation=? AND attempt=? AND state='running'`)
+        .run(lease.mandateId, binding.itemId, binding.generation, binding.attempt);
+      if (binding.generation !== lease.generation || result.changes !== 1) throw new Error('stale-attempt');
+    });
+  }
+  close() { this.db.close(); }
+}

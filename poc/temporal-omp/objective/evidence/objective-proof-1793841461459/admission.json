@@ -1,0 +1,9 @@
+{
+  "workflowId": "objective-proof-1793841461459",
+  "address": "127.0.0.1:17233",
+  "namespace": "default",
+  "admissions": 1,
+  "admittedAt": "2026-11-05T01:17:41.509Z",
+  "executionKind": "bootstrap_command_activity",
+  "nativeHostProof": false
+}

@@ -1,0 +1,27 @@
+{
+  "observedAt": "2026-11-05T01:07:49.617Z",
+  "scenario": "bounded-objective-independent-succession",
+  "result": "passed",
+  "workflowId": "objective-proof-1793840858158",
+  "runId": "01a1a93f-6726-7591-ab3c-9e1e4ef621d4",
+  "evidenceRoot": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793840858158",
+  "completed": [
+    "inventory-evidence",
+    "validate-evidence"
+  ],
+  "blockers": [
+    {
+      "itemId": "await-host-authorization",
+      "name": "native-host-not-admitted",
+      "reason": "Native OMP host execution is outside this command bootstrap admission."
+    }
+  ],
+  "historyEvents": 53,
+  "stateTransitions": 6,
+  "liveQueries": 16,
+  "nativeHostProof": false,
+  "executionKind": "bootstrap_command_activity",
+  "limitations": [
+    "Not an interactive OMP native host, turn/context continuity or reload proof."
+  ]
+}

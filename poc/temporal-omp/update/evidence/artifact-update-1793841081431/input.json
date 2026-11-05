@@ -1,0 +1,19 @@
+{
+  "old": {
+    "attempt": 1,
+    "generation": 1,
+    "workerArtifact": "4aea81d29da4528d9446a8f6f3098414b5676d3e4b9e263cc528fc619c655c80"
+  },
+  "next": {
+    "attempt": 2,
+    "generation": 2,
+    "workerArtifact": "0100aaafbf184f80118857aaf75b017435d4cfa0f61fbdde435fba6a7e416d69"
+  },
+  "oldQueue": "artifact-update-1793841081431-old",
+  "nextQueue": "artifact-update-1793841081431-new",
+  "values": [
+    2,
+    3,
+    5
+  ]
+}

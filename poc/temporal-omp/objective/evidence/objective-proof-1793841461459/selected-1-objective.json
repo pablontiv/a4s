@@ -1,0 +1,35 @@
+{
+  "observedAt": "2026-11-05T01:10:26.764Z",
+  "scenario": "bounded-objective-independent-succession",
+  "result": "passed",
+  "workflowId": "objective-proof-1793841014953",
+  "runId": "01a1a941-cc4a-700c-9475-e747411284fd",
+  "evidenceRoot": "/home/shared/harness/a4s/poc/temporal-omp/objective/evidence/objective-proof-1793841014953",
+  "completed": [
+    "inventory-evidence",
+    "validate-evidence"
+  ],
+  "blockers": [
+    {
+      "itemId": "await-host-authorization",
+      "name": "native-host-not-admitted",
+      "reason": "Native OMP host execution is outside this command bootstrap admission."
+    }
+  ],
+  "selectedEvidence": [
+    {
+      "name": "safety",
+      "scenario": "safety-real-git-reconciliation",
+      "originalPath": "/home/shared/harness/a4s/poc/temporal-omp/safety/evidence/latest.json"
+    }
+  ],
+  "historyEvents": 53,
+  "stateTransitions": 6,
+  "liveQueries": 17,
+  "nativeHostProof": false,
+  "executionKind": "bootstrap_command_activity",
+  "limitations": [
+    "Not an interactive OMP native host, turn/context continuity or reload proof.",
+    "Numeric binding revision is the objective experiment sequence, not the safety gate Git SHA; independent slice evidence is reviewed, not integrated gate execution."
+  ]
+}

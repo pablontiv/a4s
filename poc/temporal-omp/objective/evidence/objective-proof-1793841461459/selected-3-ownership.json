@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "runtime": "v26.13.0",
+  "sourceRevision": "dde6f442694efcbebb79deab8f944c61e575ec99",
+  "command": "node poc/temporal-omp/ownership/probe.mjs poc/temporal-omp/ownership/evidence.json",
+  "evidence": [
+    {
+      "observedAt": "2026-11-05T01:16:33.945Z",
+      "scenario": "owner-killed-with-live-child",
+      "result": {
+        "ownerPid": 60115,
+        "childPid": 60123,
+        "signal": "SIGKILL",
+        "priorGeneration": 1
+      },
+      "limitations": [
+        "Generic owned Node processes, not native OMP supervisor/session recovery.",
+        "Single-host SQLite local filesystem; wall-clock TTL requires stable host clock.",
+        "Effects proven are transactional accepted-effect records, not an atomic remote Git push fence.",
+        "No host power-loss or filesystem fault injection; SIGKILL process loss only."
+      ]
+    },
+    {
+      "observedAt": "2026-11-05T01:16:34.904Z",
+      "scenario": "replacement-rejects-late-result-and-effect",
+      "result": {
+        "generation": 2,
+        "attempt": 2,
+        "verdicts": {
+          "result": "stale-lease",
+          "effect": "stale-lease"
+        },
+        "accepted": [
+          {
+            "generation": 2,
+            "kind": "result"
+          },
+          {
+            "generation": 2,
+            "kind": "effect"
+          }
+        ]
+      },
+      "limitations": [
+        "Generic owned Node processes, not native OMP supervisor/session recovery.",
+        "Single-host SQLite local filesystem; wall-clock TTL requires stable host clock.",
+        "Effects proven are transactional accepted-effect records, not an atomic remote Git push fence.",
+        "No host power-loss or filesystem fault injection; SIGKILL process loss only."
+      ]
+    },
+    {
+      "observedAt": "2026-11-05T01:16:36.022Z",
+      "scenario": "normal-owner-exit-no-child-relaunch",
+      "result": {
+        "ownerExitCode": 0,
+        "recovery": {
+          "state": "done",
+          "attempt": 1
+        }
+      },
+      "limitations": [
+        "Generic owned Node processes, not native OMP supervisor/session recovery.",
+        "Single-host SQLite local filesystem; wall-clock TTL requires stable host clock.",
+        "Effects proven are transactional accepted-effect records, not an atomic remote Git push fence.",
+        "No host power-loss or filesystem fault injection; SIGKILL process loss only."
+      ]
+    },
+    {
+      "observedAt": "2026-11-05T01:16:36.028Z",
+      "scenario": "lost-child-recovery-attempt-bound",
+      "result": {
+        "state": "exhausted",
+        "attempt": 2
+      },
+      "limitations": [
+        "Generic owned Node processes, not native OMP supervisor/session recovery.",
+        "Single-host SQLite local filesystem; wall-clock TTL requires stable host clock.",
+        "Effects proven are transactional accepted-effect records, not an atomic remote Git push fence.",
+        "No host power-loss or filesystem fault injection; SIGKILL process loss only."
+      ]
+    },
+    {
+      "observedAt": "2026-11-05T01:16:36.034Z",
+      "scenario": "durable-generation-and-completion-after-reopen",
+      "result": {
+        "generation": 3,
+        "noRelaunch": true
+      },
+      "limitations": [
+        "Generic owned Node processes, not native OMP supervisor/session recovery.",
+        "Single-host SQLite local filesystem; wall-clock TTL requires stable host clock.",
+        "Effects proven are transactional accepted-effect records, not an atomic remote Git push fence.",
+        "No host power-loss or filesystem fault injection; SIGKILL process loss only."
+      ]
+    }
+  ]
+}

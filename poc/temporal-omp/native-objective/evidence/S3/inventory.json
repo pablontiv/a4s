@@ -1,0 +1,24 @@
+{
+  "kind": "evidence-inventory",
+  "observedAt": "2026-11-05T05:03:58.320Z",
+  "records": [
+    {
+      "path": "workflow.ts.txt",
+      "schema": "source",
+      "bytes": 2746,
+      "sha256": "2ac7a0d2be099c3b36fc491bf813ff910d623aabecb6a2dd3e6c32c783a0deab"
+    },
+    {
+      "path": "contracts.ts.txt",
+      "schema": "source",
+      "bytes": 1415,
+      "sha256": "328ea37d42352c68d9f886b0226707ff42bc7caac34e036dfb31454dec2eaa57"
+    },
+    {
+      "path": "extension.ts.txt",
+      "schema": "source",
+      "bytes": 7480,
+      "sha256": "35c1cbf44e51111f84b8dc7aaf9e4779974236ad715a6a26bf181e944fde8eea"
+    }
+  ]
+}

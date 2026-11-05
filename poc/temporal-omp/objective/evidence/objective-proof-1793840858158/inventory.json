@@ -1,0 +1,54 @@
+{
+  "kind": "evidence-inventory",
+  "observedAt": "2026-11-05T01:07:48.275Z",
+  "records": [
+    {
+      "path": "input.json",
+      "schema": "objective-input",
+      "bytes": 629,
+      "sha256": "f2c13a73ba393ec5c9dae9aeefc6ebdc8969290e62b2416c4eb2698a413b58cc"
+    },
+    {
+      "path": "admission.json",
+      "schema": "admission",
+      "bytes": 250,
+      "sha256": "330a30be166b72ecb606765018695f384934f4cb6dec747cd7fba9d4f5187556"
+    },
+    {
+      "path": "workflows.ts",
+      "schema": "source",
+      "bytes": 4467,
+      "sha256": "a4d089c42cb3ecc40cc147770e1d5f4701a91a2edda133fe429ff9d6c242c7b3"
+    },
+    {
+      "path": "activities.mjs",
+      "schema": "source",
+      "bytes": 2059,
+      "sha256": "aeb1c8fc480f61c67fe328f5fe77d85d22fc35a825c671c8877b1ec69743a1fd"
+    },
+    {
+      "path": "commands.mjs",
+      "schema": "source",
+      "bytes": 3396,
+      "sha256": "74a35a8813a9112f2c2689fdcf546ee3653238b633444128e38948efb51279ab"
+    },
+    {
+      "path": "runner.mjs",
+      "schema": "source",
+      "bytes": 6205,
+      "sha256": "f7432fbdffa3a5d4d567758e6e461cb11a3b98d8066698cfd4ee1e4e142e4399"
+    },
+    {
+      "path": "package.json",
+      "schema": "source",
+      "bytes": 299,
+      "sha256": "00d72d2a422bb4177400baafe91b72329ed1bf9c8af06c3923a1eb59c32b9e38"
+    },
+    {
+      "path": "package-lock.json",
+      "schema": "source",
+      "bytes": 77678,
+      "sha256": "a48d5c767a50b5a7b8b248278e10a9906c62cfe71cbf27f95f29e3ec295a49af"
+    }
+  ]
+}

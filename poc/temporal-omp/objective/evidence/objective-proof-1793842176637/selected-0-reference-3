@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BUN="${NATIVE_HOST_BUN:-$ROOT/.runtime/package/bin/bun}"
+CLI="${NATIVE_HOST_CLI:-$ROOT/.runtime/node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js}"
+exec env -u PI_SESSION_ID -u PI_SESSION_FILE -u PI_TOOL_CALL_ID \
+  NODE_PATH="$ROOT/../objective/node_modules" \
+  PI_CODING_AGENT_DIR="$ROOT/.runtime" NATIVE_HOST_EVENTS="$ROOT/events.jsonl" \
+  "$BUN" "$CLI" --cwd "$ROOT" --session-dir "$ROOT/.runtime/sessions" \
+  --no-extensions --no-skills --no-rules --no-context-files --no-lsp --no-title \
+  --tools task --model cliproxy/gpt-6.1-sol --config "$ROOT/smoke-config.yml" \
+  --extension "$ROOT/extension.ts" --max-time 120s --auto-approve \
+  'Bounded native Temporal smoke: wait for the extension request then invoke native task exactly as requested. No other tools, no file changes. If request has not arrived, reply READY. Stop after NATIVE_HOST_DONE.'

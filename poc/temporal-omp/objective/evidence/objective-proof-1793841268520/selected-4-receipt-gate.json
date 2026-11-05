@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "runtime": "v26.13.0",
+  "command": "node poc/temporal-omp/ownership/receipt-probe.mjs poc/temporal-omp/ownership/receipt-evidence.json",
+  "observedAt": "2026-11-05T01:12:40.069Z",
+  "scenario": "connected-local-receipt-gate",
+  "result": {
+    "staleLease": "rejected",
+    "staleReceipt": "wrong-binding",
+    "invalidEvidence": "independent-evidence-not-complete",
+    "rejectedRows": 0,
+    "acceptedRows": 1,
+    "acceptedGeneration": 2,
+    "attempt": 2,
+    "completionFlag": false,
+    "binding": {
+      "mandateId": "receipt-proof",
+      "itemId": "item-1",
+      "stage": "execute",
+      "attempt": 2,
+      "revision": "e033a42d2cf63c8d8649e4460153af125f5094fd",
+      "generation": 2
+    },
+    "gitEvidence": {
+      "kind": "git-push",
+      "binding": {
+        "mandateId": "receipt-proof",
+        "itemId": "item-1",
+        "stage": "execute",
+        "attempt": 2,
+        "revision": "e033a42d2cf63c8d8649e4460153af125f5094fd",
+        "generation": 2
+      },
+      "observedAt": "2026-11-05T01:12:40.005Z",
+      "commitSha": "e033a42d2cf63c8d8649e4460153af125f5094fd",
+      "localSha": "e033a42d2cf63c8d8649e4460153af125f5094fd",
+      "remoteSha": "e033a42d2cf63c8d8649e4460153af125f5094fd",
+      "ref": "refs/heads/proof",
+      "clean": true,
+      "branchMatches": true
+    }
+  },
+  "limitations": [
+    "Git observation occurs before SQLite transaction; not atomic Git plus SQLite.",
+    "Only local receipt acceptance is fenced; no distributed or exactly-once external effect claim.",
+    "Native OMP supervisor/session recovery is not exercised."
+  ]
+}

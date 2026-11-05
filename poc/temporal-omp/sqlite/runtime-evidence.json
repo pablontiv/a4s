@@ -1,0 +1,74 @@
+{
+  "scenario": "real-server-sqlite-graceful-restart",
+  "phase": "completed",
+  "result": "passed",
+  "observation": "Real activity completion, workflow history/result and completed visibility survived graceful server stop/restart without a probe worker",
+  "runtime": "official Temporal Server binary, not temporal CLI start-dev",
+  "version": "1.32.2",
+  "releaseUrl": "https://github.com/temporalio/temporal/releases/download/v1.32.2/temporal_1.32.2_linux_amd64.tar.gz",
+  "archiveSha256Expected": "6260f110b6853d2d7f8daa31793d1fac44096077e3b058dc3482de6ac50bc543",
+  "archiveSha256Observed": "6260f110b6853d2d7f8daa31793d1fac44096077e3b058dc3482de6ac50bc543",
+  "runtimeDirectory": "/tmp/a4s-temporal-sqlite.jcPWbdmy",
+  "runtimeDirectoryMode": "700",
+  "frontend": "127.0.0.1:17233",
+  "http": "127.0.0.1:17243",
+  "initialProcessId": 53943,
+  "restartedProcessId": 57795,
+  "restart": {
+    "stopSignal": "SIGTERM",
+    "initialExitCode": 0,
+    "stopObservedServerTimestamp": "2026-11-04T19:12:29.390-0600",
+    "sameRuntimeDirectory": true,
+    "databaseFilesCopiedOrDeleted": false,
+    "probeWorkerRunningDuringAfterRead": false,
+    "serviceStateAfterProof": "stopped after Main confirmed final native and Objective runs quiescent",
+    "finalStopSignal": "SIGTERM",
+    "finalExitCode": 0,
+    "finalStopObservedServerTimestamp": "2026-11-04T19:30:04.131-0600",
+    "privateDatabaseAndDownloadCacheRetained": true,
+    "sdkEvidence": "evidence.json"
+  },
+  "stores": {
+    "default": "temporal-default.db",
+    "visibility": "temporal-visibility.db",
+    "mode": "rwc",
+    "journalMode": "wal",
+    "maxConnectionsPerStore": 1
+  },
+  "observations": [
+    "No preinstalled temporal or temporal-server found by command -v.",
+    "Official release download succeeded and SHA256 matched release metadata.",
+    "temporal-server --help reported VERSION 1.32.2.",
+    "Actual SDK probe completed one activity and one workflow, observed 11 history events and completed visibility.",
+    "ss -ltnp showed all nine Temporal listeners on 127.0.0.1.",
+    "stat observed both SQLite files beneath a mode-700 private runtime directory.",
+    "Owned initial server process exited 0 after SIGTERM; shutdown logs included graceful_stop and internal service teardown errors.",
+    "Restarted real server using the same private databases and observed loopback frontend readiness.",
+    "After phase returned PASS with exactly equal workflow result, all 11 history event types, and completed visibility; no worker started."
+  ],
+  "commandsExecuted": [
+    "command -v temporal temporal-server curl tar node go sqlite3; uname -m; printenv TMPDIR",
+    "mktemp -d /tmp/a4s-temporal-sqlite.XXXXXXXX",
+    "curl -fL --retry 2 -o /tmp/a4s-temporal-sqlite.jcPWbdmy/server.tar.gz https://github.com/temporalio/temporal/releases/download/v1.32.2/temporal_1.32.2_linux_amd64.tar.gz",
+    "sha256sum /tmp/a4s-temporal-sqlite.jcPWbdmy/server.tar.gz && tar -xzf /tmp/a4s-temporal-sqlite.jcPWbdmy/server.tar.gz -C /tmp/a4s-temporal-sqlite.jcPWbdmy && file /tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-server",
+    "/tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-server --help && /tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-sql-tool --help",
+    "/tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-server --config-file /home/shared/harness/a4s/poc/temporal-omp/sqlite/server.yaml --allow-no-auth start",
+    "node poc/temporal-omp/sqlite/probe.cjs before poc/temporal-omp/sqlite/evidence.json",
+    "stat -c '%n %s bytes mode=%a' /tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-default.db /tmp/a4s-temporal-sqlite.jcPWbdmy/temporal-visibility.db /tmp/a4s-temporal-sqlite.jcPWbdmy && ss -ltnp",
+    "kill -TERM 53943",
+    "env TEMPORAL_SQLITE_RUNTIME=/tmp/a4s-temporal-sqlite.jcPWbdmy bash poc/temporal-omp/sqlite/runtime.sh start",
+    "node poc/temporal-omp/sqlite/probe.cjs after poc/temporal-omp/sqlite/evidence.json",
+    "kill -TERM 57795"
+  ],
+  "commandNotes": [
+    "Initial discovery exited 1 because TMPDIR was unset; installed tools reported curl, tar, node, go.",
+    "Archive checksum and extraction succeeded; the optional file utility was absent, so that combined command ended 127.",
+    "SDK worker bundling was part of actual workflow execution; no repository build, lint, or test suite ran.",
+    "Initial direct server launch inherited the shell umask; SQLite file modes were 644, protected by runtime directory mode 700. Reusable runtime.sh applies umask 077."
+  ],
+  "limitations": [
+    "Single host, single server process, graceful restart only.",
+    "No backup, restore, crash/power-loss durability, HA, load, upgrade, or production readiness claim.",
+    "Workflow binding is an independent experiment, not integrated safety-gate authorization."
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "pathBase": "repository-root",
+  "purpose": "Retained independent probe evidence and command_activity dogfood input; not an end-to-end acceptance gate",
+  "runtimeHandoff":{"state":"stopped","evidence":"poc/temporal-omp/sqlite/runtime-evidence.json","ownedProcessId":57795,"signal":"SIGTERM","exitCode":0,"privateDatabaseAndCacheRetained":true,"observedLocalRuntimeDirectory":"/tmp/a4s-temporal-sqlite.jcPWbdmy","restartProcedure":"poc/temporal-omp/sqlite/README.md","note":"No live endpoint promised at handoff; private temporary path is not a portable evidence dependency."},
+  "selectedPaths": [
+    {"name":"omp","path":"poc/temporal-omp/omp/evidence.json","expectedScenario":"interactive-native-main-task-receipt","references":["poc/temporal-omp/omp/events.jsonl","poc/temporal-omp/omp/extension.ts","poc/temporal-omp/omp/workflow.ts","poc/temporal-omp/omp/launch.sh"]},
+    {"name":"sqlite","path":"poc/temporal-omp/sqlite/evidence.json","expectedScenario":"real-server-sqlite-graceful-restart","references":["poc/temporal-omp/sqlite/runtime-evidence.json","poc/temporal-omp/sqlite/server.yaml","poc/temporal-omp/sqlite/probe.cjs","poc/temporal-omp/sqlite/workflows.cjs"]},
+    {"name":"objective","path":"poc/temporal-omp/objective/evidence/objective-proof-1793841014953/summary.json","expectedScenario":"bounded-objective-independent-succession","references":["poc/temporal-omp/objective/evidence/objective-proof-1793841014953/history.json","poc/temporal-omp/objective/evidence/objective-proof-1793841014953/evidence-manifest.json","poc/temporal-omp/objective/evidence/objective-proof-1793841014953/inventory-validation.json"]},
+    {"name":"safety","path":"poc/temporal-omp/safety/evidence/latest.json","expectedScenario":"safety-real-git-reconciliation","references":["poc/temporal-omp/safety/index.ts","poc/temporal-omp/safety/scenario.ts","poc/temporal-omp/safety/lost-result-worker.ts"]},
+    {"name":"ownership","path":"poc/temporal-omp/ownership/evidence.json","expectedScenario":"replacement-rejects-late-result-and-effect","references":["poc/temporal-omp/ownership/authority.mjs","poc/temporal-omp/ownership/process.mjs","poc/temporal-omp/ownership/probe.mjs"]},
+    {"name":"receipt-gate","path":"poc/temporal-omp/ownership/receipt-evidence.json","expectedScenario":"connected-local-receipt-gate","references":["poc/temporal-omp/ownership/receipt-gate.mjs","poc/temporal-omp/ownership/receipt-probe.mjs","poc/temporal-omp/safety/index.ts"]},
+    {"name":"update","path":"poc/temporal-omp/update/evidence/artifact-update-1793841081431/summary.json","expectedScenario":"temporal-compatible-artifact-update","references":["poc/temporal-omp/update/evidence/artifact-update-1793841081431/manifest.json","poc/temporal-omp/update/evidence/artifact-update-1793841081431/history.json"]}
+  ],
+  "slices": [
+    {
+      "name":"sqlite", "status":"passed-graceful-restart",
+      "evidence":["poc/temporal-omp/sqlite/evidence.json","poc/temporal-omp/sqlite/runtime-evidence.json"],
+      "commands":["node poc/temporal-omp/sqlite/probe.cjs before poc/temporal-omp/sqlite/evidence.json","TEMPORAL_SQLITE_RUNTIME=/tmp/a4s-temporal-sqlite.jcPWbdmy bash poc/temporal-omp/sqlite/runtime.sh start","node poc/temporal-omp/sqlite/probe.cjs after poc/temporal-omp/sqlite/evidence.json"],
+      "versions":{"server":"1.32.2","sdk":"1.25.0"},
+      "sourceEvidence":{"path":"poc/temporal-omp/sqlite/runtime-evidence.json","officialArchiveSha256":"6260f110b6853d2d7f8daa31793d1fac44096077e3b058dc3482de6ac50bc543"},
+      "result":"Passed actual official server graceful restart: same workflow/run result, 11 history events and completed visibility read after restart without a worker or activity re-execution. Exact binary/setup/restart commands retained in runtime-evidence.json; private runtime path in historical commands is not a portable evidence dependency.",
+      "limitations":["Single local process and graceful restart only.","No backup/restore, crash/power-loss, HA, load or productive systemd acceptance.","Numeric revision 1 is an independent experiment counter, not a Git gate SHA."]
+    },
+    {
+      "name":"omp", "status":"passed-minimal-compiled-interactive-host",
+      "evidence":["poc/temporal-omp/omp/evidence.json","poc/temporal-omp/omp/events.jsonl","poc/temporal-omp/omp/README.md"],
+      "commands":["bun poc/temporal-omp/omp/prepare.mjs","poc/temporal-omp/omp/.runtime/package/bin/bun poc/temporal-omp/omp/build.ts","bash poc/temporal-omp/omp/launch.sh","node poc/temporal-omp/omp/summarize.mjs"],
+      "versions":{"omp":"18.16.0","hostDistribution":"official-compiled","bun":"1.4.4","buildBun":"1.4.4","sdk":"1.25.0","server":"1.32.2"},
+      "sourceEvidence":{"hashMap":"poc/temporal-omp/omp/evidence.json#sourceSha256","exactPreparationCommands":"poc/temporal-omp/omp/README.md","includes":"Build inputs, rewritten SDK inputs, deployed self-contained outputs, build manifest and compiled host binary hashes"},
+      "result":"Passed bounded actual interactive PTY in the official compiled OMP binary (NODE_PATH unset, cwd outside source): hasUI:true to embedded debugMode:false Temporal worker from self-contained bundles, nextTurn, real main native task, correlated tool_result marker and workflow completion; owned host exited0.",
+      "limitations":["Earlier unbundled compiled host failed worker-thread @temporalio/common resolution; pass depends on build.ts self-contained bundles with SDK 1.25.0 source-rewrite needles.","Native addon deployment is x86_64-unknown-linux-gnu only.","Unexercised hardcoded build paths remain in @grpc/grpc-js channelz/orca proto loading and Temporal debug-replayer.","Only synchronous native task receipt proven; async completion hooks remain unproven.","Embedded runtime lacks v8.promiseHooks.createHook; Temporal stack trace collection disabled.","No context/reload/crash, ownership/deduplication, authorization/update gates or shared gate interoperability exercised.","Generated bundles and credential/config snapshots are ignored private runtime material; portable report retains actual hashes, not secrets."]
+    },
+    {
+      "name":"objective", "status":"passed-command-bootstrap",
+      "evidence":["poc/temporal-omp/objective/evidence/objective-proof-1793841014953/summary.json","poc/temporal-omp/objective/evidence/objective-proof-1793841014953/history.json"],
+      "commands":["env OBJECTIVE_SELECTED_PATHS='[{\"name\":\"safety\",\"path\":\"poc/temporal-omp/safety/evidence/latest.json\",\"expectedScenario\":\"safety-real-git-reconciliation\",\"references\":[\"poc/temporal-omp/safety/index.ts\",\"poc/temporal-omp/safety/scenario.ts\"]}]' node poc/temporal-omp/objective/runner.mjs"],
+      "versions":{"node":"26.13.0","server":"1.32.2","sdk":"1.25.0"},
+      "sourceEvidence":{"manifest":"poc/temporal-omp/objective/evidence/objective-proof-1793841014953/evidence-manifest.json","inventory":"poc/temporal-omp/objective/evidence/objective-proof-1793841014953/inventory.json","retainedSourceDirectory":"poc/temporal-omp/objective/evidence/objective-proof-1793841014953"},
+      "result":"Passed: inventory then dependent independent validation completed while native-host item remained blocked; 53 history events, 6 state transitions, 17 live queries; validated actual safety summary and referenced sources.",
+      "limitations":["bootstrap_command_activity; nativeHostProof=false.","Whole objective truthfully blocked, not globally successful.","Numeric revision is experiment sequence, not candidate Git SHA.","No native context/reload, integration/publication or end-to-end gate claim."]
+    },
+    {
+      "name":"safety", "status":"passed-local-git",
+      "evidence":["poc/temporal-omp/safety/evidence/latest.json","poc/temporal-omp/safety/README.md"],
+      "commands":["node poc/temporal-omp/safety/scenario.ts"],
+      "versions":{"node":"26.13.0"},
+      "sourceEvidence":{"hashMap":"poc/temporal-omp/safety/evidence/latest.json#sourceSha256","upstreamProvenance":"poc/temporal-omp/safety/README.md","license":"poc/temporal-omp/safety/THIRD_PARTY_LICENSE.txt"},
+      "result":"Passed 19 observations. Real commit/push then worker exit73 before receipt; independent recovery observed local/remote Git, repeated operations=0. Invalid/stale receipts and stale generation rejected.",
+      "limitations":["Actual receipt revision is 40-hex Git SHA, unlike numeric experiment revisions.","Local bare remote, not GitHub or distributed atomic publication fencing.","Point-in-time observation and predispatch generation race; no fsync/power-loss proof.","No Temporal/OMP runtime crash or whole-objective integration exercised."]
+    },
+    {
+      "name":"ownership", "status":"passed-local-process-lease-and-receipt-gate",
+      "evidence":["poc/temporal-omp/ownership/evidence.json","poc/temporal-omp/ownership/receipt-evidence.json","poc/temporal-omp/ownership/README.md"],
+      "commands":["node poc/temporal-omp/ownership/probe.mjs poc/temporal-omp/ownership/evidence.json","node poc/temporal-omp/ownership/receipt-probe.mjs poc/temporal-omp/ownership/receipt-evidence.json"],
+      "latestCombinedCommand":"node poc/temporal-omp/ownership/receipt-probe.mjs poc/temporal-omp/ownership/receipt-evidence.json && node poc/temporal-omp/ownership/probe.mjs poc/temporal-omp/ownership/evidence.json",
+      "latestCombinedExitCode":0,
+      "latestReceiptObservedAt":"2026-11-05T01:16:32.742Z",
+      "localAcceptanceObservations":"Second SQLite connection observes duplicate as existing acceptance; conflicting delivery rejects. Wrong mandate completion rejects stale-binding without completing; valid completion done. Terminal duplicate observes existing acceptance and conflict rejects; acceptedRows remains one.",
+      "versions":{"node":"26.13.0"},
+      "sourceEvidence":{"recordedRepositoryHead":"dde6f442694efcbebb79deab8f944c61e575ec99","record":"poc/temporal-omp/ownership/evidence.json","upstreamInspection":"pi-temporal main package 0.2.0 tree/lease.ts via opensrc; cache lacks Git metadata"},
+      "result":"SIGKILL owner with live child; replacement generation2/attempt2 rejects late result/effect as stale-lease. Normal exit0 does not relaunch; bounded attempts exhaust; SQLite reopen preserves generation3/completion. Connected local gate observes actual Git commit/push, invokes Safety validateReceipt inside the current-generation SQLite acceptance transaction: stale lease/receipt and invalid evidence leave zero rows; valid completion:false receipt accepts one row at generation2/attempt2.",
+      "limitations":["Generic Node processes, not native OMP supervisor/session recovery.","Git observation occurs before the SQLite transaction: local acceptance is fenced, not atomic Git plus SQLite or exactly-once external effect.","Stable host clock/local filesystem required; no power-loss proof.","Recorded repository HEAD alone does not content-bind uncommitted source bytes; connected gate uses its actual isolated Git SHA."]
+    },
+    {
+      "name":"update", "status":"passed-compatible-temporal-update",
+      "evidence":["poc/temporal-omp/update/evidence/artifact-update-1793841081431/summary.json","poc/temporal-omp/update/evidence/artifact-update-1793841081431/history.json"],
+      "commands":["node poc/temporal-omp/update/runner.mjs"],
+      "versions":{"sdk":"1.25.0","server":"1.32.2"},
+      "sourceEvidence":{"manifest":"poc/temporal-omp/update/evidence/artifact-update-1793841081431/manifest.json","includes":"Source modules and actual workflow-v1/workflow-v2 bundles passed to Worker.create"},
+      "result":"Passed actual workflow-v1 to workflow-v2 continuation with old activity in flight: old sum10 rejected superseded-attempt, new sum-of-squares38 accepted; 21 history events.",
+      "limitations":["Not native OMP extension reload or context continuation.","Explicit signal changes experiment authority; not SafetyProbe binding integration.","Separate queues, not Temporal Worker Deployment Versioning.","Compatible source change only; incompatible workflow update acceptance remains pending."]
+    },
+    {
+      "name":"native-objective", "status":"passed-native-succession-turn-rotation-restart",
+      "evidence":["poc/temporal-omp/native-objective/evidence/S1/summary.json","poc/temporal-omp/native-objective/evidence/S2/summary.json","poc/temporal-omp/native-objective/evidence/S3-rotation/summary.json","poc/temporal-omp/native-objective/evidence/S4-recovery/summary.json","poc/temporal-omp/native-objective/README.md"],
+      "commands":["poc/temporal-omp/omp/.runtime/package/bin/bun poc/temporal-omp/native-objective/prepare.mjs","poc/temporal-omp/omp/.runtime/package/bin/bun poc/temporal-omp/native-objective/build.ts","bash poc/temporal-omp/native-objective/launch.sh","node poc/temporal-omp/native-objective/summarize.mjs <stage>"],
+      "versions":{"omp":"18.16.0","hostDistribution":"official-compiled","bun":"1.4.4","sdk":"1.25.0","server":"1.32.2"},
+      "sourceEvidence":{"perStage":"poc/temporal-omp/native-objective/evidence/<stage>/evidence-manifest.json","includes":"Exercised extension, contracts and workflow source copies per stage"},
+      "result":"Compiled interactive OMP hosted a mandate-derived objective workflow: two dependent native task items, one independent command item and one named blocker. Successor dispatched without operator prompt; one send and one accepted binding-exact receipt per binding; owned hosts exit0. S2 root turn_end between request and result; S3-rotation committed session_compact while the handoff was pending; S4-recovery /restart reinitialized the extension factory, recovered the pending handoff and attached to the existing workflow without a second admission.",
+      "historicalFailures":["S3: session too small to compact; no session_compact (summarize exit1).","S4: restart sent as ordinary text; no new extension instance (summarize exit1)."],
+      "limitations":["Restart recovery proven pending-before-send only; not crash recovery after dispatch or child loss.","Durable sent marker and sendMessage are not atomic; no crash-safe exactly-once claim.","Adversarial receipt injection not exercised.","/reload-plugins does not reinitialize extension factories; same-version /restart is not self-update proof.","Numeric bindings are experiment counters, not Git revision authority or fenced leases.","Summaries reconcile recorded events, not independently fetched Temporal history.","Synchronous task only; async completion unproven."]
+    }
+  ],
+  "bindingPolicy": {
+    "gitGateRevision":"Safety Binding.revision is independently observed actual 40-hex commit SHA.",
+    "experimentRevision":"Numeric Temporal/objective revisions are experiment sequence counters, not candidate Git SHA bindings.",
+    "sourceProvenance":"Content hashes identify exercised bytes; repository HEAD alone does not bind dirty/uncommitted source. Independent source and receipt bindings do not establish a shared end-to-end gate."
+  },
+  "pendingAcceptance":[
+    "Native OMP succession after dispatch-time crash or child loss, async task completion and adversarial receipt injection; turn end, context rotation and same-version /restart while pending passed in native-objective.",
+    "Native OMP supervisor/session crash recovery with child in flight and stale authority rejected at real effect/acceptance boundaries.",
+    "Native controller/extension self-update with version-bound in-flight results and automatic successor dispatch.",
+    "Shared SHA-bound acceptance/integration chain: tested candidate, authorized local merge, integrated revision gate, non-force push, required closure and owned cleanup.",
+    "Complete bounded Audit, Implement, Combined and Continuity acceptance; independent probes are not that gate.",
+    "Authorized productive systemd deployment, SQLite workload/backup/restore and operational procedures; no deployment or remote default-branch switch performed.",
+    "Conditional real PR-backend concurrent/ambiguous-response reconciliation only if a repository adopts a PR route."
+  ],
+  "dogfood": {
+    "mode":"command_activity retained-evidence validation only",
+    "status":"passed-retained-evidence-validation",
+    "actor":"Main",
+    "command":"OBJECTIVE_SELECTED_PATHS=\"$(node -p 'JSON.stringify(require(\"./poc/temporal-omp/evidence-index.json\").selectedPaths)')\" node poc/temporal-omp/objective/runner.mjs",
+    "exitCode":0,
+    "observedDurationSeconds":13.50,
+    "summary":"poc/temporal-omp/objective/evidence/objective-proof-1793842176637/summary.json",
+    "history":"poc/temporal-omp/objective/evidence/objective-proof-1793842176637/history.json",
+    "inventoryValidation":"poc/temporal-omp/objective/evidence/objective-proof-1793842176637/inventory-validation.json",
+    "retainedSelection":"poc/temporal-omp/objective/evidence/objective-proof-1793842176637/selected-paths.json",
+    "workflowId":"objective-proof-1793842176637",
+    "runId":"01a1a953-8229-76b0-8d59-5f0a7860a0ee",
+    "result":"Seven selected completed summaries covering all six slices (omp, sqlite, objective, safety, corrected ownership, corrected receipt-gate, update) inventoried and independently validated; 53 history events, 6 transitions, 17 live queries. Native-host-not-admitted remains blocked; owned worker stopped. Independent minimal native summary is read as evidence, not executed by this admission.",
+    "correctedSixSummaryUse":{"summary":"poc/temporal-omp/objective/evidence/objective-proof-1793841461459/summary.json","history":"poc/temporal-omp/objective/evidence/objective-proof-1793841461459/history.json","exitCode":0,"durationSeconds":13.36,"historyEvents":53,"stateTransitions":6,"liveQueries":16},
+    "initialUse":{"summary":"poc/temporal-omp/objective/evidence/objective-proof-1793841268520/summary.json","history":"poc/temporal-omp/objective/evidence/objective-proof-1793841268520/history.json","exitCode":0,"durationSeconds":14.36,"historyEvents":53,"stateTransitions":6,"liveQueries":17,"note":"Historical first admission before corrected receipt deduplication/mandate-binding evidence; retained immutable snapshot, not retroactive validation of later source."},
+    "nextAction":"Reuse command_activity validation for supported evidence work. Native objective succession across turn end, context rotation and same-version restart passed; next bind native receipts to source/SHA authority and fenced ownership, then prove crash/child-loss recovery and extension self-update before expanding dogfood authority.",
+    "nativeHostProof":false,
+    "endToEndGateClaim":false
+  }
+}

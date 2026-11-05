@@ -1,0 +1,5 @@
+async:
+  enabled: false
+compaction:
+  keepRecentTokens: 1
+  reserveTokens: 1024

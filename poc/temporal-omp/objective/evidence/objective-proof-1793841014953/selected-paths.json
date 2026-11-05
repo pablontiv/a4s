@@ -1,0 +1,11 @@
+[
+  {
+    "name": "safety",
+    "path": "poc/temporal-omp/safety/evidence/latest.json",
+    "expectedScenario": "safety-real-git-reconciliation",
+    "references": [
+      "poc/temporal-omp/safety/index.ts",
+      "poc/temporal-omp/safety/scenario.ts"
+    ]
+  }
+]
