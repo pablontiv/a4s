@@ -16,12 +16,9 @@ is no Dagu backup, drain, migration, shutdown or shutdown-validation work in thi
 roadmap, and reduced Dagu is not a fallback target. Reuse applicable repository
 gate contracts without carrying forward the old orchestration graph.
 
-The existing line remains on `main`. The local branch
-`architecture/temporal-omp` was established before tests and development for this
-work; preserve the historical `main` line and unrelated working-tree changes.
-A future remote default-branch switch is intended but has not been executed.
-Branch creation is not evidence of deployment or acceptance, and this document
-does not authorize a remote default-branch change.
+`main` is the development line of this architecture. The previous line is
+preserved in the `legacy2` branch. The roadmap and branch decisions in
+[omp-temporal.md](omp-temporal.md) take precedence over this document.
 
 The primary outcome is sustained completion of an authorized objective across
 work items without repeated operator prompts. Recovery supports that outcome;
@@ -166,10 +163,9 @@ late evidence from a superseded attempt MUST NOT satisfy the current gate.
 
 Integration policy MUST come from explicit repository configuration, not checkout
 topology. The existing line uses trunk-based local integration into `main`, without
-a mandatory PR. Development of this architecture is on `architecture/temporal-omp`;
+a mandatory PR. Development of this architecture is on `main`;
 assignments and integration evidence MUST name their authorized target explicitly,
-not silently publish development into historical `main` or infer a remote default
-switch. Other repositories may require a different integration route, whose gates
+not infer it from checkout topology. Other repositories may require a different integration route, whose gates
 and completion evidence remain binding.
 
 The target trunk path is: **tested candidate → local merge into the configured
@@ -418,6 +414,9 @@ outcomes become named blockers rather than fabricated success or unsafe retries.
 
 ## Staged delivery roadmap
 
+Superseded by the roadmap in [omp-temporal.md](omp-temporal.md); retained as the
+historical rationale of the baseline tests.
+
 1. **Run decision-changing tests first, in parallel where independent.** Begin
    with the SQLite runtime, Pi/OMP compatibility, objective succession and safety
    proofs above before production controller development. Inspect the relevant
@@ -487,10 +486,8 @@ outcomes become named blockers rather than fabricated success or unsafe retries.
 
 ## Productive readiness and branch intent
 
-The local development branch is `architecture/temporal-omp`, created before tests
-and development; `main` preserves the existing historical line. A future remote
-default-branch switch is planned, not executed. Its authorization and observed
-remote outcome MUST be recorded separately from local branch work and deployment.
+`main` is the development line; `legacy2` preserves the previous line. Deployment
+and productive readiness MUST be recorded separately from branch work.
 
 Productive readiness requires an approved engine/placement decision, exercised
 acceptance scenarios, revision-bound Git and gate behavior, explicit ownership
