@@ -75,6 +75,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version-file: package.json
+      # Audit the root lockfile (all npm workspaces), even for docs-only PRs.
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
       - env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BODY_RESULT: ${{ needs.pr-body.result }}

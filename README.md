@@ -98,6 +98,11 @@ spawn only direct `git`/`tar`, not CLIs, shells, Dagu, GitHub or compiled builds
 The guard names the offending test file. Default suites need neither the
 station heavy slot nor forced serial test-file execution.
 
+Dependabot checks the root npm workspace lockfile and GitHub Actions weekly,
+grouping updates by ecosystem. CI's required `validate` job runs
+`npm audit --audit-level=high` on every change, including docs-only pull requests;
+high and critical dependency advisories fail the check. CodeQL remains weekly.
+
 Release builds use `r<N>` (the validated source SHA's full-history first-parent
 commit count). After CI `validate` succeeds for that exact pushed `main` SHA,
 the release workflow publishes changed shipped inputs as immutable `a4s-r<N>`
