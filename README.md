@@ -4,6 +4,10 @@ Private libraries, OMP extensions, native agents and independent skills maintain
 in an npm workspace repository. Source is public; package names identify private
 workspaces, not public npm publication.
 
+**Canonical architecture and roadmap:** [OMP + Temporal](docs/architecture/omp-temporal.md).
+It supersedes the rest of this README and `docs/` where they conflict; the previous
+line is preserved in the `legacy2` branch.
+
 ## Documentation
 
 - [v1 source catalog](docs/architecture/catalog.md): delivered components, seven
