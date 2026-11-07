@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { admissionFixture, compiledA4sBin, compiledArtifact } from "../fixtures/admission.ts";
@@ -181,6 +181,46 @@ test("release-independent HUD and plugin mutations dispatch A while B is install
     if (server.listening) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
     f.dispose();
   }
+});
+
+test("native mutations reject a caller PATH without jq before invoking Dagu", { timeout: 120_000 }, () => {
+  const f = admissionFixture();
+  try {
+    const tuple = compiledArtifact(f.home);
+    save(f, "missing-tool", tuple);
+    const executable = join(f.home, "cache/a4s", tuple.version, "a4s");
+    const bin = join(f.root, "native-bin"); mkdirSync(bin);
+    const effects = join(f.root, "native-effects");
+    for (const tool of ["bash", "git"]) {
+      symlinkSync(execFileSync("bash", ["-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
+    }
+    for (const tool of ["gh", "curl", "node", "bun", "omp"]) {
+      writeFileSync(join(bin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    }
+    writeFileSync(join(bin, "dagu"), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${effects}'\nexit 42\n`, { mode: 0o755 });
+    const run = (args: string[]) => spawnSync(executable, ["run", "--primary", f.packageDir, "--run", "missing-tool", "--", "native", ...args], {
+      env: { ...process.env, DAGU_HOME: f.home, PATH: bin }, encoding: "utf8",
+    });
+    const actions = [
+      ["retry", "feature", "--run-id", "missing-tool", "--step", "capture", "--downstream"],
+      ["human-task", "complete", "feature", "--run-id", "missing-tool", "--step", "validation", "--input", "APPROVE=yes"],
+      ["stop", "feature", "--run-id", "missing-tool"],
+    ];
+    const before = readFileSync(f.receipt("missing-tool"), "utf8");
+    for (const args of actions) {
+      const result = run(args);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /required command not found: jq.*no Dagu mutation started/);
+      assert.doesNotMatch(result.stderr, /malformed ownership history/);
+      assert.equal(existsSync(effects), false, "Dagu must not run even once when jq is missing");
+      assert.equal(readFileSync(f.receipt("missing-tool"), "utf8"), before);
+      assert.deepEqual(readdirSync(dirname(f.receipt("missing-tool"))), ["receipt.json"]);
+    }
+    writeFileSync(join(bin, "jq"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const ready = run(actions[0]!);
+    assert.equal(ready.status, 42, ready.stderr);
+    assert.equal(readFileSync(effects, "utf8"), actions[0]!.join(" ") + "\n");
+  } finally { f.dispose(); }
 });
 
 test("tick verification shares artifact evidence but rechecks every receipt and expires with the tick", async () => {

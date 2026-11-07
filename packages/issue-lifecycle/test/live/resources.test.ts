@@ -59,6 +59,49 @@ test("shared shell words preserve Bash literal hashes, quoting and continuations
   }
 });
 for (const definition of definitions) {
+  test(`${definition} onExit reports unavailable jq rather than malformed ownership history`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const bin = join(repo.root, "restricted-bin"); mkdirSync(bin);
+    for (const tool of ["bash", "git", "mkdir", "dirname", "basename", "rm", "rmdir", "cat"]) {
+      symlinkSync(execFileSync("bash", ["-c", 'command -v "$1"', "fixture", tool], { encoding: "utf8" }).trim(), join(bin, tool));
+    }
+    symlinkSync(join(repo.root, "bin", "dagu"), join(bin, "dagu"));
+    const bash = join(bin, "bash"), jq = join(bin, "jq");
+    const cleanup = () => spawnSync(bash, ["-c", script(definition, "  exit:")], { env: { ...repo.env, PATH: bin }, encoding: "utf8" });
+    const missing = cleanup();
+    assert.equal(missing.status, 127, missing.stderr);
+    assert.match(missing.stderr, /required command not found: jq/);
+    assert.doesNotMatch(missing.stderr, /malformed ownership history/);
+    for (const status of [126, 127]) {
+      writeFileSync(jq, `#!/bin/sh\nexit ${status}\n`, { mode: 0o755 });
+      const unavailable = cleanup();
+      assert.equal(unavailable.status, status, unavailable.stderr);
+      assert.match(unavailable.stderr, /required command unavailable: jq/);
+      assert.doesNotMatch(unavailable.stderr, /malformed ownership history/);
+    }
+    // The empty-history fallback must preserve tool failures too.
+    writeFileSync(jq, '#!/bin/sh\nif [ "$1" = -er ]; then exit 4; fi\nexit 127\n', { mode: 0o755 });
+    const fallback = cleanup();
+    assert.equal(fallback.status, 127, fallback.stderr);
+    assert.match(fallback.stderr, /required command unavailable: jq/);
+    assert.doesNotMatch(fallback.stderr, /malformed ownership history/);
+    assert.equal(existsSync(join(repo.primary, ".git/dagu-feature/owners/issue-215")), false);
+    assert.equal(existsSync(join(repo.primary, ".git/dagu-feature/owners/issue-215.lock")), false);
+    assert.equal(existsSync(repo.worktree), false);
+  });
+
+  test(`${definition} ownership history still accepts empty arrays and rejects malformed data`, t => {
+    const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
+    const guard = withResourceGuard('set -euo pipefail\neval "$DAGU_RESOURCE_GUARD"\nresource_lock cleanup', definition);
+    const empty = spawnSync("bash", ["-c", guard], { env: repo.env, encoding: "utf8" });
+    assert.equal(empty.status, 0, empty.stderr);
+    writeFileSync(join(repo.root, "feature.json"), "not json\n");
+    const malformed = spawnSync("bash", ["-c", guard], { env: repo.env, encoding: "utf8" });
+    assert.equal(malformed.status, 1, malformed.stderr);
+    assert.match(malformed.stderr, /malformed ownership history/);
+    assert.doesNotMatch(malformed.stderr, /required command (not found|unavailable)/);
+  });
+
   test(`${definition} admission protects a feature owner resolved from its adopted snapshot`, t => {
     const repo = fixture(); t.after(() => rmSync(repo.root, { recursive: true, force: true }));
     repo.history("feature", [{ ...repo.row("adopted-owner", "waiting"), params: "ISSUE=215 OMP_SESSION_ID=owner-session" }]);
