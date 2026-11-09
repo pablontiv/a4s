@@ -224,22 +224,25 @@ candidate-source evidence. The catalog file itself is not installed as a role.
 ## Independent skills
 
 Keep the complete directory, including relative scripts/assets and attribution,
-under its own root ownership. A private consumer can install selected skills in
-its native project skill root without moving them into the lifecycle package:
+under its own root ownership. Install these skills from the pinned checkout's
+root `skills/` directory, not the runtime release cache. A private consumer can
+install selected skills in its native project skill root without moving them
+into the lifecycle package:
 
 ```sh
 A4S_ROOT=<absolute-pinned-source-checkout>
 CONSUMER=<absolute-private-consumer-checkout>
 mkdir -p "$CONSUMER/.omp/skills"
-for skill in model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model; do
+for skill in repository-discovery backlog-breakdown refine sprint-planning issue-execution sprint-review sprint-retrospective model-routing-audit gpt-quota-audit cost-analyzer agent-throughput workspace-hygiene sandbox-threat-model; do
   ln -s "$A4S_ROOT/skills/$skill" "$CONSUMER/.omp/skills/$skill"
 done
 ```
 
 Existing destinations need operator resolution; plain `ln -s` preserves them by
 failing. Alternatively set native `skills.customDirectories` to the absolute
-A4S `skills` directory in the **consumer's** or isolated profile's config. This
-loads independent roots alongside the lifecycle package's seven skills.
+A4S `skills` directory in the **consumer's** or isolated profile's config. For
+the seven process skill names, use these root-owned tool-free procedures rather
+than also installing their lifecycle package versions from the runtime cache.
 `--skills <csv>` filters discovered names, not paths. Read
 `skill://model-routing-audit` (or another delivered skill) and execute only the
 bounded, authorized operation it describes. Invocation can be a read-only

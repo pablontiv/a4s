@@ -78,12 +78,20 @@ Spike #691 discarded a trailing per-turn TLDR in the operating contract; see
 ## Independent repository skills
 
 These skills retain root ownership and carry their relative scripts/assets with
-them. Install complete skill directories in a private consumer's supported
+them. Install complete skill directories from the pinned checkout's `skills/`
+directory, not the runtime release cache, in a private consumer's supported
 native skill root, or configure `skills.customDirectories`; see
 [the installation recipe](../operations/private-install.md#independent-skills).
 
 | Delivered root source | Purpose and qualifiers |
 | --- | --- |
+| [`skills/repository-discovery/`](../../skills/repository-discovery/SKILL.md) | Tool-free procedure for evidence-backed repository discovery |
+| [`skills/backlog-breakdown/`](../../skills/backlog-breakdown/SKILL.md) | Tool-free procedure for turning prepared units into an approved backlog |
+| [`skills/refine/`](../../skills/refine/SKILL.md) | Tool-free procedure for refining authorized needs into evidence-backed units |
+| [`skills/sprint-planning/`](../../skills/sprint-planning/SKILL.md) | Tool-free procedure for agreeing a sprint goal and ordering authorized work |
+| [`skills/issue-execution/`](../../skills/issue-execution/SKILL.md) | Tool-free procedure for executing an authorized issue through delivery |
+| [`skills/sprint-review/`](../../skills/sprint-review/SKILL.md) | Tool-free procedure for evaluating sprint goals against delivery evidence |
+| [`skills/sprint-retrospective/`](../../skills/sprint-retrospective/SKILL.md) | Tool-free procedure for reviewing process evidence and selecting improvements |
 | [`skills/model-routing-audit/`](../../skills/model-routing-audit/SKILL.md) | OMP catalog/quota/routing snapshots, per-role/model scorecards, evidence-backed proposals and operator-approved fresh-agent verification; default collection performs no inference or assignment |
 | [`skills/gpt-quota-audit/`](../../skills/gpt-quota-audit/SKILL.md) | OMP provider quota investigation; independent advisor and canonical reviewer must resolve outside the audited provider |
 | [`skills/cost-analyzer/`](../../skills/cost-analyzer/SKILL.md) | Cross-harness session ledger, token/cost attribution and outcomes; retained design/ADR material is architecture, not an additional runtime port |

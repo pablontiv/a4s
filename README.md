@@ -60,33 +60,41 @@ Independent root skills are [model-routing-audit](skills/model-routing-audit/SKI
 [gpt-quota-audit](skills/gpt-quota-audit/SKILL.md),
 [cost-analyzer](skills/cost-analyzer/SKILL.md),
 [agent-throughput](skills/agent-throughput/SKILL.md),
-[workspace-hygiene](skills/workspace-hygiene/SKILL.md) and
-[sandbox-threat-model](skills/sandbox-threat-model/SKILL.md). Their full directories stay
-with their owning scripts/assets and can be installed in private consumers.
+[workspace-hygiene](skills/workspace-hygiene/SKILL.md),
+[sandbox-threat-model](skills/sandbox-threat-model/SKILL.md),
+[backlog-breakdown](skills/backlog-breakdown/SKILL.md),
+[issue-execution](skills/issue-execution/SKILL.md),
+[refine](skills/refine/SKILL.md),
+[repository-discovery](skills/repository-discovery/SKILL.md),
+[sprint-planning](skills/sprint-planning/SKILL.md),
+[sprint-retrospective](skills/sprint-retrospective/SKILL.md) and
+[sprint-review](skills/sprint-review/SKILL.md). Their full directories stay with
+their owning scripts/assets and can be installed in private consumers. The seven
+process skills are direct procedures with no delivery-runtime dependency.
 The [catalog](docs/architecture/catalog.md#conditional-311-ingestion) distinguishes
 pending incoming skills from available functionality.
 
 ## Sprint and issue ownership
 
-A coordinating session is a sprint. `refine` investigates needs;
-`backlog-breakdown` owns issue-creation review/approval through `planning.yaml`;
-`sprint-planning` alone selects, ranks and enqueues new work, with
-[autonomous sprint mode](packages/issue-lifecycle/skills/sprint-planning/SKILL.md#5-autonomous-sprint) explicitly activated by `/skill:sprint-planning auto <objective>`;
-`sprint-review` evaluates the agreed goal from delivery evidence;
-`sprint-retrospective` routes operator-authorized incidents through refinement.
-`repository-discovery` supplies evidence and units; `issue-execution` executes
-assigned feature/PoC work. Goal checks and Definition of Done are ceremony
-content, not extra lifecycle checkpoints. Reports alone do not authorize action.
+A coordinating session is a sprint. [`refine`](skills/refine/SKILL.md)
+investigates needs; [`backlog-breakdown`](skills/backlog-breakdown/SKILL.md)
+owns independent issue-creation review and operator approval;
+[`sprint-planning`](skills/sprint-planning/SKILL.md) alone selects and ranks new
+work, including explicitly authorized autonomous sprint objectives;
+[`sprint-review`](skills/sprint-review/SKILL.md) evaluates the agreed goal from
+delivery evidence; [`sprint-retrospective`](skills/sprint-retrospective/SKILL.md)
+routes operator-authorized incidents through refinement.
+[`repository-discovery`](skills/repository-discovery/SKILL.md) supplies evidence
+and units; [`issue-execution`](skills/issue-execution/SKILL.md) delivers assigned
+issues directly under the target repository's policy. Each issue has an isolated
+worktree, exact-SHA gate and independent review, integration and cleanup evidence.
+PoCs require operator approval for direct infrastructure execution and record
+PASS/FAIL/INCONCLUSIVE in the issue. Reports alone do not authorize action.
 
-Main is the only active lane: independent `a4s` clone, branch `main`, queue `a4s`.
-The temporary v1 lane was retired after release and proof (#435–#438).
-The [operating runbook](docs/operations/deployment.md) separates historical
-station evidence from the release cutover. New admission requires schema-2
-consumer policy and selects `state.current`; the launcher verifies its immutable
-release into `$DAGU_HOME/cache/a4s/<version>/` and hands off to the compiled
-executable. Successors keep the parent's artifact tuple. a4s never writes station
-config or restarts services. Initial launcher/plugin installation, runtime
-environment, Dagu queue capacity and the unpinned tick DAG are operator work.
+This repository uses trunk-based integration: locally integrate the tested
+candidate into `main`, gate the integrated revision, then non-force push `main`.
+See the [delivery rule](docs/operations/deployment.md#main-branch-protection-and-trunk-based-work)
+and [canonical architecture](docs/architecture/omp-temporal.md).
 
 ## Development
 
