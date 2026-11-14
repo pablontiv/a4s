@@ -1,4 +1,4 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
 labels:
   - workspace=a4s
   - dagu-feature-bundle=0.2.0
@@ -17,10 +17,10 @@ params:
     default: ""
   - name: PRIMARY
     type: string
-    default: "/Users/Shared/harness/a4s"
+    default: "/home/shared/harness/a4s"
   - name: BASE_BRANCH
     type: string
-    default: "main"
+    default: "dagu-14steps"
   - name: OMP_SESSION_ID
     type: string
     default: ""
@@ -30,7 +30,7 @@ params:
 env:
   - RUN: ${context.run.id}
   - WORKTREE: ${PRIMARY}/.workspace/worktrees/poc-${RUN}
-  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@3654f1646aba40298a6cd7ade2812c91acf94a84 bootstrap=bootstrap-a4s-v0-2-0"
+  - DAGU_FEATURE_BUNDLE: "dagu-feature-bundle=0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0"
 steps:
   - id: record
     run: |
