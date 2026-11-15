@@ -36,6 +36,19 @@ El run conserva su rama y worktree hasta que `close_gate` termina correctamente.
 - Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
 - Referencia golden: tag `dagu-golden-v1`, run de aceptación `a4s-issue-955` (#955, PR #956).
 
+### Supervisión por tarea
+
+- Cada tarea del ciclo corre en una sesión **nueva** de coordinador, en su propia pestaña de Tern, iniciada con `a4s-14steps`. Su único prompt es la petición de encolado con el número de issue y el run ID `a4s-issue-<n>`.
+- El coordinador no usa la herramienta `ask`: cuando necesita una decisión, termina su turno con la pregunta en texto plano y la sesión supervisora la transmite al humano.
+- Cuando el run llega a `Succeeded`, la sesión supervisora comprueba los criterios de aceptación:
+  - Los 14 pasos terminaron correctamente.
+  - La PR está mergeada con `validate` en verde.
+  - El issue está cerrado.
+  - `PRIMARY` está limpio e igual a `origin/dagu-14steps`.
+  - No quedan el worktree del run ni su rama local o remota.
+- Después lee el informe final del coordinador y cierra su pestaña con `tern close <id>`; el `.jsonl` de la sesión queda como evidencia.
+- Cerrar la sesión queda deliberadamente fuera de `close_gate`: el DAG corre bajo `systemd` y no debe depender de Tern ni de `omp`, el mismo tipo de acoplamiento retirado en #954.
+
 ## Estado, progreso y despertar dirigido
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
