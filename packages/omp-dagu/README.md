@@ -36,18 +36,81 @@ El run conserva su rama y worktree hasta que `close_gate` termina correctamente.
 - Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
 - Referencia golden: tag `dagu-golden-v1`, run de aceptación `a4s-issue-955` (#955, PR #956).
 
-### Supervisión por tarea
+### Roles
 
-- Cada tarea del ciclo corre en una sesión **nueva** de coordinador, en su propia pestaña de Tern, iniciada con `a4s-14steps`. Su único prompt es la petición de encolado con el número de issue y el run ID `a4s-issue-<n>`.
-- El coordinador no usa la herramienta `ask`: cuando necesita una decisión, termina su turno con la pregunta en texto plano y la sesión supervisora la transmite al humano.
-- Cuando el run llega a `Succeeded`, la sesión supervisora comprueba los criterios de aceptación:
-  - Los 14 pasos terminaron correctamente.
-  - La PR está mergeada con `validate` en verde.
-  - El issue está cerrado.
-  - `PRIMARY` está limpio e igual a `origin/dagu-14steps`.
-  - No quedan el worktree del run ni su rama local o remota.
-- Después lee el informe final del coordinador y cierra su pestaña con `tern close <id>`; el `.jsonl` de la sesión queda como evidencia.
-- Cerrar la sesión queda deliberadamente fuera de `close_gate`: el DAG corre bajo `systemd` y no debe depender de Tern ni de `omp`, el mismo tipo de acoplamiento retirado en #954.
+These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coordinator** means the OMP role below, not the Dagu `coordinator:` service in `station/config.yaml` or the Pi Orchestrator in `agents/common/AGENTS.md`.
+
+| Role | Where | Outbound channels | Authority |
+|---|---|---|---|
+| Supervisor | Always in PRIMARY | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
+| Coordinator | One new Tern tab per issue, launched with `a4s-14steps` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
+| Researcher | Its own Tern tab, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; hands context to the supervisor and never creates issues. |
+
+Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) and automation (DAG steps, wait handler, reconciler, CI `validate`) are unchanged.
+
+#### Channels and delivery confirmation
+
+Every inter-session message, in every direction, uses `packages/omp-dagu/scripts/tern-notify.sh <pane> <line>`, never a raw `tern send`. Allowed routes are supervisor → coordinator/researcher with `[supervisor]`, coordinator → its supervisor with `[coordinator <issue>]`, and researcher → its supervisor with `[researcher]`. No direct researcher/coordinator or cross-coordinator channel.
+
+Use artifact-first delivery: one concise line, `<prefix> <intent>: <absolute artifact path>`. Put the payload under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed. Inline text is only for trivial one-line notices. A coordinator's notification is already one line; its full Turn status report remains in its own session `.jsonl` and needs no duplicate artifact.
+
+```sh
+# Run from PRIMARY; substitute the recipient pane and an existing absolute artifact path.
+packages/omp-dagu/scripts/tern-notify.sh "$recipient_pane" \
+  "[supervisor] review handoff: $artifact"
+```
+
+The helper appends a unique `[msg <epoch>-<rand>]` token, pastes the line, presses Enter, resolves the recipient's `omp_session_file` through `tern inspect --json`, and waits up to **120 seconds** for receipt. It checks only top-level `type=="message"` entries with `message.role=="user"`, joins decoded text content parts (also accepting string content), and compares the **full** decoded text, including the token, without trimming or stripping tags. Assistant, tool and custom entries do not confirm receipt.
+
+- `0`: confirmed — the user message equals the sent line exactly.
+- `1`: contaminated — a user message contains the token but includes different text.
+- `2`: unconfirmed — no user message with the token was observed before the timeout, or delivery/inspection failed.
+
+On `1` or `2`, **never resend blindly**: the message may already have arrived. Report the result to the operator in the sender's own pane. Never clear or edit another pane's editor.
+
+**Residual channel risks:** partial operator editor text is concatenated with the pasted line into one submitted user message. Confirmation detects that contamination only after submission; it cannot prevent the operator's text from reaching the recipient. In the [PASS probe](https://github.com/pablontiv/a4s/issues/965#issuecomment-6891533774) on Tern 0.9.18 / OMP 18.20.2, a busy pane recorded the message **immediately** with `steering:true` and could background its active tool to handle it; delivery was not deferred until turn end. Keep the 120-second confirmation bound, but do not treat a busy session as a passive mailbox. Offline fixtures verify matching, not live scheduling.
+
+For offline transport tests, `TERN_BIN` overrides the `tern` executable and `TERN_NOTIFY_TIMEOUT` overrides the timeout in whole seconds (default `120`).
+
+#### Launch prompts
+
+The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt:
+
+```sh
+primary=$(git rev-parse --show-toplevel)
+supervisor_pane=$TERN_PANE
+issue=965 # Replace with the issue to enqueue.
+tern new tab --cwd "$primary" --json -- a4s-14steps \
+  "Enqueue issue #$issue as run a4s-issue-$issue using dagu-feature. Supervisor pane: $supervisor_pane. You are the coordinator for this issue: enqueue and human.task only; use task for leaf work. Do not use ask, tern new or tern close. When emitting a Turn status report, notify only supervisor pane $supervisor_pane via $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[coordinator $issue] <one-line summary>\"; never notify on silent checkpoint turns. On exit 1 or 2, report delivery failure in your own pane and do not resend."
+```
+
+The coordinator ends a decision turn with the question in its Turn status and the confirmed notification above; the supervisor relays the question to the operator rather than polling the coordinator pane.
+
+The supervisor launches a researcher with a concrete question and its own pane as the only handoff target:
+
+```sh
+primary=$(git rev-parse --show-toplevel)
+supervisor_pane=$TERN_PANE
+question='Replace with the research question.'
+tern new tab --cwd "$primary" --json -- a4s-14steps \
+  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
+```
+
+#### Reality-check and session closure
+
+Researcher output is **input, not truth**. Before creating an issue, changing PRIMARY or the station, or steering a coordinator, the supervisor checks every load-bearing claim against live state: cited `file:line` still says that, and runtime, station and run state match. Verify each `[INFERENCE]` or carry it into the issue as an open question.
+
+When a run reaches `Succeeded`, the supervisor checks the existing acceptance contract:
+
+- All 14 steps completed successfully.
+- The PR is merged with `validate` green.
+- The issue is closed.
+- PRIMARY is clean and equal to `origin/dagu-14steps`.
+- The run's worktree and local/remote branch are gone.
+
+Then it reads the coordinator's final report, checks that the owned session is idle and leaves nothing pending, and closes that tab with `tern close <pane>`. When the supervisor turns a researcher's handoff into an issue, it likewise checks that the owned researcher session is idle and its last report leaves nothing pending, then closes that researcher tab with `tern close <pane>`. Retain each session's `.jsonl` as evidence.
+
+Tab closure stays deliberately outside `close_gate`: the DAG runs under `systemd` and must not depend on Tern or OMP, the same coupling removed in #954.
 
 ## Estado, progreso y despertar dirigido
 
