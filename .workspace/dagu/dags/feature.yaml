@@ -284,7 +284,8 @@ steps:
       path: ${WORKTREE}
       branch: ${BRANCH}
       create_branch: true
-      base: origin/${BASE_BRANCH}
+      # Dagu prefixes refs/heads/ and refs/remotes/origin/; start_gate fast-forwards BASE_BRANCH to origin.
+      base: ${BASE_BRANCH}
 
   - id: implement
     depends: worktree
