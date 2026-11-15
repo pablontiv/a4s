@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { runBash } from "./shell.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/reconcile.yaml", import.meta.url))],
@@ -80,7 +81,7 @@ function params(primary: string, values: { issue?: string; branch?: string; ques
 function runScript(script: string, repo: Repository, feature: HistoryRun[], poc: HistoryRun[]) {
   writeFileSync(repo.featureHistory, `${JSON.stringify(feature)}\n`);
   writeFileSync(repo.pocHistory, `${JSON.stringify(poc)}\n`);
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     cwd: repo.root,
     encoding: "utf8",
     env: {

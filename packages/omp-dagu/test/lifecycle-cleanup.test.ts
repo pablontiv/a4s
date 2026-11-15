@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { runBash } from "./shell.ts";
 
 const featureDefinitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -116,7 +117,7 @@ exec ${JSON.stringify(realGit)} "$@"
 }
 
 function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     cwd: repo.outside,
     encoding: "utf8",
     env: {

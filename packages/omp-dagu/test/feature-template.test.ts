@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { runBash } from "./shell.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -121,14 +122,14 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
 }
 
 function runFailingCloseGate(script: string, repo: Repository) {
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     encoding: "utf8",
     env: featureScriptEnv(repo),
   });
 }
 
 function runScript(script: string, repo: Repository): string {
-  const result = spawnSync("bash", ["-c", script], {
+  const result = runBash(script, {
     encoding: "utf8",
     cwd: repo.root,
     env: featureScriptEnv(repo),

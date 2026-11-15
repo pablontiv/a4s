@@ -41,7 +41,7 @@ function verifierScript(url: URL): string {
 
 type Result = { code: number | null; stdout: string; stderr: string };
 async function runBash(script: string, env: NodeJS.ProcessEnv): Promise<Result> {
-  const child = spawn("/bin/bash", ["-c", script], { env });
+  const child = spawn("bash", ["-c", script], { env });
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });

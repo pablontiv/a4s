@@ -29,7 +29,7 @@ params:
     pattern: '^[A-Za-z0-9][A-Za-z0-9._/-]*$'
   - name: GATE
     type: string
-    default: "npm ci && npm test && npm run typecheck"
+    default: "bash scripts/gate.sh"
   - name: REQUIRED_CHECK
     type: string
     default: "validate"
