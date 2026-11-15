@@ -44,7 +44,7 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 |---|---|---|---|
 | Supervisor | Always in PRIMARY | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
 | Coordinator | One new Tern tab per issue, launched with `a4s-14steps` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
-| Researcher | Its own Tern tab, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; hands context to the supervisor and never creates issues. |
+| Researcher | Its own Tern tab, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, hands off only after explicit operator approval, and never creates issues. |
 
 Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
 
@@ -93,12 +93,16 @@ primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 question='Replace with the research question.'
 tern new tab --cwd "$primary" --json -- a4s-14steps omp -e "$primary/packages/omp-dagu" \
-  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
+  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Present findings to the operator and keep iterating in this tab. Notify the supervisor only after the operator explicitly approves the handoff; quote that approval in the artifact. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
 ```
 
 #### Reality-check and session closure
 
-Researcher output is **input, not truth**. Before creating an issue, changing PRIMARY or the station, or steering a coordinator, the supervisor checks every load-bearing claim against live state: cited `file:line` still says that, and runtime, station and run state match. Verify each `[INFERENCE]` or carry it into the issue as an open question.
+1. A handoff without a quoted operator approval is invalid. The supervisor does not act on it and tells the operator.
+2. Researcher output is **input, not truth**. Before creating an issue, changing PRIMARY or the station, or steering a coordinator, the supervisor checks every load-bearing claim in the approved handoff against live state: cited `file:line` still says that, and runtime, station and run state match. Verify each `[INFERENCE]` or carry it into the issue as an open question.
+3. The supervisor sends stale or false findings back to the researcher as a `[supervisor]` artifact. The researcher revises them with the operator and hands off again only after a new explicit operator approval, quoted in the artifact.
+4. The supervisor presents the final proposal to the operator with these sections: **BLUF**, **claims vs findings table**, **what the research missed**, **what the supervisor did**, **decision needed**.
+5. The supervisor creates issues only after the operator approves that proposal, then closes the researcher tab after the session checks below.
 
 When a run reaches `Succeeded`, the supervisor checks the existing acceptance contract:
 
