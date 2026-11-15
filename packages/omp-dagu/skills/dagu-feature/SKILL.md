@@ -265,8 +265,9 @@ The scheduled reconciler reads `issue-<ISSUE>/<RUN>/review-action` with native
 the action before native `state.set` persists it, then their `human.task`
 checkpoints release the queue slot. The next minute tick posts `complete` or
 `push-back` to the local human-task API; there are no detached dispatchers or
-transition log files. Each request includes the run-wide `expectedIteration`
-read from `dagu status` (zero when absent). A stale push-back returns HTTP 409
+transition log files. Each request sends an empty JSON body and the run-wide
+`expectedIteration` query parameter read from `dagu status` (zero when absent;
+Dagu enforces it on push-back). A stale push-back returns HTTP 409
 and leaves the checkpoint intact; inspect the reconciler sub-run evidence.
 
 ## Feasibility PoC
@@ -421,8 +422,8 @@ After leftovers, `tick` fans waiting runs into `reconcile-run` with
 the waiting step and run-wide push-back iteration from `dagu status`, resolves
 the repository, and publishes issue state. Native `state.get` reads the review
 action; `route` selects the operation, and native `http.request` posts to
-`/api/v1/dag-runs/feature/<RUN>/human-tasks/<step>/complete|push-back` with
-`expectedIteration`. HTTP errors fail the sub-run rather than hiding a stale
+`/api/v1/dag-runs/feature/<RUN>/human-tasks/<step>/complete|push-back` with the
+`expectedIteration` query parameter. HTTP errors fail the sub-run rather than hiding a stale
 transition. The old PR `complete`, `keep_waiting` and `unreconciled` routes are gone.
 
 `orphan` still reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>`
