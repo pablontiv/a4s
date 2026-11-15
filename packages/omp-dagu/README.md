@@ -25,6 +25,8 @@ La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME
 
 La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los DAGs estampados.
 
+El run conserva su rama y worktree hasta que `close_gate` termina correctamente. Si falla, corregir la causa y recuperar el mismo run con `dagu retry --run-id <run-id> --step close_gate feature`. `reconcile` solo reporta los worktrees y ramas sobrantes como `LEFTOVER`, sin bloquear otros runs.
+
 ## Estado, progreso y despertar dirigido
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
