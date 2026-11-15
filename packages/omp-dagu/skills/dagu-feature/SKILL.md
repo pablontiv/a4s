@@ -72,7 +72,7 @@ The bootstrap renders both templates once when the repository adopts the lifecyc
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. On exit, the handler removes a worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA; otherwise it retains both.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `checkpoint_push` is the publication boundary. Only `close_gate` removes the worktree and branches, after verifying the merged head and required check. Until it succeeds, `handler_on.exit` retains local resources even if the head is published or merged.
 
 ## Adopt in a repository
 
@@ -161,16 +161,14 @@ Dagu snapshots the definition when you enqueue. Later edits to the file do not a
 
 **One run per lifecycle.** Continue each run through its own checkpoints and push-backs. A feature whose triage chooses PoC ends after enqueueing `poc`; a successful PoC may enqueue a fresh feature run for the cutover.
 
-A failed or aborted run is terminal. If its head has not crossed the `checkpoint_push`
-publication boundary, `handler_on.exit` keeps the local branch and worktree and
-prints both recovery locations. Recover directly in that worktree, then push the
-kept branch and enqueue a new run with a suffixed ID
-(`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
-commit first with `git branch <branch> <sha>`. Once `checkpoint_push` has
-published the head, or GitHub reports its PR merged with that exact head SHA,
-the exit handler may remove the local worktree and branch. Restore a published
-but unmerged branch with `git fetch origin && git branch <branch> origin/<branch>`
-before reenqueuing. Pass `PR_NUMBER` when a PR already exists for the branch.
+Until `close_gate` succeeds, `handler_on.exit` keeps the local branch and worktree
+and prints both recovery locations, including when the PR has already merged
+with that exact head SHA. Fix the reported failure and retry the failed step in
+the same run; a failed `close_gate` must retain its local branch and worktree for
+that retry. If a replacement run is needed, recover directly in the kept
+worktree, push the branch, and enqueue with a suffixed ID (`<repo>-issue-<n>-v2`).
+If the worktree must be recreated, preserve the kept commit first with
+`git branch <branch> <sha>`. Pass `PR_NUMBER` when a PR already exists for the branch.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 
@@ -378,15 +376,15 @@ Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a
 
 `discover` reads waiting `feature` runs across all repositories with `dagu history` and parses their named params. On every tick, `leftovers` also reads the complete `feature` and `poc` histories, collects each distinct `PRIMARY`, and compares its managed worktrees and local `dagu/*` branches with runs in `queued`, `running` or `waiting`. This check runs even when no feature run is waiting.
 
-An unowned resource fails the tick with `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>`. The reconciler only reports it; the operator decides whether to recover or remove it. A managed feature resource is owned by the matching `BRANCH` or `issue-<ISSUE>` worktree, and a PoC resource by its `poc/<run>` branch or `poc-<run>` worktree. Other local branches are outside this check.
+An unowned resource prints `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>` to stderr without failing the tick. The reconciler only reports it; the operator decides whether to recover or remove it. A managed feature resource is owned by the matching `BRANCH` or `issue-<ISSUE>` worktree, and a PoC resource by its `poc/<run>` branch or `poc-<run>` worktree. Other local branches are outside this check.
 
-After leftover detection succeeds, `discover` passes each waiting feature run to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`. A precondition skips only this fan-out when `discover` found no waiting runs. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
+After leftover reporting, `discover` passes each waiting feature run to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`, even when unrelated leftovers exist. A precondition skips only this fan-out when `discover` found no waiting runs. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
 
 The scheduled DAG owns `await_merge` transitions. Each row is a step depending on `observe`, selected by a precondition on its `observation` output:
 
 | Step | Observation precondition | Transition |
 |---|---|---|
-| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, successful required check and tested SHA, fast-forwards the clean primary checkout to `origin/$BASE_BRANCH`, removes and verifies the run worktree, and removes and verifies both local and remote run branches. |
+| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, successful required check and tested SHA, fast-forwards the primary checkout with no tracked changes to `origin/$BASE_BRANCH`, removes and verifies the run worktree, and removes and verifies both local and remote run branches. Unrelated untracked PRIMARY paths do not block closure. |
 | `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. A PR born `DIRTY` reaches `await_merge`; the same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, and requests guarded auto-merge again. |
 | `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick while GitHub waits for the required check to succeed. `UNSTABLE` can include a pending or failing non-required check. |
 | `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
@@ -397,4 +395,4 @@ The `orphan` step selects `triage` or `implement` observations whose issue is `C
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a clean primary checkout exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. `handler_on.exit` covers terminal runs that did not complete `close_gate`, retaining unpublished work and removing published work according to its recovery rules. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a primary checkout with no tracked changes exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. Its last action writes `<git-dir>/dagu-feature/runs/<RUN>/close-gate-succeeded`, cleared at the start of each attempt. `handler_on.exit` acknowledges that marker without repeating cleanup; otherwise it retains local resources and prints recovery locations. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.

@@ -34,7 +34,7 @@ function hasRef(cwd: string, ref: string): boolean {
   return spawnSync("git", ["-C", cwd, "show-ref", "--verify", "--quiet", ref]).status === 0;
 }
 
-type Repo = { root: string; outside: string; primary: string; remote: string; worktree: string; branch: string };
+type Repo = { root: string; outside: string; primary: string; remote: string; worktree: string; branch: string; state: string };
 function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-cleanup-"));
   const outside = join(root, "dagu-run-root");
@@ -54,7 +54,8 @@ function repository(branch = "dagu/issue-209", worktreeName = "issue-209"): Repo
   writeFileSync(join(primary, ".git", "info", "exclude"), "/.workspace/worktrees/\n");
   mkdirSync(join(primary, ".workspace", "worktrees"), { recursive: true });
   git(primary, "worktree", "add", "-b", branch, worktree, "origin/main");
-  return { root, outside, primary, remote, worktree, branch };
+  const state = join(primary, ".git", "dagu-feature", "runs", "test-run");
+  return { root, outside, primary, remote, worktree, branch, state };
 }
 
 function featureCommit(repo: Repo): string {
@@ -141,6 +142,7 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
 
 for (const [name, definition] of featureDefinitions) {
   const closeGate = extractScript(definition, "  - id: close_gate");
+  const exit = extractScript(definition, "  exit:");
 
   test(`${name} close_gate cleans squash-merged worktree and absent remote branch outside a repository`, () => {
     const repo = repository();
@@ -154,6 +156,56 @@ for (const [name, definition] of featureDefinitions) {
       assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
       assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
       assert.match(result.stdout, /cleanup worktree=.* branch=dagu\/issue-209 remote=absent/);
+      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), true);
+      const exited = run(exit, repo);
+      assert.equal(exited.status, 0, exited.stderr);
+      assert.match(exited.stdout, /Cleanup completed by close_gate/);
+      assert.doesNotMatch(exited.stdout, /kept|Recovery/);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} close_gate ignores unrelated untracked PRIMARY paths in both cleanliness checks`, () => {
+    const repo = repository();
+    try {
+      const tested = squashMerge(repo, true);
+      const legacy = join(repo.primary, ".workspace", "legacy-worktrees");
+      mkdirSync(legacy);
+      writeFileSync(join(legacy, "notes.txt"), "unrelated\n");
+      stubGh(repo, tested);
+      const result = run(closeGate, repo);
+      assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+      assert.equal(readFileSync(join(legacy, "notes.txt"), "utf8"), "unrelated\n");
+      assert.equal(git(repo.primary, "status", "--porcelain", "--untracked-files=all"), "?? .workspace/legacy-worktrees/notes.txt");
+      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), true);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
+  test(`${name} failed close_gate clears stale success and keeps a merged head for retry`, () => {
+    const repo = repository();
+    try {
+      const tested = squashMerge(repo, true);
+      stubGh(repo, tested);
+      mkdirSync(repo.state, { recursive: true });
+      writeFileSync(join(repo.state, "close-gate-succeeded"), "");
+      writeFileSync(join(repo.primary, "value.txt"), "dirty\n");
+      const failed = run(closeGate, repo);
+      assert.notEqual(failed.status, 0);
+      assert.match(failed.stderr, /PRIMARY .* has local changes/);
+      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
+      const exited = run(exit, repo);
+      assert.equal(exited.status, 0, exited.stderr);
+      assert.match(exited.stdout, /Work kept: branch dagu\/issue-209; worktree /);
+      assert.match(exited.stdout, /Recovery: inspect run test-run and retry its failed step/);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      writeFileSync(join(repo.primary, "value.txt"), "feature\n");
+      const retried = run(closeGate, repo);
+      assert.equal(retried.status, 0, `stdout:\n${retried.stdout}\nstderr:\n${retried.stderr}`);
+      const completed = run(exit, repo);
+      assert.equal(completed.status, 0, completed.stderr);
+      assert.doesNotMatch(completed.stdout, /kept|Recovery/);
+      assert.equal(existsSync(repo.worktree), false);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
@@ -201,6 +253,10 @@ for (const [name, definition] of featureDefinitions) {
       stubGh(repo, tested);
       const result = run(closeGate, repo);
       assert.notEqual(result.status, 0);
+      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
+      const exited = run(exit, repo);
+      assert.equal(exited.status, 0, exited.stderr);
+      assert.match(exited.stdout, /Work kept/);
       assert.equal(existsSync(repo.worktree), true);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
@@ -228,6 +284,7 @@ for (const [name, definition] of featureDefinitions) {
         const result = run(closeGate, repo);
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, new RegExp(`close_gate: .*${operation === "branch" ? "local branch" : operation}.*remains, expected removed`));
+        assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
   }

@@ -138,7 +138,7 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} reports a succeeded feature worktree and branch once with its last run`, () => {
+  test(`${name} reports a succeeded feature worktree and branch once without blocking tick`, () => {
     const repo = repository();
     try {
       const worktree = addWorktree(repo, "issue-210", "dagu/issue-210");
@@ -150,7 +150,7 @@ for (const [name, definition] of definitions) {
         params: params(repo.primary, { issue: "210", branch: "dagu/issue-210" }),
       }];
       const result = runScript(script, repo, feature, []);
-      assert.equal(result.status, 1);
+      assert.equal(result.status, 0);
       assert.equal(result.stdout, "");
       assert.equal(result.stderr, `LEFTOVER primary worktree=${worktree} branch=dagu/issue-210 last_run=a4s-issue-210 last_status=succeeded\n`);
     } finally {
@@ -158,7 +158,7 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} reports an unowned dagu branch without a worktree`, () => {
+  test(`${name} reports an unowned dagu branch without blocking a waiting run`, () => {
     const repo = repository();
     try {
       git(repo.primary, "branch", "dagu/issue-999", "main");
@@ -170,7 +170,7 @@ for (const [name, definition] of definitions) {
         params: params(repo.primary, { issue: "211", branch: "dagu/issue-211" }),
       }];
       const result = runScript(script, repo, feature, []);
-      assert.equal(result.status, 1);
+      assert.equal(result.status, 0);
       assert.equal(result.stderr, "LEFTOVER primary worktree=none branch=dagu/issue-999 last_run=none last_status=none\n");
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
