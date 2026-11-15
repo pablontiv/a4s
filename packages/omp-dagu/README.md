@@ -25,14 +25,14 @@ La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME
 
 La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los DAGs estampados.
 
-El run conserva su rama y worktree hasta que `close_gate` termina correctamente. Si falla, corregir la causa y recuperar el mismo run con `dagu retry --run-id <run-id> --step close_gate feature`. `reconcile` solo reporta los worktrees y ramas sobrantes como `LEFTOVER`, sin bloquear otros runs.
+El run conserva su rama y worktree hasta que `close_gate` termina correctamente. Si falla, corregir la causa y recuperar el mismo run con `dagu retry --run-id <run-id> --step close_gate feature`. `await_merge` usa HTTP autenticado y jq nativos cada 60 segundos; `reconcile` aplica las transiciones REST de revisión y reporta sobrantes como `LEFTOVER`, sin bloquear otros runs.
 
 **Reconstrucción:**
 
 - Instalar el binario del release de Dagu v2.19.2 en `~/.local/opt/dagu-2.19.2/`.
 - Copiar `station/config.yaml` a `~/.dagu-14steps/config.yaml`, `station/dagu-14steps.service` a `~/.config/systemd/user/dagu-14steps.service` y `station/a4s-14steps` a `~/.local/bin/a4s-14steps` con modo `0755`. Luego ejecutar `systemctl --user daemon-reload && systemctl --user enable --now dagu-14steps`.
 - Ejecutar el [bootstrap](skills/dagu-feature/SKILL.md#1-bootstrap) desde el clon primario, con el entorno de `a4s-14steps` y `SKILL_DIR=/home/shared/harness/a4s/packages/omp-dagu/skills/dagu-feature` absoluto (una ruta relativa falla en `detect`). Responder `GATE=bash scripts/gate.sh`, `REQUIRED_CHECK=validate` y `TEST_PATHS=(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
-- Configurar GitHub con rama predeterminada `dagu-14steps`, status check requerido `validate` y auto-merge habilitado.
+- Configurar GitHub con rama predeterminada `dagu-14steps`, status check requerido `validate` y auto-merge habilitado. El servicio obtiene `GH_TOKEN` con `gh auth token` al arrancar y falla si no puede; el usuario del servicio debe estar autenticado. Reiniciar tras rotar el token. Solo el sub-DAG de polling lo declara como secreto de entorno; no escribirlo en YAML, params o logs.
 - Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
 - Referencia golden: tag `dagu-golden-v1`, run de aceptación `a4s-issue-955` (#955, PR #956).
 
@@ -46,7 +46,7 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 | Coordinator | One new Tern tab per issue, launched with `a4s-14steps` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
 | Researcher | Its own Tern tab, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; hands context to the supervisor and never creates issues. |
 
-Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) and automation (DAG steps, wait handler, reconciler, CI `validate`) are unchanged.
+Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
 
 #### Channels and delivery confirmation
 
@@ -74,14 +74,14 @@ For offline transport tests, `TERN_BIN` overrides the `tern` executable and `TER
 
 #### Launch prompts
 
-The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt:
+The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt. Only one feature run may be active or enqueued at a time (queue concurrency is one). After the current run is `Succeeded`, its post-run acceptance checks pass, and its coordinator tab has been closed, automatically launch the next operator-approved issue in approval order, without waiting for another message. Approval means explicit operator acceptance of that named issue or its plan; creating an issue is not approval. If acceptance fails, launch nothing and report the failure.
 
 ```sh
 primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 issue=965 # Replace with the issue to enqueue.
-tern new tab --cwd "$primary" --json -- a4s-14steps \
-  "Enqueue issue #$issue as run a4s-issue-$issue using dagu-feature. Supervisor pane: $supervisor_pane. You are the coordinator for this issue: enqueue and human.task only; use task for leaf work. Do not use ask, tern new or tern close. When emitting a Turn status report, notify only supervisor pane $supervisor_pane via $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[coordinator $issue] <one-line summary>\"; never notify on silent checkpoint turns. On exit 1 or 2, report delivery failure in your own pane and do not resend."
+tern new tab --cwd "$primary" --json -- a4s-14steps omp -e "$primary/packages/omp-dagu" \
+  "Enqueue issue #$issue as run a4s-issue-$issue using dagu-feature. Supervisor pane: $supervisor_pane. Follow SKILL.md exactly and handle every checkpoint yourself. This is the only input you will get. When an operator decision is required, end your turn with the question in plain text. Report in the Turn status format. You are the coordinator for this issue: enqueue and human.task only; use task for leaf work. Do not use ask, tern new or tern close. When emitting a Turn status report, notify only supervisor pane $supervisor_pane via $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[coordinator $issue] <one-line summary>\"; never notify on silent checkpoint turns. On exit 1 or 2, report delivery failure in your own pane and do not resend."
 ```
 
 The coordinator ends a decision turn with the question in its Turn status and the confirmed notification above; the supervisor relays the question to the operator rather than polling the coordinator pane.
@@ -92,7 +92,7 @@ The supervisor launches a researcher with a concrete question and its own pane a
 primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 question='Replace with the research question.'
-tern new tab --cwd "$primary" --json -- a4s-14steps \
+tern new tab --cwd "$primary" --json -- a4s-14steps omp -e "$primary/packages/omp-dagu" \
   "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
 ```
 
@@ -102,7 +102,7 @@ Researcher output is **input, not truth**. Before creating an issue, changing PR
 
 When a run reaches `Succeeded`, the supervisor checks the existing acceptance contract:
 
-- All 14 steps completed successfully.
+- All required DAG steps and verification guards completed successfully (the merged path skips the recovery-only `merge_review`).
 - The PR is merged with `validate` green.
 - The issue is closed.
 - PRIMARY is clean and equal to `origin/dagu-14steps`.

@@ -1,12 +1,12 @@
 # dagu-feature-bundle: __DAGU_FEATURE_STAMP__
-description: Reconciles every waiting feature run's await_merge with its PR and reports waiting runs whose issue is closed.
+description: Advances native review checkpoints and reports orphaned runs and managed leftovers.
 labels:
   - dagu-feature-bundle=__DAGU_FEATURE_VERSION__
 schedule: "* * * * *"
 catchup_window: ""
 overlap_policy: skip
 type: graph
-shell: bash
+shell: /run/current-system/sw/bin/bash
 steps:
   - id: discover
     run: |
@@ -129,7 +129,7 @@ steps:
 ---
 name: reconcile-run
 type: graph
-shell: bash
+shell: /run/current-system/sw/bin/bash
 params:
   - name: RUN
     type: string
@@ -154,48 +154,59 @@ steps:
       STATUS=$(dagu status feature --run-id "$RUN")
       STEP=$(sed -nE 's/^├─([A-Za-z0-9_-]+) .*\[waiting\]$/\1/p' <<<"$STATUS" | head -1)
       ITERATION=$(sed -nE 's/.*push-back iteration: ([0-9]+).*/\1/p' <<<"$STATUS" | head -1)
-      if [[ "$STEP" == await_merge ]]; then
-        OBSERVATION="await_merge $(gh pr view "${PR_NUMBER:-$BRANCH}" -R "$REPO" --json state,mergeStateStatus,autoMergeRequest --jq '"\(.state)/\(.mergeStateStatus)/\(.autoMergeRequest != null)"')"
-      else
-        OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
-      fi
-      printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\n' "$RUN" "$REPO" "$ISSUE" "${ITERATION:-0}" "$OBSERVATION" | tee -a "$DAGU_OUTPUT_FILE"
+      OBSERVATION="$STEP issue=$(gh issue view "$ISSUE" -R "$REPO" --json state,closedAt --jq '"\(.state) closed_at=\(.closedAt // "")"')"
+      API_URL=${DAGU_URL:-http://127.0.0.1:${DAGU_PORT:-8080}}
+      printf 'run=%s\nrepo=%s\nissue=%s\niteration=%s\nobservation=%s\nstep=%s\napi_url=%s\n' \
+        "$RUN" "$REPO" "$ISSUE" "${ITERATION:-0}" "$OBSERVATION" "$STEP" "$API_URL" | tee -a "$DAGU_OUTPUT_FILE"
     outputs:
       - name: run
       - name: repo
       - name: issue
       - name: iteration
       - name: observation
+      - name: step
+      - name: api_url
 
-  - id: complete
+  - id: review_action
     depends: observe
-    preconditions:
-      - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge MERGED/"
-    run: dagu human-task complete feature --run-id "${steps.observe.outputs.run}" --step await_merge
+    action: state.get
+    with:
+      scope: custom
+      namespace: feature
+      key: issue-${ISSUE}/${RUN}/review-action
+      default: none
+    output: REVIEW_ACTION
 
-  - id: push_back
-    depends: observe
-    preconditions:
-      - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge OPEN/(BEHIND|DIRTY)/"
-    run: dagu human-task push-back feature --run-id "${steps.observe.outputs.run}" --step await_merge --expected-iteration "${steps.observe.outputs.iteration}"
-
-  - id: keep_waiting
-    depends: observe
-    preconditions:
-      - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/true$"
-    run: echo "PR open with auto-merge; await_merge keeps waiting"
-
-  - id: unreconciled
-    depends: observe
-    preconditions:
-      - condition: "${steps.observe.outputs.observation}"
-        expected: "re:^await_merge (CLOSED/|OPEN/(DRAFT|HAS_HOOKS)/|OPEN/(CLEAN|BLOCKED|UNSTABLE|UNKNOWN)/false$)"
+  - id: route
+    outputs:
+      - name: operation
+    depends: review_action
+    env:
+      STEP: ${steps.observe.outputs.step}
+      REVIEW: ${REVIEW_ACTION.value}
     run: |
-      printf 'RECONCILIATION FAILED: %s %s\n' "${steps.observe.outputs.run}" "${steps.observe.outputs.observation}" >&2
-      exit 1
+      set -euo pipefail
+      case "$STEP/$REVIEW" in
+        dependency_review/complete|conflict_review/complete) operation=complete ;;
+        dependency_review/rewind|conflict_review/rewind|merge_review/*) operation=push-back ;;
+        *) operation=none ;;
+      esac
+      printf 'operation=%s\n' "$operation" >> "$DAGU_OUTPUT_FILE"
+
+  - id: transition
+    depends: route
+    preconditions:
+      - condition: ${steps.route.outputs.operation}
+        expected: "re:^(complete|push-back)$"
+    action: http.request
+    with:
+      method: POST
+      url: ${steps.observe.outputs.api_url}/api/v1/dag-runs/feature/${RUN}/human-tasks/${steps.observe.outputs.step}/${steps.route.outputs.operation}
+      headers:
+        Content-Type: application/json
+      body: '{"expectedIteration":${steps.observe.outputs.iteration}}'
+      json: true
+      timeout: 30
 
   - id: orphan
     depends: observe

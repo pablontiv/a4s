@@ -12,21 +12,22 @@ flowchart LR
     T[triage<br/>human.task<br/>coordinator reviewer] --> TD[triage_decision]
     TD -->|POC=yes: enqueue and finish| P[poc]
     TD -->|POC=no + REVIEW| A[start_gate]
-    A --> B[implement<br/>human.task<br/>issue subagent]
+    A --> W[git.worktree.add] --> B[implement<br/>human.task<br/>issue subagent]
     B --> C[checkpoint_push]
-    C --> N[dependency_review]
+    C --> S[state.set review-action] --> N[dependency_review]
     N -->|new dependencies: push-back| T
     N -->|reviewed dependencies| D[rebase]
-    D --> R[conflict_review<br/>human.task]
+    D --> CS[state.set review-action] --> R[conflict_review<br/>human.task]
     R -->|conflict: push-back| B
     R -->|clean rebase| E[gate]
     E --> F[push]
     F --> G[pr]
     G --> I[auto_merge]
-    I --> J[await_merge<br/>human.task<br/>queue slot released]
-    J -->|MERGED: complete| K[close_gate]
-    J -->|BEHIND or DIRTY: push-back| D
-    K --> L[handler_on.exit cleanup]
+    I --> J[await_merge<br/>dag.run + http.request + jq.filter<br/>repeat until terminal observation]
+    J --> V[verify_merge_poll]
+    V -->|BEHIND or DIRTY| MR[merge_review: push-back] --> D
+    V -->|MERGED| VM[verify_merged] --> K[close_gate<br/>git.worktree.remove + state.set]
+    K --> L[handler_on.exit state.get + report]
 ```
 
 ## Requirements
@@ -34,7 +35,8 @@ flowchart LR
 - `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
 - `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
-- `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
+- `git`, `gh` authenticated with push and PR rights, `curl`, `jq`. Start the scheduler/worker with `GH_TOKEN=$(gh auth token)` followed by `export GH_TOKEN` before `exec dagu start-all`; fail startup if token lookup fails. Only the polling child declares the `GH_TOKEN` environment secret and uses it in the authenticated GitHub HTTP header. Never pass or print the token in params, YAML values or debug output; restart the service after token rotation. The gate strips `GH_TOKEN` and `GITHUB_TOKEN`.
+- Dagu 2.19.2 and `/run/current-system/sw/bin/bash`, the explicit shell used by these DAGs.
 - The tools the repository's gate command needs.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
@@ -87,7 +89,7 @@ version's periods with hyphens: `bootstrap-backscroll-v0-2-0` for version
 `0.2.0`.
 
 ```sh
-dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
+dagu enqueue --queue <repo> --labels kind=bootstrap --run-id "bootstrap-<repo>-v<version-with-hyphens>" <skill-dir>/dagu-feature-bootstrap.yaml -- \
   PRIMARY="$(git rev-parse --show-toplevel)" SKILL_DIR=<skill-dir>
 ```
 
@@ -142,7 +144,7 @@ primary=$(git rev-parse --show-toplevel)
 issue_snapshot=$(gh issue list --repo "$repo" --state open --limit 1000 \
   --json number --jq '.[].number')
 for n in $issue_snapshot; do
-  dagu enqueue --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
+  dagu enqueue --queue "$repo_name" --labels "issue=$n,kind=feature" --run-id "$repo_name-issue-$n" .workspace/dagu/dags/feature.yaml -- \
     ISSUE="$n" \
     PRIMARY="$primary" \
     BRANCH="dagu/issue-$n" \
@@ -188,7 +190,7 @@ The `@a4s/omp-dagu` status extension delivers hidden model context with the form
 - A retried subagent appends `v<N>` to its base name, for example `Implement182v2`.
 - For every issue in the fixed batch, keep one todo for the agent action at the `human.task` where its run is waiting: triage review, PoC execution, implementation, or recovery. Update that todo when the run moves to another human task. The package widget shows the active step plus live activity: the last non-empty Dagu log line for a running command, or the newest `toolCall` name, intention (falling back to its principal argument) and age from `TriageReview<ISSUE>`, `Poc<ISSUE>` or `Implement<ISSUE>` while its human task waits. It refreshes activity about every two seconds and leaves the line unchanged when no source is available.
 - Keep `task.maxRecursionDepth: 1`; every implementation and triage-reviewer subagent remains at level 1 and appears in the main view.
-- A notice whose `compat` is not `ok` goes under **Blockers and decisions**. Put the exact `dagu enqueue --run-id "bootstrap-<repo>-v<version-with-hyphens>" ...` upgrade command under **Proposals**. When the request authorizes upgrades, the coordinator runs that upgrade procedure, completes `answers` with the current values shown by the prompt, opens the adoption issue, and enqueues its staged `feature.yaml`.
+- A notice whose `compat` is not `ok` goes under **Blockers and decisions**. Put the exact `dagu enqueue --queue <repo> --labels kind=bootstrap --run-id "bootstrap-<repo>-v<version-with-hyphens>" ...` upgrade command under **Proposals**. When the request authorizes upgrades, the coordinator runs that upgrade procedure, completes `answers` with the current values shown by the prompt, opens the adoption issue, and enqueues its staged `feature.yaml`.
 
 ## Turn status
 
@@ -258,19 +260,19 @@ reviewer. The detector covers package.json, Go, Python, Chart/Flux/Compose and
 package roots; undeclared external CLI/runtime behavior still requires triage
 judgment.
 
-The wait handler launches one bounded dispatcher for `dependency_review` and
-`conflict_review` because Dagu persists Waiting only after the handler exits.
-Before a push-back, the dispatcher reads `push-back iteration: <n>` from
-`dagu status`; this is one run-wide counter shared by every `human.task`, and
-defaults to `0` when absent. Dispatcher output is in
-`<git-dir>/dagu-feature/runs/<RUN>/dependency-transition.log` or
-`conflict-transition.log`. A failed dispatch leaves the corresponding review
-step waiting; inspect its log and apply the same iteration-protected transition.
+The scheduled reconciler reads `issue-<ISSUE>/<RUN>/review-action` with native
+`state.get` in the `feature` namespace. `checkpoint_push` and `rebase` publish
+the action before native `state.set` persists it, then their `human.task`
+checkpoints release the queue slot. The next minute tick posts `complete` or
+`push-back` to the local human-task API; there are no detached dispatchers or
+transition log files. Each request includes the run-wide `expectedIteration`
+read from `dagu status` (zero when absent). A stale push-back returns HTTP 409
+and leaves the checkpoint intact; inspect the reconciler sub-run evidence.
 
 ## Feasibility PoC
 
 ```sh
-dagu enqueue --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
+dagu enqueue --queue <repo> --labels kind=poc --run-id "<repo>-poc-<id>" .workspace/dagu/dags/poc.yaml -- \
   PRIMARY="$(git rev-parse --show-toplevel)" QUESTION="<behavior to prove>"
 ```
 
@@ -364,11 +366,12 @@ When `start_gate` succeeds, the run enters `Waiting` at `implement`, and the que
 The run resumes through the queue: `checkpoint_push` → `dependency_review` →
 `rebase` → `conflict_review` → `gate` → `push` → `pr` → `auto_merge`. The
 dependency checkpoint automatically completes or returns to triage. A clean
-rebase makes the wait handler complete `conflict_review`; a conflicting rebase
+rebase makes the scheduled reconciler complete `conflict_review`; a conflicting rebase
 records the conflict paths, aborts to a clean worktree, and pushes back to
 `implement`. After `auto_merge` requests guarded auto-merge for the tested SHA,
-the run waits at `await_merge` and releases the repository queue slot. GitHub
-merges only after the required check succeeds. `pr` creates the PR with `--fill`
+the native `await_merge` loop polls GitHub every 60 seconds, holding the
+repository queue slot while running. GitHub merges only after the required
+check succeeds; `merge_review` releases the slot only when recovery is needed. `pr` creates the PR with `--fill`
 and the body `Closes #<issue>`, so the commit message becomes the PR title.
 Write it in the repository's commit convention.
 
@@ -378,29 +381,55 @@ seconds. The retry therefore repeats setup such as `npm ci`; only after a
 successful gate does the step check that the worktree is clean and record the
 tested SHA.
 
-## Reconcile `await_merge`
+## Await merge and scheduled reconciliation
 
-Remote observation belongs to the scheduled [`reconcile`](reconcile.yaml) DAG, a separate process from the implementing agent, which does not wait on hosted CI. The reconciler holds no repository queue slot: it uses its own local queue with concurrency one. It runs every minute with `overlap_policy: skip` and an empty `catchup_window`.
+[`await_merge`](feature.yaml) runs the `poll-pr-merged` child: authenticated
+`http.request` gets the PR and `jq.filter .merged` decodes its merge boolean.
+The child's bash classifier also publishes `ready`, `recovery` and a token-free
+observation. The parent repeats until `outputValues.ready` is true at 60-second
+intervals, without a production repeat limit. Unlike a merged-only condition,
+this stops for recovery and terminal failures instead of polling forever.
 
-`discover` reads waiting `feature` runs across all repositories with `dagu history` and parses their named params. On every tick, `leftovers` also reads the complete `feature` and `poc` histories, collects each distinct `PRIMARY`, and compares its managed worktrees and local `dagu/*` branches with runs in `queued`, `running` or `waiting`. This check runs even when no feature run is waiting.
+| Observation | Result |
+|---|---|
+| Merged | `verify_merge_poll` accepts it, `merge_review` is skipped, and `verify_merged` requires `merged=true` before `close_gate`. |
+| OPEN, not draft, auto-merge active, BEHIND or DIRTY | `merge_review` waits in the parent DAG; the scheduled reconciler posts push-back to `rebase`. The same run resolves conflicts through `conflict_review`/`implement`, reruns the gate, pushes, and requests guarded auto-merge again. |
+| OPEN, not draft, CLEAN/BLOCKED/UNSTABLE/UNKNOWN, auto-merge active | Repeat; GitHub is still waiting. `UNSTABLE` can include pending or failing non-required checks. |
+| CLOSED unmerged, draft, HAS_HOOKS, auto-merge inactive, or any other state | `verify_merge_poll` fails the feature run with the observation. Resources remain for recovery; a disabled auto-merge request is never silently re-enabled. |
 
-An unowned resource prints `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>` to stderr without failing the tick. The reconciler only reports it; the operator decides whether to recover or remove it. A managed feature resource is owned by the matching `BRANCH` or `issue-<ISSUE>` worktree, and a PoC resource by its `poc/<run>` branch or `poc-<run>` worktree. Other local branches are outside this check.
+An exhausted repeat is still Succeeded in Dagu 2.19.2: the independent
+`verify_merge_poll` therefore rejects an unmerged, non-recoverable result even
+if a test or operator imposed a repeat limit. `verify_merged` is the final
+fail-closed check after the recovery checkpoint. No sub-DAG has `human.task`.
 
-After leftover reporting, `discover` passes each waiting feature run to the local `reconcile-run` sub-DAG through `tick` with `max_concurrent: 1`, even when unrelated leftovers exist. A precondition skips only this fan-out when `discover` found no waiting runs. `observe` reads the waiting step and push-back iteration from `dagu status`, resolves the repository from `PRIMARY`, and reads the PR with `gh pr view` (or the issue for other waiting steps). It publishes the observation as step outputs.
+The scheduled [`reconcile`](reconcile.yaml) DAG keeps its own local queue with
+concurrency one, runs every minute with `overlap_policy: skip` and an empty
+`catchup_window`, and no longer polls or completes `await_merge`.
+`discover` reads waiting `feature` runs across repositories with `dagu history`.
+`leftovers` still reads the complete `feature` and `poc` histories, collects
+PRIMARYs, and compares managed worktrees and local `dagu/*` branches with runs
+in `queued`, `running` or `waiting`, even when no feature is waiting.
 
-The scheduled DAG owns `await_merge` transitions. Each row is a step depending on `observe`, selected by a precondition on its `observation` output:
+Unowned resources print `LEFTOVER <repo> worktree=<path|none> branch=<branch|none> last_run=<id|none> last_status=<status|none>`
+to stderr without failing the tick. It only reports: the operator decides
+whether to recover or remove them. Feature ownership matches BRANCH or
+`issue-<ISSUE>`; PoC ownership matches `poc/<run>` or `poc-<run>`. Other local
+branches are outside the check.
 
-| Step | Observation precondition | Transition |
-|---|---|---|
-| `complete` | `await_merge MERGED/…` | Completes the checkpoint. `close_gate` verifies the merged head, successful required check and tested SHA, fast-forwards the primary checkout with no tracked changes to `origin/$BASE_BRANCH`, removes and verifies the run worktree, and removes and verifies both local and remote run branches. Unrelated untracked PRIMARY paths do not block closure. |
-| `push_back` | `await_merge OPEN/` with `BEHIND` or `DIRTY` | Pushes back with the observed `--expected-iteration`. A PR born `DIRTY` reaches `await_merge`; the same run resumes at `rebase`, continues through `conflict_review`, reruns the gate, pushes the tested SHA, and requests guarded auto-merge again. |
-| `keep_waiting` | `await_merge OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN`, and auto-merge active | Records that the PR remains waiting for a later tick while GitHub waits for the required check to succeed. `UNSTABLE` can include a pending or failing non-required check. |
-| `unreconciled` | `await_merge CLOSED/…`; `OPEN/` with `DRAFT` or `HAS_HOOKS`; or `OPEN/` with `CLEAN`, `BLOCKED`, `UNSTABLE` or `UNKNOWN` and auto-merge inactive | Fails the sub-run with the observation on stderr while the feature run remains waiting. The sub-run logs provide the failure evidence. |
+After leftovers, `tick` fans waiting runs into `reconcile-run` with
+`max_concurrent: 1`; no waiting runs skips only that fan-out. `observe` reads
+the waiting step and run-wide push-back iteration from `dagu status`, resolves
+the repository, and publishes issue state. Native `state.get` reads the review
+action; `route` selects the operation, and native `http.request` posts to
+`/api/v1/dag-runs/feature/<RUN>/human-tasks/<step>/complete|push-back` with
+`expectedIteration`. HTTP errors fail the sub-run rather than hiding a stale
+transition. The old PR `complete`, `keep_waiting` and `unreconciled` routes are gone.
 
-`observe` reads `push-back iteration: <n>` from the status output, defaulting to `0` when that line is absent. The value is the run-wide counter shared by all `human.task` steps, and every push-back increments it. The expected-iteration guard makes a stale observation fail with a conflict while preserving the checkpoint.
-
-The `orphan` step selects `triage` or `implement` observations whose issue is `CLOSED`. It reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>` and leaves the run unchanged. Inspect the scheduled `reconcile` history and its sub-run logs for transitions, unreconciled states, and orphan reports.
+`orphan` still reports `ORPHAN <repo>#<issue> <run> <step> issue=CLOSED closed_at=<timestamp>`
+for closed issues waiting at `triage` or `implement`, leaving the run unchanged.
+Inspect scheduled sub-run logs for transitions and orphan reports; inspect the
+feature's poll/verify logs for merge failures.
 
 ## Finish
 
-After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a primary checkout with no tracked changes exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. Its last action writes `<git-dir>/dagu-feature/runs/<RUN>/close-gate-succeeded`, cleared at the start of each attempt. `handler_on.exit` acknowledges that marker without repeating cleanup; otherwise it retains local resources and prints recovery locations. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.
+After `close_gate`, the run is `Succeeded`. The closing contract is a merged PR, a primary checkout with no tracked changes exactly at `origin/$BASE_BRANCH`, no run worktree, and no local or remote run branch; `close_gate` performs and verifies every part of that contract and prints the cleanup result. Its child first deletes the native `state.*` key `issue-<ISSUE>/<RUN>/close-gate-succeeded` in the root DAG namespace, then sets it only after all cleanup checks pass. `handler_on.exit` reads that state without repeating cleanup; otherwise it retains local resources and prints recovery locations. The turn status reports under Done the run ID, the PR, the tested SHA, and the `base_sha` printed by `close_gate`.

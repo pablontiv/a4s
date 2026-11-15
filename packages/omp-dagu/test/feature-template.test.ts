@@ -5,23 +5,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { runBash } from "./shell.ts";
+import { extractScript, featureCloseScript, runBash } from "./shell.ts";
 
 const definitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
   ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/feature.yaml", import.meta.url))],
 ] as const;
 
-function extractScript(definition: string, marker: string): string {
-  const lines = readFileSync(definition, "utf8").split("\n");
-  const markerIndex = lines.indexOf(marker);
-  assert.notEqual(markerIndex, -1, `missing ${marker} in ${definition}`);
-  const runIndex = lines.indexOf("    run: |", markerIndex);
-  assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
-  let end = runIndex + 1;
-  while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n");
-}
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -118,6 +108,8 @@ function featureScriptEnv(repo: Repository): NodeJS.ProcessEnv {
     OMP_SESSION_ID: "",
     POC_BASIS: "",
     RUN: "test-run",
+    CLOSED: "false",
+    DAGU_OUTPUT_FILE: join(repo.root, "dagu-output"),
   };
 }
 
@@ -139,9 +131,9 @@ function runScript(script: string, repo: Repository): string {
 }
 
 for (const [name, definition] of definitions) {
-  const exitScript = extractScript(definition, "  exit:");
+  const exitScript = extractScript(definition, "  - id: report_exit");
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
-  const closeGateScript = extractScript(definition, "  - id: close_gate");
+  const closeGateScript = featureCloseScript(definition);
 
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
     const repo = repository();
@@ -176,14 +168,11 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} exit keeps a never-pushed branch and ignores another run's success marker`, () => {
+  test(`${name} exit keeps a never-pushed branch without successful close state`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "unpublished\n");
       stubGh(repo, "", 1, "no pull requests found\n");
-      const otherState = join(dirname(repo.state), "other-run");
-      mkdirSync(otherState);
-      writeFileSync(join(otherState, "close-gate-succeeded"), "");
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
@@ -283,7 +272,7 @@ for (const [name, definition] of definitions) {
     try {
       commit(repo, "packages/second/package.json", '{"dependencies":{"shared":"1.0.0"}}\n');
       runScript(checkpointScript, repo);
-      assert.equal(readFileSync(join(repo.state, "dependency-action"), "utf8"), "rewind\n");
+      assert.equal(readFileSync(join(repo.root, "dagu-output"), "utf8"), "action=rewind\n");
       assert.equal(readFileSync(join(repo.state, "dependencies"), "utf8"), "dependency\tpackages/second/package.json\tshared\n");
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
@@ -295,7 +284,7 @@ for (const [name, definition] of definitions) {
     try {
       commit(repo, "README.txt", "dependency relationships unchanged\n");
       runScript(checkpointScript, repo);
-      assert.equal(readFileSync(join(repo.state, "dependency-action"), "utf8"), "complete\n");
+      assert.equal(readFileSync(join(repo.root, "dagu-output"), "utf8"), "action=complete\n");
       assert.equal(readFileSync(join(repo.state, "dependencies"), "utf8"), "");
     } finally {
       rmSync(repo.root, { recursive: true, force: true });

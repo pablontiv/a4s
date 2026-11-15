@@ -5,7 +5,7 @@ labels:
 queue: TEMPLATE_REPO
 type: graph
 dotenv: []
-shell: bash
+shell: /run/current-system/sw/bin/bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
@@ -33,6 +33,9 @@ env:
   - DAGU_FEATURE_BUNDLE: "__DAGU_FEATURE_IDENTITY__"
 steps:
   - id: record
+    outputs:
+      - name: issue
+      - name: created
     run: |
       set -euo pipefail
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
@@ -60,13 +63,14 @@ steps:
         capture("^<!-- poc-verdict:(?<verdict>PASS|FAIL|INCONCLUSIVE) scope:(?<scope>OK|FAIL) run:(?<run>[^\\s]+) attempt:(?<attempt>[1-9][0-9]*) base:(?<base>[^\\s]+) -->$");
       JQ
       gh repo view --json nameWithOwner --jq .nameWithOwner > "$STATE/repo"
+      CREATED=no
       if [[ -z "$ISSUE" ]]; then
         test -n "$QUESTION"
         TITLE=$(jq -nr --arg q "$QUESTION" '$q|gsub("\\s+";" ")|"PoC: " + .|.[0:200]')
         printf '%s\n' "$QUESTION" > "$STATE/issue-body.txt"
         URL=$(gh issue create --repo "$(cat "$STATE/repo")" --title "$TITLE" --body-file "$STATE/issue-body.txt")
         ISSUE=${URL##*/}
-        touch "$STATE/created"
+        CREATED=yes
       fi
       [[ "$ISSUE" =~ ^[1-9][0-9]*$ ]]
       printf '%s\n' "$ISSUE" > "$STATE/issue.number"
@@ -76,9 +80,17 @@ steps:
       fi
       test -n "$QUESTION"
       printf '%s\n' "$QUESTION" > "$STATE/question.txt"
+      printf 'issue=%s\ncreated=%s\n' "$ISSUE" "$CREATED" >> "$DAGU_OUTPUT_FILE"
+
+  - id: record_created
+    depends: record
+    action: state.set
+    with:
+      key: issue-${steps.record.outputs.issue}/${RUN}/created
+      value: ${steps.record.outputs.created}
 
   - id: base
-    depends: record
+    depends: record_created
     run: |
       set -euo pipefail
       printf '%s\n' "$DAGU_FEATURE_BUNDLE"
@@ -89,6 +101,7 @@ steps:
       git -C "$PRIMARY" fetch origin
       git -C "$PRIMARY" merge --ff-only "origin/$BASE_BRANCH"
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
+      git -C "$PRIMARY" check-ignore -q "$WORKTREE"
       git -C "$PRIMARY" rev-parse HEAD > "$STATE/base.sha"
       printf 'BASE_SHA=%s\n' "$(cat "$STATE/base.sha")" >> "$DAGU_OUTPUT_FILE"
     outputs:
@@ -96,18 +109,26 @@ steps:
 
   - id: worktree
     depends: base
+    working_dir: ${PRIMARY}
+    action: git.worktree.add
+    with:
+      path: ${WORKTREE}
+      branch: poc/${RUN}
+      create_branch: true
+      base: ${steps.base.outputs.BASE_SHA}
+
+  - id: result
+    depends: worktree
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
-      git -C "$PRIMARY" check-ignore -q "$WORKTREE"
-      git -C "$PRIMARY" worktree add -b "poc/$RUN" "$WORKTREE" "$(cat "$STATE/base.sha")"
       RESULT=$(git -C "$WORKTREE" rev-parse --path-format=absolute --git-path poc/result.md)
       mkdir -p "$(dirname "$RESULT")"
       printf '%s\n' "$RESULT" > "$STATE/result.path"
       printf 'result=%s\n' "$RESULT"
 
   - id: run_poc
-    depends: worktree
+    depends: result
     action: human.task
     with:
       prompt: >-
@@ -239,10 +260,19 @@ steps:
       push_back:
         rewind_to: run_poc
 
-  - id: dispose
+  - id: created
     depends: decide
+    action: state.get
+    with:
+      key: issue-${steps.record.outputs.issue}/${RUN}/created
+      default: "no"
+    output: CREATED_STATE
+
+  - id: dispose
+    depends: created
     env:
       - PROMOTE: ${steps.decide.outputs.promote}
+      - CREATED: ${CREATED_STATE.value}
     run: |
       set -euo pipefail
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "poc/runs/$RUN")
@@ -253,8 +283,6 @@ steps:
         test "$(cat "$STATE/scope")" = OK
         gh issue view "$ISSUE" --repo "$REPO" --json body > "$STATE/current-body.json"
         gh api --paginate --slurp "repos/$REPO/issues/$ISSUE/comments?per_page=100" > "$STATE/pages.json"
-        CREATED=no
-        if test -f "$STATE/created"; then CREATED=yes; fi
         jq -er -L "$STATE" --arg created "$CREATED" --slurpfile issue "$STATE/current-body.json" '
           include "sections";
           [ .[][] ] as $comments |
@@ -278,11 +306,11 @@ steps:
             and ($issue[0].body|section("## Después del PASS")|norm|length) > 0
           then $last.comment.html_url else error("Latest verdict is not a current, complete PASS") end
         ' "$STATE/pages.json" > "$STATE/promotion.url"
-        dagu enqueue --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
+        dagu enqueue --queue TEMPLATE_REPO --labels "issue=$ISSUE,kind=feature" --run-id "feature-$RUN" "$PRIMARY/.workspace/dagu/dags/feature.yaml" -- \
           ISSUE="$ISSUE" PRIMARY="$PRIMARY" BRANCH="dagu/issue-$ISSUE" \
           BASE_BRANCH="$BASE_BRANCH" OMP_SESSION_ID="$OMP_SESSION_ID" \
           POC_BASIS="$(cat "$STATE/promotion.url")"
-      elif [[ "$VERDICT" == FAIL && -f "$STATE/created" ]]; then
+      elif [[ "$VERDICT" == FAIL && "$CREATED" == yes ]]; then
         gh issue close "$ISSUE" --repo "$REPO" --reason 'not planned' --comment "VERDICT: FAIL; run:$RUN. $(cat "$STATE/comment.url")"
       else
         test "$PROMOTE" = no
@@ -294,6 +322,26 @@ handler_on:
       - PUBLICATION_FAILURE: "yes"
     run: *publish
   exit:
+    action: dag.run
+    with:
+      dag: cleanup-poc
+      params:
+        PRIMARY: ${PRIMARY}
+        RUN: ${RUN}
+
+---
+name: cleanup-poc
+type: graph
+shell: /run/current-system/sw/bin/bash
+params:
+  - name: PRIMARY
+    required: true
+  - name: RUN
+    required: true
+steps:
+  - id: prepare_cleanup
+    outputs:
+      - name: worktree
     run: |
       set -euo pipefail
       [[ "$RUN" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
@@ -302,12 +350,28 @@ handler_on:
       WT_REAL="$WT"
       if [[ -d "$WT" ]]; then
         WT_REAL=$(cd "$WT" && pwd -P)
-        git -C "$PRIMARY" worktree remove "$WT_REAL"
       fi
+      printf 'worktree=%s\n' "$WT_REAL" >> "$DAGU_OUTPUT_FILE"
+
+  - id: remove_worktree
+    depends: prepare_cleanup
+    working_dir: ${PRIMARY}
+    action: git.worktree.remove
+    with:
+      path: ${steps.prepare_cleanup.outputs.worktree}
+      branch: poc/${RUN}
+      delete_branch: true
+      force_delete_branch: true
+
+  - id: verify_cleanup
+    depends: remove_worktree
+    env:
+      WT_REAL: ${steps.prepare_cleanup.outputs.worktree}
+    run: |
+      set -euo pipefail
+      WT="$PRIMARY/.workspace/worktrees/poc-$RUN"
+      BRANCH="poc/$RUN"
       git -C "$PRIMARY" worktree prune
-      if git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        git -C "$PRIMARY" branch -D "$BRANCH"
-      fi
       WORKTREE_LIST=$(git -C "$PRIMARY" worktree list --porcelain)
       if [[ -e "$WT" || -e "$WT_REAL" ]] ||
          grep -Fqx "worktree $WT" <<<"$WORKTREE_LIST" ||
