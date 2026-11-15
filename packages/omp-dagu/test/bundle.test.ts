@@ -12,7 +12,7 @@ import {
 test("package metadata is the bundle compatibility authority", () => {
   assert.equal(BUNDLE_NAME, "@a4s/omp-dagu");
   assert.equal(BUNDLE_VERSION, "0.2.0");
-  assert.equal(REQUIRED_DAGU_VERSION, "2.19.2");
+  assert.equal(REQUIRED_DAGU_VERSION, "2.26.0");
 });
 
 test("compatibility keeps major stable and also minor stable before 1.0", () => {
@@ -30,14 +30,14 @@ test("labels and exact line-one stamps are parsed", () => {
   assert.equal(bundleVersionFromLabels(["workspace=a4s"]), undefined);
   assert.deepEqual(
     parseBundleStamp(
-      "# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.2.0 dagu=2.19.2\nlabels:\n",
+      "# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@0123456789012345678901234567890123456789 bootstrap=bootstrap-a4s-0.2.0 dagu=2.26.0\nlabels:\n",
     ),
     {
       version: "0.2.0",
       source: "pablontiv/a4s@0123456789012345678901234567890123456789",
       bootstrap: "bootstrap-a4s-0.2.0",
-      dagu: "2.19.2",
+      dagu: "2.26.0",
     },
   );
-  assert.equal(parseBundleStamp("labels:\n# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=x@y bootstrap=z dagu=2.19.2\n"), undefined);
+  assert.equal(parseBundleStamp("labels:\n# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=x@y bootstrap=z dagu=2.26.0\n"), undefined);
 });

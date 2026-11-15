@@ -12,7 +12,7 @@
   "bugs": { "url": "https://github.com/pablontiv/a4s/issues" },
   "type": "module",
   "engines": { "node": ">=22.19.0" },
-  "daguFeature": { "dagu": "2.19.2" },
+  "daguFeature": { "dagu": "2.26.0" },
   "exports": {
     "./status": "./src/status/index.ts",
     "./triage": "./src/triage/index.ts"

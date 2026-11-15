@@ -202,7 +202,7 @@ steps:
     action: http.request
     with:
       method: POST
-      # Dagu 2.19.2 takes expectedIteration as a query param (enforced on push-back); a body field is rejected as task input.
+      # Dagu 2.26.0 takes expectedIteration as a query param (enforced on push-back); a body field is rejected as task input.
       url: ${steps.observe.outputs.api_url}/api/v1/dag-runs/feature/${RUN}/human-tasks/${steps.observe.outputs.step}/${steps.route.outputs.operation}?expectedIteration=${steps.observe.outputs.iteration}
       headers:
         Content-Type: application/json

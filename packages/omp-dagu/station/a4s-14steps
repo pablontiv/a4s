@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Coordinator shell/omp for the 14-step a4s lifecycle on the isolated dagu 2.19.2 station.
+# Coordinator shell/omp for the 14-step a4s lifecycle on the isolated dagu 2.26.0 station.
 # Usage: a4s-14steps            -> omp session with @a4s/omp-dagu loaded
 #        a4s-14steps <cmd...>   -> run <cmd> with the station environment (e.g. dagu status ...)
 set -euo pipefail
 export DAGU_HOME=/home/pones/.dagu-14steps DAGU_URL=http://127.0.0.1:8090 DAGU_PORT=8090
-export PATH=/home/pones/.local/opt/dagu-2.19.2:$PATH
+export PATH=/home/pones/.local/opt/dagu-2.26.0:$PATH
 cd /home/shared/harness/a4s
 if (($#)); then exec "$@"; fi
 exec omp -e /home/shared/harness/a4s/packages/omp-dagu

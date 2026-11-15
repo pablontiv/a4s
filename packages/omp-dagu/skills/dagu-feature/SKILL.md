@@ -36,7 +36,7 @@ flowchart LR
 - `@a4s/omp-dagu` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`. Start the scheduler/worker with `GH_TOKEN=$(gh auth token)` followed by `export GH_TOKEN` before `exec dagu start-all`; fail startup if token lookup fails. Only the polling child declares the `GH_TOKEN` environment secret and uses it in the authenticated GitHub HTTP header. Never pass or print the token in params, YAML values or debug output; restart the service after token rotation. The gate strips `GH_TOKEN` and `GITHUB_TOKEN`.
-- Dagu 2.19.2 and `/run/current-system/sw/bin/bash`, the explicit shell used by these DAGs.
+- Dagu 2.26.0 and `/run/current-system/sw/bin/bash`, the explicit shell used by these DAGs.
 - The tools the repository's gate command needs.
 
 This skill does not install Dagu, and it carries no logic specific to any repository. Everything that varies between repositories is a DAG param.
@@ -398,7 +398,7 @@ this stops for recovery and terminal failures instead of polling forever.
 | OPEN, not draft, CLEAN/BLOCKED/UNSTABLE/UNKNOWN, auto-merge active | Repeat; GitHub is still waiting. `UNSTABLE` can include pending or failing non-required checks. |
 | CLOSED unmerged, draft, HAS_HOOKS, auto-merge inactive, or any other state | `verify_merge_poll` fails the feature run with the observation. Resources remain for recovery; a disabled auto-merge request is never silently re-enabled. |
 
-An exhausted repeat is still Succeeded in Dagu 2.19.2: the independent
+An exhausted repeat is still Succeeded in Dagu 2.26.0: the independent
 `verify_merge_poll` therefore rejects an unmerged, non-recoverable result even
 if a test or operator imposed a repeat limit. `verify_merged` is the final
 fail-closed check after the recovery checkpoint. No sub-DAG has `human.task`.
