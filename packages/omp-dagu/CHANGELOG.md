@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Require Dagu 2.26.0 for the bundle/bootstrap and align the a4s station templates, rendered DAG stamps and version fixtures without changing DAG behavior (#983).
 - Version the complete bundle, stamp rendered DAGs with their package/source/bootstrap/Dagu identity, report compatibility in the extension, and add the `dagu-feature-bundle` inspection CLI.
 
 - Bind every `triage-reviewer` in a batched `task` call to its own run generation across synchronous results, native spawn feedback, waits and asynchronous completions.

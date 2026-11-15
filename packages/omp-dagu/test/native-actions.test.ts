@@ -108,7 +108,7 @@ function contents(path: string): string {
   }).join("\n");
 }
 
-test("Dagu 2.19.2 native poll binding, exhausted-repeat guard and secret redaction", { skip: !dagu }, async () => {
+test("Dagu 2.26.0 native poll binding, exhausted-repeat guard and secret redaction", { skip: !dagu }, async () => {
   const source = readFileSync(definitions[0]!, "utf8");
   const token = "issue-966-fixture-not-a-real-credential";
   for (const { merged, state, mergeState, active, outcome, calls } of [
@@ -157,7 +157,7 @@ test("Dagu 2.19.2 native poll binding, exhausted-repeat guard and secret redacti
   }
 });
 
-test("Dagu 2.19.2 native worktree idempotence and root-DAG state reset", { skip: !dagu }, async () => {
+test("Dagu 2.26.0 native worktree idempotence and root-DAG state reset", { skip: !dagu }, async () => {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-native-state-"));
   const repo = join(root, "repo"), worktree = join(root, "worktree");
   try {
@@ -219,7 +219,7 @@ steps:
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Dagu 2.19.2 native review POST fails on a stale expectedIteration", { skip: !dagu }, async () => {
+test("Dagu 2.26.0 native review POST fails on a stale expectedIteration", { skip: !dagu }, async () => {
   const root = mkdtempSync(join(tmpdir(), "omp-dagu-native-review-"));
   let received: unknown;
   const server = createServer(async (request, response) => {

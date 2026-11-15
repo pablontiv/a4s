@@ -1,4 +1,4 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0 dagu=2.26.0
 labels:
   - workspace=a4s
   - dagu-feature-bundle=0.2.0

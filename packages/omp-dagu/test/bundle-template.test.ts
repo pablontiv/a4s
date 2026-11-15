@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { parseBundleStamp, REQUIRED_DAGU_VERSION } from "../src/bundle.ts";
 
 const skill = (name: string): string => readFileSync(
   fileURLToPath(new URL(`../skills/dagu-feature/${name}`, import.meta.url)),
@@ -42,6 +43,7 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
 test("a4s stamped DAGs are exact template renders", () => {
   for (const name of ["feature.yaml", "poc.yaml", "reconcile.yaml"]) {
     const stamped = readFileSync(fileURLToPath(new URL(`../../../.workspace/dagu/dags/${name}`, import.meta.url)), "utf8");
+    assert.equal(parseBundleStamp(stamped)?.dagu, REQUIRED_DAGU_VERSION, name);
     const replacements: Record<string, string> = {
       __DAGU_FEATURE_STAMP__: stamped.split("\n", 1)[0]!.slice("# dagu-feature-bundle: ".length),
       __DAGU_FEATURE_VERSION__: "0.2.0",

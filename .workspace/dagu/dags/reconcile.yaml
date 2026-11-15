@@ -1,4 +1,4 @@
-# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0 dagu=2.19.2
+# dagu-feature-bundle: @a4s/omp-dagu@0.2.0 source=pablontiv/a4s@89aa686cbb6ca4fa2fc9275b4221b441af078c7a bootstrap=bootstrap-a4s-v0-2-0 dagu=2.26.0
 description: Advances native review checkpoints and reports orphaned runs and managed leftovers.
 labels:
   - dagu-feature-bundle=0.2.0
@@ -202,7 +202,7 @@ steps:
     action: http.request
     with:
       method: POST
-      # Dagu 2.19.2 takes expectedIteration as a query param (enforced on push-back); a body field is rejected as task input.
+      # Dagu 2.26.0 takes expectedIteration as a query param (enforced on push-back); a body field is rejected as task input.
       url: ${steps.observe.outputs.api_url}/api/v1/dag-runs/feature/${RUN}/human-tasks/${steps.observe.outputs.step}/${steps.route.outputs.operation}?expectedIteration=${steps.observe.outputs.iteration}
       headers:
         Content-Type: application/json

@@ -1,5 +1,5 @@
 [Unit]
-Description=Dagu 2.19.2 station for the a4s 14-step lifecycle (dagu-14steps)
+Description=Dagu 2.26.0 station for the a4s 14-step lifecycle (dagu-14steps)
 After=network-online.target
 
 [Service]
@@ -7,8 +7,8 @@ Environment="DAGU_HOME=/home/pones/.dagu-14steps"
 Environment="DAGU_URL=http://127.0.0.1:8090"
 # triage_decision reads the run back through REST on ${DAGU_PORT:-8080}.
 Environment="DAGU_PORT=8090"
-Environment="PATH=/home/pones/.local/opt/dagu-2.19.2:/run/current-system/sw/bin:/etc/profiles/per-user/pones/bin:/home/pones/.local/bin"
-ExecStart=/run/current-system/sw/bin/bash -c 'GH_TOKEN=$$(gh auth token) || exit; export GH_TOKEN; exec /home/pones/.local/opt/dagu-2.19.2/dagu start-all'
+Environment="PATH=/home/pones/.local/opt/dagu-2.26.0:/run/current-system/sw/bin:/etc/profiles/per-user/pones/bin:/home/pones/.local/bin"
+ExecStart=/run/current-system/sw/bin/bash -c 'GH_TOKEN=$$(gh auth token) || exit; export GH_TOKEN; exec /home/pones/.local/opt/dagu-2.26.0/dagu start-all'
 Restart=on-failure
 RestartSec=5
 
