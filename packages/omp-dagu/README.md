@@ -19,6 +19,12 @@ DAGU_URL=http://127.0.0.1:8080 omp -e /ruta/a/a4s/packages/omp-dagu
 
 Usar el directorio completo permite que OMP descubra las dos extensiones, `agents/triage-reviewer.md` y `skills/dagu-feature/`. `DAGU_URL` es la raíz del servidor (por defecto `http://127.0.0.1:8080`).
 
+## Estación aislada de 14 pasos
+
+La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME=~/.dagu-14steps` y `DAGU_URL=http://127.0.0.1:8090`. El coordinador se inicia con `a4s-14steps` (OMP con este paquete cargado); `a4s-14steps dagu ...` ejecuta comandos de la CLI de Dagu contra esa estación.
+
+La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los DAGs estampados.
+
 ## Estado, progreso y despertar dirigido
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
