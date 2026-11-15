@@ -14,7 +14,7 @@ type CompatiblePiHandler<Event, Result = undefined> = (
   event: Parameters<ExtensionHandler<Event, Result>>[0],
   ctx: CompatiblePiContext,
 ) => ReturnType<ExtensionHandler<Event, Result>>;
-type CompatiblePiOnArgs =
+type CompatiblePiEventArgs =
   | [event: "agent_settled", handler: CompatiblePiHandler<AgentSettledEvent>]
   | [
     event: "session_before_compact",
@@ -74,7 +74,7 @@ export function createCompatiblePiFake(): CompatiblePiFake {
   let settling = false;
   const queuedCompactions: Array<() => Promise<void>> = [];
 
-  function on(...args: CompatiblePiOnArgs): () => void {
+  function on(...args: CompatiblePiEventArgs): () => void {
     const [event, handler] = args;
     switch (event) {
       case "agent_settled":

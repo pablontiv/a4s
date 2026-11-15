@@ -46,7 +46,7 @@ test('diagnostics writes private JSONL with RCA fields and no sensitive input', 
   try {
     logger = createDiagnostics({
       env,
-      harnessName: 'pion',
+      harnessName: 'pi',
       hostname: 'host-secret',
       instanceId: rawSession,
       now: () => new Date('2026-01-02T03:04:05.678Z'),
@@ -82,7 +82,7 @@ test('diagnostics writes private JSONL with RCA fields and no sensitive input', 
 
   assert.equal(stdoutWrites, 0)
   assert.equal(stderrWrites, 0)
-  assert.equal(path.dirname(path.dirname(logger.file)), defaultDiagnosticRoot({ env, harnessName: 'pion' }))
+  assert.equal(path.dirname(path.dirname(logger.file)), defaultDiagnosticRoot({ env, harnessName: 'pi' }))
   if (process.platform !== 'win32') {
     assert.equal(fs.statSync(path.dirname(logger.file)).mode & 0o777, 0o700)
     assert.equal(fs.statSync(logger.file).mode & 0o777, 0o600)
@@ -94,7 +94,7 @@ test('diagnostics writes private JSONL with RCA fields and no sensitive input', 
   assert.equal(record.timestamp, '2026-01-02T03:04:05.678Z')
   assert.equal(record.event_name, 'synagent.pi.message.rejected')
   assert.equal(record['resource.service.name'], '@a4s/synagent')
-  assert.equal(record['resource.a4s.harness.name'], 'pion')
+  assert.equal(record['resource.a4s.harness.name'], 'pi')
   assert.equal(record['scope.name'], 'a4s.synagent.pi')
   assert.equal(record['attributes.a4s.operation_id'], 'operation-fixture')
   assert.equal(record['attributes.a4s.operation'], 'message.receive')
@@ -127,13 +127,13 @@ test('diagnostics contains creation and serialization failures', t => {
   }) as NodeJS.ProcessEnv
   let unavailable: ReturnType<typeof createDiagnostics> | undefined
   assert.doesNotThrow(() => {
-    unavailable = createDiagnostics({ env: badEnv, harnessName: 'pion', instanceId: 'creation-failure' })
+    unavailable = createDiagnostics({ env: badEnv, harnessName: 'pi', instanceId: 'creation-failure' })
   })
   assert.equal(unavailable?.record('synagent.pi.started', { operation: 'lifecycle.start' }), false)
 
   const logger = createDiagnostics({
     env: { A4S_STATE_ROOT: temp },
-    harnessName: 'pion',
+    harnessName: 'pi',
     instanceId: 'serialization-failure',
     now: () => new Date(Number.NaN),
   })
@@ -149,7 +149,7 @@ test('diagnostics completes short writes before reporting success', t => {
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
   const logger = createDiagnostics({
     env: { A4S_STATE_ROOT: temp },
-    harnessName: 'pion',
+    harnessName: 'pi',
     instanceId: 'short-write',
   })
   const original = fs.writeSync
@@ -194,7 +194,7 @@ test('diagnostics stops before its fixed file quota without later event I/O', t 
   try {
     logger = createDiagnostics({
       env: { A4S_STATE_ROOT: temp },
-      harnessName: 'pion',
+      harnessName: 'pi',
       instanceId: 'quota',
     })
   } finally {
@@ -220,32 +220,32 @@ test('diagnostics drops writes for symlink and non-regular paths', {
 }, t => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'synagent-pi-paths-'))
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }))
-  const harnessRoot = path.join(temp, 'log', 'synagent', 'pion')
+  const harnessRoot = path.join(temp, 'log', 'synagent', 'pi')
   fs.mkdirSync(harnessRoot, { recursive: true })
 
-  const linkedInstance = `pion-${digestIdentifier('linked').slice(0, 32)}`
+  const linkedInstance = `pi-${digestIdentifier('linked').slice(0, 32)}`
   const outside = path.join(temp, 'outside')
   fs.mkdirSync(outside)
   fs.symlinkSync(outside, path.join(harnessRoot, linkedInstance))
-  let logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pion', instanceId: 'linked' })
+  let logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pi', instanceId: 'linked' })
   assert.equal(logger.record('synagent.pi.started', { operation: 'lifecycle.start' }), false)
   logger.close()
   assert.equal(fs.existsSync(path.join(outside, 'operational.jsonl')), false)
 
-  const fileInstance = `pion-${digestIdentifier('file-instance').slice(0, 32)}`
+  const fileInstance = `pi-${digestIdentifier('file-instance').slice(0, 32)}`
   fs.writeFileSync(path.join(harnessRoot, fileInstance), 'unchanged')
-  logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pion', instanceId: 'file-instance' })
+  logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pi', instanceId: 'file-instance' })
   assert.equal(logger.record('synagent.pi.started', { operation: 'lifecycle.start' }), false)
   logger.close()
   assert.equal(fs.readFileSync(path.join(harnessRoot, fileInstance), 'utf8'), 'unchanged')
 
-  const regularInstance = `pion-${digestIdentifier('linked-file').slice(0, 32)}`
+  const regularInstance = `pi-${digestIdentifier('linked-file').slice(0, 32)}`
   const regularDirectory = path.join(harnessRoot, regularInstance)
   const outsideFile = path.join(temp, 'outside.jsonl')
   fs.mkdirSync(regularDirectory)
   fs.writeFileSync(outsideFile, 'unchanged\n')
   fs.symlinkSync(outsideFile, path.join(regularDirectory, 'operational.jsonl'))
-  logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pion', instanceId: 'linked-file' })
+  logger = createDiagnostics({ env: { A4S_STATE_ROOT: temp }, harnessName: 'pi', instanceId: 'linked-file' })
   assert.equal(logger.record('synagent.pi.started', { operation: 'lifecycle.start' }), false)
   logger.close()
   assert.equal(fs.readFileSync(outsideFile, 'utf8'), 'unchanged\n')
@@ -269,7 +269,7 @@ test('diagnostics writes nothing when private file mode cannot be guaranteed', {
     const logger = createDiagnostics({
       componentName: 'pi',
       env: { A4S_STATE_ROOT: temp },
-      harnessName: 'pion',
+      harnessName: 'pi',
       instanceId: 'mode-failure',
     })
     assert.equal(logger.record('synagent.pi.started', { operation: 'lifecycle.start' }), false)

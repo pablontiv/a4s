@@ -12,7 +12,7 @@ export type SynagentPiOptions = SynagentAdapterOptions
 const PI_HOST: SynagentAdapterHost = {
   displayName: 'Pi',
   componentName: 'pi',
-  harnessName: 'pion',
+  harnessName: 'pi',
   scopeName: 'a4s.synagent.pi',
   diagnosticEventPrefix: 'synagent.pi',
   settleEventName: 'agent_settled',
