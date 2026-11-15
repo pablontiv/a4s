@@ -5,7 +5,7 @@ labels:
 queue: TEMPLATE_REPO
 type: graph
 dotenv: []
-shell: bash
+shell: /run/current-system/sw/bin/bash
 max_active_steps: 1
 max_clean_up_time_sec: 120
 params:
@@ -244,7 +244,7 @@ steps:
       cd "$PRIMARY"
       gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
-        dagu enqueue --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+        dagu enqueue --queue TEMPLATE_REPO --labels "issue=$ISSUE,kind=poc" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
           ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
           OMP_SESSION_ID="$OMP_SESSION_ID"
       fi
@@ -273,22 +273,28 @@ steps:
         test "$(git -C "$WORKTREE" rev-parse --show-toplevel)" = "$WORKTREE"
         test "$(git -C "$WORKTREE" branch --show-current)" = "$BRANCH"
         test -z "$(git -C "$WORKTREE" status --porcelain)"
-      elif git -C "$PRIMARY" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-        git -C "$PRIMARY" worktree add "$WORKTREE" "$BRANCH"
-      else
-        git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}" >/dev/null
-        git -C "$PRIMARY" worktree add -b "$BRANCH" "$WORKTREE" "origin/$BASE_BRANCH"
       fi
-      printf 'issue=%s\nbranch=%s\nworktree=%s\nbase_sha=%s\n' \
-        "$ISSUE" "$BRANCH" "$WORKTREE" "$(git -C "$WORKTREE" rev-parse HEAD)"
+      git -C "$PRIMARY" rev-parse --verify "origin/$BASE_BRANCH^{commit}"
+
+  - id: worktree
+    depends: start_gate
+    working_dir: ${PRIMARY}
+    action: git.worktree.add
+    with:
+      path: ${WORKTREE}
+      branch: ${BRANCH}
+      create_branch: true
+      base: origin/${BASE_BRANCH}
 
   - id: implement
-    depends: start_gate
+    depends: worktree
     action: human.task
     with:
       prompt: "Implement issue #${ISSUE} in ${WORKTREE}. Leave one commit on ${BRANCH} rebased onto origin/${BASE_BRANCH}, with conflicts resolved, and a clean worktree. After a conflict push-back, the files are listed in <git-dir>/dagu-feature/runs/${RUN}/conflict-files."
 
   - id: checkpoint_push
+    outputs:
+      - name: action
     depends: implement
     run: |
       set -euo pipefail
@@ -347,22 +353,32 @@ steps:
       after=$(dirs "$head")
       jq -nr --argjson before "$before" --argjson after "$after" '$after - $before | .[] | "package-or-extension\t\(.)"' >> "$STATE/dependencies"
       if test -s "$STATE/dependencies" && ! cmp -s "$STATE/dependencies" "$STATE/reviewed-dependencies"; then
-        printf 'rewind\n' > "$STATE/dependency-action"
+        review_action=rewind
       else
-        printf 'complete\n' > "$STATE/dependency-action"
+        review_action=complete
       fi
       git -C "$WORKTREE" push --force-with-lease --set-upstream origin "HEAD:$BRANCH"
       printf 'checkpoint_sha=%s\n' "$(git -C "$WORKTREE" rev-parse HEAD)"
+      printf 'action=%s\n' "$review_action" >> "$DAGU_OUTPUT_FILE"
+
+  - id: dependency_action
+    depends: checkpoint_push
+    action: state.set
+    with:
+      key: issue-${ISSUE}/${RUN}/review-action
+      value: ${steps.checkpoint_push.outputs.action}
 
   - id: dependency_review
-    depends: checkpoint_push
+    depends: dependency_action
     action: human.task
     with:
-      prompt: "Dependency net checkpoint: the wait handler completes unchanged dependencies or pushes back to triage."
+      prompt: "Dependency net checkpoint: the scheduled reconciler completes unchanged dependencies or pushes back to triage."
       push_back:
         rewind_to: triage
 
   - id: rebase
+    outputs:
+      - name: action
     depends: dependency_review
     run: |
       set -euo pipefail
@@ -372,7 +388,7 @@ steps:
       git -C "$WORKTREE" fetch origin
       STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
       if git -C "$WORKTREE" rebase "origin/$BASE_BRANCH"; then
-        printf 'complete\n' > "$STATE/conflict-action"
+        printf 'action=complete\n' >> "$DAGU_OUTPUT_FILE"
         test "$(git -C "$WORKTREE" rev-list --count "origin/$BASE_BRANCH..HEAD")" -eq 1
         printf 'rebased_sha=%s\n' "$(git -C "$WORKTREE" rev-parse HEAD)"
       else
@@ -380,16 +396,23 @@ steps:
         git -C "$WORKTREE" rebase --abort
         test -z "$(git -C "$WORKTREE" status --porcelain)"
         test -s "$STATE/conflict-files"
-        printf 'rewind\n' > "$STATE/conflict-action"
+        printf 'action=rewind\n' >> "$DAGU_OUTPUT_FILE"
         sed 's/^/conflict_files=/' "$STATE/conflict-files"
         exit 0
       fi
 
-  - id: conflict_review
+  - id: conflict_action
     depends: rebase
+    action: state.set
+    with:
+      key: issue-${ISSUE}/${RUN}/review-action
+      value: ${steps.rebase.outputs.action}
+
+  - id: conflict_review
+    depends: conflict_action
     action: human.task
     with:
-      prompt: "Rebase conflict checkpoint: the wait handler completes a clean rebase or pushes back to implement with the conflict files."
+      prompt: "Rebase conflict checkpoint: the scheduled reconciler completes a clean rebase or pushes back to implement with the conflict files."
       push_back:
         rewind_to: implement
 
@@ -429,6 +452,9 @@ steps:
       fi
 
   - id: auto_merge
+    outputs:
+      - name: repo
+      - name: pr
     depends: pr
     run: |
       set -euo pipefail
@@ -437,26 +463,193 @@ steps:
       pr_ref=${PR_NUMBER:-$BRANCH}
       test "$(gh pr view "$pr_ref" --json headRefOid --jq .headRefOid)" = "$sha"
       gh pr merge "$pr_ref" --auto --squash --match-head-commit "$sha"
-      printf 'pr=%s\nhead_sha=%s\n' \
-        "$(gh pr view "$pr_ref" --json number --jq .number)" "$sha"
+      printf 'repo=%s\npr=%s\n' \
+        "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+        "$(gh pr view "$pr_ref" --json number --jq .number)" >> "$DAGU_OUTPUT_FILE"
+      printf 'head_sha=%s\n' "$sha"
 
   - id: await_merge
     depends: auto_merge
+    action: dag.run
+    with:
+      dag: poll-pr-merged
+      params:
+        REPO: ${steps.auto_merge.outputs.repo}
+        PR: ${steps.auto_merge.outputs.pr}
+    output: MERGE_POLL_RESULT
+    repeat_policy:
+      repeat: until
+      condition: ${MERGE_POLL_RESULT.outputValues.ready}
+      expected: "true"
+      interval_sec: 60
+
+  - id: verify_merge_poll
+    depends: await_merge
+    env:
+      MERGED: ${MERGE_POLL_RESULT.outputValues.merged}
+      RECOVERY: ${MERGE_POLL_RESULT.outputValues.recovery}
+      OBSERVATION: ${MERGE_POLL_RESULT.outputValues.observation}
+    run: |
+      set -euo pipefail
+      printf 'merge observation: %s\n' "$OBSERVATION" >&2
+      test "$MERGED" = true || test "$RECOVERY" = true
+
+  - id: merge_review
+    depends: verify_merge_poll
+    preconditions:
+      - condition: ${MERGE_POLL_RESULT.outputValues.recovery}
+        expected: "true"
+    continue_on: skipped
     action: human.task
     with:
-      prompt: "The scheduled reconcile DAG owns this checkpoint: complete on MERGED; push back with the expected iteration on BEHIND or DIRTY; keep OPEN with auto-merge waiting; report unreconciled states."
+      prompt: "PR is BEHIND or DIRTY. The scheduled reconciler pushes back to rebase, reruns the gate, pushes and enables guarded auto-merge again."
       push_back:
         rewind_to: rebase
 
+  - id: verify_merged
+    depends: merge_review
+    env:
+      MERGED: ${MERGE_POLL_RESULT.outputValues.merged}
+    run: |
+      set -euo pipefail
+      test "$MERGED" = true
+
   - id: close_gate
-    depends: await_merge
+    depends: verify_merged
+    action: dag.run
+    with:
+      dag: close-feature
+      params:
+        ISSUE: ${ISSUE}
+        RUN: ${RUN}
+        PRIMARY: ${PRIMARY}
+        WORKTREE: ${WORKTREE}
+        BRANCH: ${BRANCH}
+        BASE_BRANCH: ${BASE_BRANCH}
+        PR_NUMBER: ${steps.auto_merge.outputs.pr}
+        REQUIRED_CHECK: ${REQUIRED_CHECK}
+
+handler_on:
+  exit:
+    action: dag.run
+    with:
+      dag: report-feature-exit
+      params:
+        ISSUE: ${ISSUE}
+        RUN: ${RUN}
+        PRIMARY: ${PRIMARY}
+        WORKTREE: ${WORKTREE}
+        BRANCH: ${BRANCH}
+
+---
+name: poll-pr-merged
+type: graph
+shell: /run/current-system/sw/bin/bash
+params:
+  - name: REPO
+    required: true
+  - name: PR
+    required: true
+secrets:
+  - name: GH_TOKEN
+    provider: env
+    key: GH_TOKEN
+steps:
+  - id: get_pr
+    action: http.request
+    with:
+      method: GET
+      url: https://api.github.com/repos/${REPO}/pulls/${PR}
+      headers:
+        Authorization: Bearer ${GH_TOKEN}
+        Accept: application/vnd.github+json
+        X-GitHub-Api-Version: "2022-11-28"
+      json: true
+      timeout: 30
+    output:
+      body:
+        from: stdout
+        decode: json
+        select: .body
+
+  - id: is_merged
+    depends: get_pr
+    action: jq.filter
+    with:
+      filter: .merged
+      data: ${steps.get_pr.outputs.body}
+    stdout:
+      outputs:
+        field: merged
+        decode: json
+
+  - id: classify_pr
+    stdout:
+      outputs:
+        decode: json
+    depends: is_merged
+    env:
+      RESPONSE: ${steps.get_pr.outputs.body}
+      MERGED: ${steps.is_merged.outputs.merged}
+    run: |
+      set -euo pipefail
+      test "$MERGED" = true || test "$MERGED" = false
+      state=$(jq -er '.state | ascii_upcase' <<< "$RESPONSE")
+      merge_state=$(jq -r '.mergeable_state // "UNKNOWN" | ascii_upcase' <<< "$RESPONSE")
+      active=$(jq -r '.auto_merge != null' <<< "$RESPONSE")
+      draft=$(jq -r '.draft' <<< "$RESPONSE")
+      ready=true recovery=false
+      if test "$MERGED" = true; then
+        :
+      elif test "$state" = OPEN && test "$draft" = false && test "$active" = true; then
+        case "$merge_state" in
+          BEHIND|DIRTY) recovery=true ;;
+          CLEAN|BLOCKED|UNSTABLE|UNKNOWN) ready=false ;;
+        esac
+      fi
+      jq -cn --argjson ready "$ready" --argjson recovery "$recovery" \
+        --arg observation "state=$state/mergeStateStatus=$merge_state/autoMerge=$active/draft=$draft" \
+        '{ready: $ready, recovery: $recovery, observation: $observation}'
+
+---
+name: close-feature
+type: graph
+shell: /run/current-system/sw/bin/bash
+params:
+  - name: ISSUE
+    required: true
+  - name: RUN
+    required: true
+  - name: PRIMARY
+    required: true
+  - name: WORKTREE
+    required: true
+  - name: BRANCH
+    required: true
+  - name: BASE_BRANCH
+    required: true
+  - name: PR_NUMBER
+    required: true
+  - name: REQUIRED_CHECK
+    required: true
+steps:
+  - id: reset_close_gate
+    action: state.delete
+    with:
+      scope: root_dag
+      key: issue-${ISSUE}/${RUN}/close-gate-succeeded
+
+  - id: prepare_close_gate
+    outputs:
+      - name: worktree
+      - name: pr
+      - name: tested_sha
+      - name: origin_base_sha
+    depends: reset_close_gate
     run: |
       set -euo pipefail
       umask 0022
       fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
-      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      mkdir -p "$STATE"
-      rm -f "$STATE/close-gate-succeeded"
       repo=$(git -C "$PRIMARY" remote get-url origin) ||
         fail "PRIMARY $PRIMARY origin lookup failed, expected repository"
       pr_ref=${PR_NUMBER:-$BRANCH}
@@ -501,12 +694,30 @@ steps:
         fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
       worktree_real=$(cd "$WORKTREE" && pwd -P) ||
         fail "worktree $WORKTREE canonicalization failed, expected directory"
-      git -C "$PRIMARY" worktree remove "$worktree_real" ||
-        fail "worktree $WORKTREE removal failed, expected removed"
+      printf 'worktree=%s\npr=%s\ntested_sha=%s\norigin_base_sha=%s\n' "$worktree_real" "$pr" "$tested_sha" "$origin_base_sha" >> "$DAGU_OUTPUT_FILE"
+
+  - id: remove_worktree
+    depends: prepare_close_gate
+    working_dir: ${PRIMARY}
+    action: git.worktree.remove
+    with:
+      path: ${steps.prepare_close_gate.outputs.worktree}
+      branch: ${BRANCH}
+      delete_branch: true
+      force_delete_branch: true
+
+  - id: finish_close_gate
+    depends: remove_worktree
+    env:
+      worktree_real: ${steps.prepare_close_gate.outputs.worktree}
+      pr: ${steps.prepare_close_gate.outputs.pr}
+      tested_sha: ${steps.prepare_close_gate.outputs.tested_sha}
+      origin_base_sha: ${steps.prepare_close_gate.outputs.origin_base_sha}
+    run: |
+      set -euo pipefail
+      fail() { printf 'close_gate: %s\n' "$*" >&2; exit 1; }
       git -C "$PRIMARY" worktree prune ||
         fail "worktree prune failed, expected success"
-      git -C "$PRIMARY" branch -D "$BRANCH" ||
-        fail "local branch $BRANCH removal failed, expected removed"
       git -C "$PRIMARY" fetch --prune origin ||
         fail "origin prune failed, expected success"
       remote=absent
@@ -543,46 +754,46 @@ steps:
         fail "PRIMARY $PRIMARY HEAD=$base_sha, expected $origin_base_sha"
       printf 'pr=%s\ntested_sha=%s\nbase_sha=%s\ncleanup worktree=%s branch=%s remote=%s\n' \
         "$pr" "$tested_sha" "$base_sha" "$WORKTREE" "$BRANCH" "$remote"
-      touch "$STATE/close-gate-succeeded"
 
-handler_on:
-  wait:
+  - id: mark_close_gate
+    depends: finish_close_gate
+    action: state.set
+    with:
+      scope: root_dag
+      key: issue-${ISSUE}/${RUN}/close-gate-succeeded
+      value: true
+
+---
+name: report-feature-exit
+type: graph
+shell: /run/current-system/sw/bin/bash
+params:
+  - name: ISSUE
+    required: true
+  - name: RUN
+    required: true
+  - name: PRIMARY
+    required: true
+  - name: WORKTREE
+    required: true
+  - name: BRANCH
+    required: true
+steps:
+  - id: close_state
+    action: state.get
+    with:
+      scope: root_dag
+      key: issue-${ISSUE}/${RUN}/close-gate-succeeded
+      default: false
+    output: CLOSE_STATE
+
+  - id: report_exit
+    depends: close_state
+    env:
+      CLOSED: ${CLOSE_STATE.value}
     run: |
       set -euo pipefail
-      printf 'waiting_steps=%s issue=%s branch=%s worktree=%s\n' "$DAG_WAITING_STEPS" "$ISSUE" "$BRANCH" "$WORKTREE"
-      for SPEC in \
-        "dependency_review dependency-action dependency-transition.log" \
-        "conflict_review conflict-action conflict-transition.log"; do
-        read -r STEP ACTION LOG <<<"$SPEC"
-        if [[ ",$DAG_WAITING_STEPS," == *,"$STEP",* ]]; then
-          STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-          # Dagu persists Waiting only after onWait exits; dispatch after that boundary.
-          nohup bash -c '
-            set -euo pipefail
-            STATE=$1 RUN=$2 STEP=$3 ACTION=$4
-            for attempt in $(seq 1 60); do
-              STATUS=$(dagu status feature --run-id "$RUN")
-              if grep -q "^Waiting -" <<<"$STATUS"; then
-                if [[ "$(cat "$STATE/$ACTION")" == rewind ]]; then
-                  ITERATION=$(sed -nE "s/.*push-back iteration: ([0-9]+).*/\1/p" <<<"$STATUS" | head -1)
-                  dagu human-task push-back feature --run-id "$RUN" --step "$STEP" --expected-iteration "${ITERATION:-0}"
-                else
-                  dagu human-task complete feature --run-id "$RUN" --step "$STEP"
-                fi
-                exit 0
-              fi
-              sleep 1
-            done
-            printf "%s transition did not reach Waiting; inspect this checkpoint.\n" "$STEP" >&2
-            exit 1
-          ' _ "$STATE" "$RUN" "$STEP" "$ACTION" </dev/null > "$STATE/$LOG" 2>&1 &
-        fi
-      done
-  exit:
-    run: |
-      set -euo pipefail
-      STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
-      if test -f "$STATE/close-gate-succeeded"; then
+      if test "$CLOSED" = true; then
         printf 'Cleanup completed by close_gate: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"
       else
         printf 'Work kept: branch %s; worktree %s\n' "$BRANCH" "$WORKTREE"

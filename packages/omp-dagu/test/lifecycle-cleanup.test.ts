@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { runBash } from "./shell.ts";
+import { extractScript, featureCloseScript, pocCleanupScript, runBash } from "./shell.ts";
 
 const featureDefinitions = [
   ["template", fileURLToPath(new URL("../skills/dagu-feature/feature.yaml", import.meta.url))],
@@ -16,16 +16,6 @@ const pocDefinitions = [
   ["rendered DAG", fileURLToPath(new URL("../../../.workspace/dagu/dags/poc.yaml", import.meta.url))],
 ] as const;
 
-function extractScript(definition: string, marker: string, after = 0): string {
-  const lines = readFileSync(definition, "utf8").split("\n");
-  const markerIndex = lines.indexOf(marker, after);
-  assert.notEqual(markerIndex, -1, `missing ${marker} in ${definition}`);
-  const runIndex = lines.indexOf("    run: |", markerIndex);
-  assert.notEqual(runIndex, -1, `missing run block after ${marker}`);
-  let end = runIndex + 1;
-  while (end < lines.length && (lines[end]!.startsWith("      ") || lines[end] === "")) end++;
-  return lines.slice(runIndex + 1, end).map((line) => line.slice(6)).join("\n");
-}
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -135,14 +125,16 @@ function run(script: string, repo: Repo, extra: Record<string, string> = {}) {
       OMP_SESSION_ID: "",
       POC_BASIS: "",
       RUN: "test-run",
+      CLOSED: "false",
+      DAGU_OUTPUT_FILE: join(repo.root, "dagu-output"),
       ...extra,
     },
   });
 }
 
 for (const [name, definition] of featureDefinitions) {
-  const closeGate = extractScript(definition, "  - id: close_gate");
-  const exit = extractScript(definition, "  exit:");
+  const closeGate = featureCloseScript(definition);
+  const exit = extractScript(definition, "  - id: report_exit");
 
   test(`${name} close_gate cleans squash-merged worktree and absent remote branch outside a repository`, () => {
     const repo = repository();
@@ -156,8 +148,7 @@ for (const [name, definition] of featureDefinitions) {
       assert.equal(hasRef(repo.primary, `refs/remotes/origin/${repo.branch}`), false);
       assert.equal(git(repo.primary, "rev-parse", "HEAD"), git(repo.primary, "rev-parse", "origin/main"));
       assert.match(result.stdout, /cleanup worktree=.* branch=dagu\/issue-209 remote=absent/);
-      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), true);
-      const exited = run(exit, repo);
+      const exited = run(exit, repo, { CLOSED: "true" });
       assert.equal(exited.status, 0, exited.stderr);
       assert.match(exited.stdout, /Cleanup completed by close_gate/);
       assert.doesNotMatch(exited.stdout, /kept|Recovery/);
@@ -176,22 +167,18 @@ for (const [name, definition] of featureDefinitions) {
       assert.equal(result.status, 0, `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
       assert.equal(readFileSync(join(legacy, "notes.txt"), "utf8"), "unrelated\n");
       assert.equal(git(repo.primary, "status", "--porcelain", "--untracked-files=all"), "?? .workspace/legacy-worktrees/notes.txt");
-      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), true);
     } finally { rmSync(repo.root, { recursive: true, force: true }); }
   });
 
-  test(`${name} failed close_gate clears stale success and keeps a merged head for retry`, () => {
+  test(`${name} failed close_gate keeps a merged head for retry`, () => {
     const repo = repository();
     try {
       const tested = squashMerge(repo, true);
       stubGh(repo, tested);
-      mkdirSync(repo.state, { recursive: true });
-      writeFileSync(join(repo.state, "close-gate-succeeded"), "");
       writeFileSync(join(repo.primary, "value.txt"), "dirty\n");
       const failed = run(closeGate, repo);
       assert.notEqual(failed.status, 0);
       assert.match(failed.stderr, /PRIMARY .* has local changes/);
-      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
       const exited = run(exit, repo);
       assert.equal(exited.status, 0, exited.stderr);
       assert.match(exited.stdout, /Work kept: branch dagu\/issue-209; worktree /);
@@ -201,7 +188,7 @@ for (const [name, definition] of featureDefinitions) {
       writeFileSync(join(repo.primary, "value.txt"), "feature\n");
       const retried = run(closeGate, repo);
       assert.equal(retried.status, 0, `stdout:\n${retried.stdout}\nstderr:\n${retried.stderr}`);
-      const completed = run(exit, repo);
+      const completed = run(exit, repo, { CLOSED: "true" });
       assert.equal(completed.status, 0, completed.stderr);
       assert.doesNotMatch(completed.stdout, /kept|Recovery/);
       assert.equal(existsSync(repo.worktree), false);
@@ -253,7 +240,6 @@ for (const [name, definition] of featureDefinitions) {
       stubGh(repo, tested);
       const result = run(closeGate, repo);
       assert.notEqual(result.status, 0);
-      assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
       const exited = run(exit, repo);
       assert.equal(exited.status, 0, exited.stderr);
       assert.match(exited.stdout, /Work kept/);
@@ -284,14 +270,13 @@ for (const [name, definition] of featureDefinitions) {
         const result = run(closeGate, repo);
         assert.notEqual(result.status, 0);
         assert.match(result.stderr, new RegExp(`close_gate: .*${operation === "branch" ? "local branch" : operation}.*remains, expected removed`));
-        assert.equal(existsSync(join(repo.state, "close-gate-succeeded")), false);
       } finally { rmSync(repo.root, { recursive: true, force: true }); }
     });
   }
 }
 
 for (const [name, definition] of pocDefinitions) {
-  const exit = extractScript(definition, "  exit:");
+  const exit = pocCleanupScript(definition);
   test(`${name} PoC cleanup fails and retains a dirty worktree and branch`, () => {
     const repo = repository("poc/test-run", "poc-test-run");
     try {

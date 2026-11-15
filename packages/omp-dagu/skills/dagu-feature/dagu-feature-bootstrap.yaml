@@ -1,6 +1,6 @@
 type: graph
 dotenv: []
-shell: bash
+shell: /run/current-system/sw/bin/bash
 max_active_steps: 1
 params:
   - name: PRIMARY

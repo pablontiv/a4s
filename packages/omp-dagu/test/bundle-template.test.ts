@@ -37,3 +37,24 @@ test("bootstrap detects source compatibility and renders and confirms all stamps
   assert.match(bootstrap, /Dagu-Feature-Source: %s@%s/);
   assert.match(bootstrap, /Dagu-Feature-Bootstrap: %s/);
 });
+
+
+test("a4s stamped DAGs are exact template renders", () => {
+  for (const name of ["feature.yaml", "poc.yaml", "reconcile.yaml"]) {
+    const stamped = readFileSync(fileURLToPath(new URL(`../../../.workspace/dagu/dags/${name}`, import.meta.url)), "utf8");
+    const replacements: Record<string, string> = {
+      __DAGU_FEATURE_STAMP__: stamped.split("\n", 1)[0]!.slice("# dagu-feature-bundle: ".length),
+      __DAGU_FEATURE_VERSION__: "0.2.0",
+      __DAGU_FEATURE_IDENTITY__: stamped.match(/DAGU_FEATURE_BUNDLE: "([^"]+)"/)?.[1] ?? "",
+      TEMPLATE_REPO: "a4s",
+      TEMPLATE_BASE_BRANCH: JSON.stringify("dagu-14steps"),
+      __GATE__: JSON.stringify("bash scripts/gate.sh"),
+      __REQUIRED_CHECK__: JSON.stringify("validate"),
+      __PRIMARY__: JSON.stringify("/home/shared/harness/a4s"),
+      __TEST_PATHS__: JSON.stringify("(^|/)(test|tests)/|\\.test\\.(ts|cjs)$"),
+    };
+    let rendered = skill(name);
+    for (const [placeholder, value] of Object.entries(replacements)) rendered = rendered.replaceAll(placeholder, value);
+    assert.equal(rendered.trimEnd(), stamped.trimEnd(), name);
+  }
+});
