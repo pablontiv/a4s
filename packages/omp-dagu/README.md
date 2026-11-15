@@ -23,6 +23,8 @@ Usar el directorio completo permite que OMP descubra las dos extensiones, `agent
 
 La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME=~/.dagu-14steps` y `DAGU_URL=http://127.0.0.1:8090`. El coordinador se inicia con `a4s-14steps` (OMP con este paquete cargado); `a4s-14steps dagu ...` ejecuta comandos de la CLI de Dagu contra esa estación.
 
+Command mode (`a4s-14steps <cmd...>`) preserves the caller's working directory; run worktree gates from that worktree. Only no-argument OMP mode changes to the primary clone.
+
 La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los DAGs estampados.
 
 El run conserva su rama y worktree hasta que `close_gate` termina correctamente. Si falla, corregir la causa y recuperar el mismo run con `dagu retry --run-id <run-id> --step close_gate feature`. `await_merge` usa HTTP autenticado y jq nativos cada 60 segundos; `reconcile` aplica las transiciones REST de revisión y reporta sobrantes como `LEFTOVER`, sin bloquear otros runs.
