@@ -27,6 +27,15 @@ La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los 
 
 El run conserva su rama y worktree hasta que `close_gate` termina correctamente. Si falla, corregir la causa y recuperar el mismo run con `dagu retry --run-id <run-id> --step close_gate feature`. `reconcile` solo reporta los worktrees y ramas sobrantes como `LEFTOVER`, sin bloquear otros runs.
 
+**Reconstrucción:**
+
+- Instalar el binario del release de Dagu v2.19.2 en `~/.local/opt/dagu-2.19.2/`.
+- Copiar `station/config.yaml` a `~/.dagu-14steps/config.yaml`, `station/dagu-14steps.service` a `~/.config/systemd/user/dagu-14steps.service` y `station/a4s-14steps` a `~/.local/bin/a4s-14steps` con modo `0755`. Luego ejecutar `systemctl --user daemon-reload && systemctl --user enable --now dagu-14steps`.
+- Ejecutar el [bootstrap](skills/dagu-feature/SKILL.md#1-bootstrap) desde el clon primario, con el entorno de `a4s-14steps` y `SKILL_DIR=/home/shared/harness/a4s/packages/omp-dagu/skills/dagu-feature` absoluto (una ruta relativa falla en `detect`). Responder `GATE=bash scripts/gate.sh`, `REQUIRED_CHECK=validate` y `TEST_PATHS=(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
+- Configurar GitHub con rama predeterminada `dagu-14steps`, status check requerido `validate` y auto-merge habilitado.
+- Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
+- Referencia golden: tag `dagu-golden-v1`, run de aceptación `a4s-issue-955` (#955, PR #956).
+
 ## Estado, progreso y despertar dirigido
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.

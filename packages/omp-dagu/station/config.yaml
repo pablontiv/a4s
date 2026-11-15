@@ -1,0 +1,14 @@
+auth:
+  mode: none
+host: 127.0.0.1
+# Isolated 14-step a4s station (dagu 2.19.2); the shared 2.26 station keeps 8080/50055.
+port: 8090
+skip_examples: true
+coordinator:
+  enabled: true
+  port: 50065
+queues:
+  enabled: true
+  config:
+    - name: a4s
+      max_concurrency: 1
