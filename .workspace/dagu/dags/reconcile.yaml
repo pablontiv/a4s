@@ -112,10 +112,7 @@ steps:
       done < <(jq -r --arg filter "${RECONCILE_PRIMARY:-}" \
         '[.[].primary | select(length > 0)] | unique[] | select($filter == "" or . == $filter)' "$TMP/runs.json")
 
-      if [[ -s "$TMP/leftovers" ]]; then
-        cat "$TMP/leftovers" >&2
-        exit 1
-      fi
+      cat "$TMP/leftovers" >&2
 
   - id: tick
     depends: leftovers

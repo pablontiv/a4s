@@ -176,24 +176,26 @@ for (const [name, definition] of definitions) {
     }
   });
 
-  test(`${name} exit keeps a never-pushed branch when no PR exists and prints recovery locations`, () => {
+  test(`${name} exit keeps a never-pushed branch and ignores another run's success marker`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "unpublished\n");
       stubGh(repo, "", 1, "no pull requests found\n");
+      const otherState = join(dirname(repo.state), "other-run");
+      mkdirSync(otherState);
+      writeFileSync(join(otherState, "close-gate-succeeded"), "");
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
       assert.match(output, new RegExp(`branch ${repo.branch.replace("/", "\\/")}`));
       assert.match(output, new RegExp(`worktree ${repo.worktree.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-      assert.match(output, /Recovery: push/);
-      assert.match(output, /suffixed run ID/);
+      assert.match(output, /Recovery: inspect run test-run and retry its failed step/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
 
-  test(`${name} exit cleans a squash-merged head when invoked outside the repository`, () => {
+  test(`${name} exit keeps a squash-merged head until close_gate succeeds`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "squash merged\n");
@@ -205,9 +207,10 @@ for (const [name, definition] of definitions) {
       git(repo.primary, "push", "origin", "main");
       git(repo.worktree, "push", "origin", "--delete", repo.branch);
       stubGh(repo, `${JSON.stringify({ state: "MERGED", headRefOid: head })}\n`, 0);
-      runScript(exitScript, repo);
-      assert.equal(existsSync(repo.worktree), false);
-      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      const output = runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.match(output, /Work kept/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -225,8 +228,8 @@ for (const [name, definition] of definitions) {
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
-      assert.match(output, /Unpublished work kept/);
-      assert.match(output, /Recovery: push/);
+      assert.match(output, /Work kept/);
+      assert.match(output, /Recovery: inspect run test-run and retry its failed step/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
@@ -240,34 +243,36 @@ for (const [name, definition] of definitions) {
       const output = runScript(exitScript, repo);
       assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
       assert.equal(existsSync(repo.worktree), true);
-      assert.match(output, /Unpublished work kept/);
+      assert.match(output, /Work kept/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
 
-  test(`${name} exit cleans a published head`, () => {
+  test(`${name} exit keeps a published head until close_gate succeeds`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "published\n");
       git(repo.worktree, "push", "origin", `HEAD:${repo.branch}`);
-      runScript(exitScript, repo);
-      assert.equal(existsSync(repo.worktree), false);
-      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      const output = runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.match(output, /Work kept/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
   });
 
-  test(`${name} exit cleans a head merged into the base branch`, () => {
+  test(`${name} exit keeps a head merged into the base branch until close_gate succeeds`, () => {
     const repo = repository();
     try {
       commit(repo, "README.txt", "merged\n");
       git(repo.primary, "merge", "--ff-only", repo.branch);
       git(repo.primary, "push", "origin", "main");
-      runScript(exitScript, repo);
-      assert.equal(existsSync(repo.worktree), false);
-      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), false);
+      const output = runScript(exitScript, repo);
+      assert.equal(existsSync(repo.worktree), true);
+      assert.equal(hasRef(repo.primary, `refs/heads/${repo.branch}`), true);
+      assert.match(output, /Work kept/);
     } finally {
       rmSync(repo.root, { recursive: true, force: true });
     }
