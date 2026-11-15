@@ -69,7 +69,6 @@ for (const definition of definitions) {
         assert.equal(readFileSync(output, "utf8"), `operation=${expected}\n`);
       }
       assert.match(source, /action: http.request[\s\S]*?method: POST/);
-      assert.match(source, /body: '\{"expectedIteration":\$\{steps.observe.outputs.iteration\}\}'/);
       assert.doesNotMatch(source, /dagu human-task|id: (complete|keep_waiting|unreconciled)\n|gh pr view/);
       assert.match(source, /id: leftovers\n/);
       assert.match(source, /id: orphan\n/);
@@ -260,8 +259,8 @@ ${transition}`;
     assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.deepEqual(received, {
       method: "POST",
-      url: "/api/v1/dag-runs/feature/fixture/human-tasks/merge_review/push-back",
-      body: { expectedIteration: 0 },
+      url: "/api/v1/dag-runs/feature/fixture/human-tasks/merge_review/push-back?expectedIteration=0",
+      body: {},
     });
     assert.match(contents(join(root, "dagu")), /409|expectedIteration is stale/);
   } finally {
