@@ -110,7 +110,7 @@ test('DLQ topic and records preserve the original payload and validate causes', 
     payload: '  {"broken": ',
     cause: 'INVALID_JSON',
     time: '2026-10-15T12:00:00.000Z',
-    harness: 'pion',
+    harness: 'pi',
   } as const
   assert.deepEqual(parseDeadLetter(serializeDeadLetter(record)), record)
   assert.equal(parseDeadLetter(JSON.stringify({ ...record, payload: '' })).payload, '')

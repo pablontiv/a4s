@@ -7,9 +7,9 @@ A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `agent
 ## Prerrequisitos externos
 
 - Node.js `>=22.19.0` y npm con soporte para workspaces y `package-lock.json`.
-- Acceso a las dependencias fijadas por el lockfile, desde sus servidores o desde la caché local de npm. En particular, el tarball de desarrollo de `@pablontiv/pion` requiere acceso a los releases de `pablontiv/pi` o una copia íntegra en la caché de npm. Ese release no está disponible públicamente; su disponibilidad es un prerrequisito para la instalación y el gate completo. CI documenta su alternativa de instalación y ejecuta un subconjunto de typechecks en `.github/workflows/ci.yml`.
+- Acceso a las dependencias fijadas por el lockfile, desde sus servidores o desde la caché local de npm.
 - Orca instalado y en ejecución para crear worktrees administrados; su política de setup debe ser `run-by-default` para ejecutar automáticamente el hook heredado. Una invocación que requiera forzarlo puede usar `--setup run`.
-- Las integraciones reales requieren sus hosts y credenciales correspondientes (OMP/Orca, Pi/Pion o Claude); Synagent requiere su bus MQTT. El gate local comprueba el código y sus pruebas, no sustituye la verificación contra esos servicios.
+- Las integraciones reales requieren sus hosts y credenciales correspondientes (OMP/Orca, Pi o Claude); Synagent requiere su bus MQTT. El gate local comprueba el código y sus pruebas, no sustituye la verificación contra esos servicios.
 
 ## Setup y comandos soportados
 

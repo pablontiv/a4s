@@ -31,7 +31,7 @@ adapters/claude/      Self-contained Claude Code marketplace plugin:
                         marketplace installs only this directory). Regenerated
                         by scripts/sync-core.mjs, anchored by the
                         claude-bundle-parity test.
-adapters/pi/          Live Pi/Pion extension: lifecycle binding, settings,
+adapters/pi/          Live Pi extension: lifecycle binding, settings,
                       compaction, Ladder retrieval, Evidence, corpus, and
                       review-only rule proposals over the shared core.
 ```
@@ -45,12 +45,12 @@ Claude returns `{ messages }` (keep = engine message **with its handle**;
 truncate = rebuilt message **without a handle**; drop = omitted). Pi returns a
 summary **string** plus a kept boundary. Same core decisions, two assemblers.
 
-## Install the Pi/Pion extension
+## Install the Pi extension
 
 ```sh
 pi install ./packages/context-expert
 # or
-pion -e packages/context-expert/adapters/pi/src/index.ts
+pi -e packages/context-expert/adapters/pi/src/index.ts
 ```
 
 The persisted runtime identity remains `pi-context-expert`: existing settings,
@@ -89,7 +89,7 @@ máximo 512 bytes UTF-8. Cada request usa como máximo 32,000 bytes. El score us
 - ✅ **Claude adapter** maps `SessionMessage` ↔ neutral and back: kept messages
   keep object identity (engine handle), truncated ones are rebuilt, dropped
   ones are omitted. (`test/claude-adapter.test.ts`)
-- ✅ **Pi adapter** registers the live Pi/Pion lifecycle over the identical core
+- ✅ **Pi adapter** registers the live Pi lifecycle over the identical core
   and preserves the existing `pi-context-expert` runtime identity.
   (`adapters/pi/test/`)
 - ✅ **Bundle self-containment**: `adapters/claude/core` is byte-identical to

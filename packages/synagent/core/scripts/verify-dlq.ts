@@ -447,7 +447,7 @@ async function runHost(config: HostConfig, bus: BusRecord[], publisher: MqttClie
     await publishRaw(publisher, topic, dispatchPayload)
     const dispatch = await waitForDlq(bus, dlqTopic, 'DELIVERY_DISPATCH_FAILED', dispatchStart)
     assert.equal(dispatch.payload, dispatchPayload)
-    assert.equal(dispatch.harness, config.name === 'pi' ? 'pion' : 'omp')
+    assert.equal(dispatch.harness, config.name === 'pi' ? 'pi' : 'omp')
 
     const listStart = process.records.length
     await process.command({ type: 'prompt', message: '/synagent dlq' })

@@ -17,7 +17,7 @@ export interface PiContextExpertSettingsCommandOptions {
   readonly save?: (config: CompactionConfig) => void;
 }
 
-/** Registers the interactive global settings command supported by Pi and Pion. */
+/** Registers the interactive global settings command supported by Pi. */
 export function registerPiContextExpertSettingsCommand(
   pi: ExtensionAPI,
   options: PiContextExpertSettingsCommandOptions,

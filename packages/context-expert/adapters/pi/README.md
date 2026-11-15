@@ -2,7 +2,7 @@
 
 Private Pi extension that uses Jev as the semantic authority for deterministic compaction. Evidence is disabled by default; Ladder retrieval and Ladder-backed Evidence are explicit opt-ins.
 
-This release supports Pi 1.0.3 and Pion 1.0.4. The extension uses the canonical `@earendil-works/pi-coding-agent` API for both hosts.
+This release supports Pi 1.0.3. The extension uses the canonical `@earendil-works/pi-coding-agent` API.
 
 ## Runtime contract
 
@@ -39,7 +39,7 @@ entorno, credenciales ni datos del error. La escritura es best-effort. Un fallo
 de escritura no cambia la semántica del flujo.
 
 `session_compact_failed` no identifica la extensión ni el intento. Context
-Expert no atribuye ese evento. Pi o Pion conservan la observabilidad de ese
+Expert no atribuye ese evento. Pi conserva la observabilidad de ese
 fallo terminal.
 
 ## Opt-in Trigger
@@ -50,7 +50,7 @@ flat `config` values for `compaction.strategy` (`basic|ladder`),
 `trigger.mode` (`off|hint|auto`), and `evidence.strategy` (`off|ladder`);
 invalid combinations preserve the prior safe configuration.
 
-Run `/pi-context-expert-settings` in Pi or Pion to change these settings. The command shows the current Compaction, Trigger, and Evidence values. It also provides reset and cancel actions. The command confirms coupled Ladder changes, automatic Trigger, and reset. A successful change writes the file, reports the complete configuration, and reloads the extension once.
+Run `/pi-context-expert-settings` in Pi to change these settings. The command shows the current Compaction, Trigger, and Evidence values. It also provides reset and cancel actions. The command confirms coupled Ladder changes, automatic Trigger, and reset. A successful change writes the file, reports the complete configuration, and reloads the extension once.
 
 The entry point reads the persisted global file once at startup. It uses
 `$PI_CODING_AGENT_DIR/pi-context-expert.json` when `PI_CODING_AGENT_DIR` is not
@@ -66,7 +66,7 @@ The file may contain only the same three flat, non-secret mode keys:
 }
 ```
 
-You can edit this JSON format manually. Run `/reload` in an active Pi or Pion
+You can edit this JSON format manually. Run `/reload` in an active Pi
 session after a manual change. You can also restart the host. The settings
 command runs the reload for you. Reload replaces the extension runtime and its
 in-memory Ladder projection caches. It preserves the session and persisted
@@ -125,7 +125,7 @@ From the repository root:
 
 ```sh
 npm install
-pion -e packages/context-expert/adapters/pi/src/index.ts
+pi -e packages/context-expert/adapters/pi/src/index.ts
 # then, inside Pi:
 /login typesafe
 ```
@@ -136,7 +136,7 @@ If Jev is unavailable, the hook returns `undefined` and Pi runs native compactio
 
 ## RPC callers must hold stdin open through `compact`
 
-If you drive this extension over `pion --mode rpc` and issue a `compact`
+If you drive this extension over `pi --mode rpc` and issue a `compact`
 command, **do not close the child process's stdin (EOF) until you have
 received the matching `compact` response.** Closing stdin early — e.g.
 piping a fixed command file with `< input.jsonl`, or any writer that ends
@@ -146,7 +146,7 @@ real HTTP round trip (15-50+ seconds) can finish.
 
 ### What actually happens (bead a4s-6ak.7/`.8`)
 
-- `pion --mode rpc`'s stdin handling (`dist/modes/rpc/rpc-mode.js`) registers
+- `pi --mode rpc`'s stdin handling (`dist/modes/rpc/rpc-mode.js`) registers
   an unconditional `process.stdin.on("end", () => void shutdown())`. This
   fires the moment stdin closes, independent of whether a command is
   mid-flight.
@@ -167,7 +167,7 @@ real HTTP round trip (15-50+ seconds) can finish.
   awaits the correlated response (via `src/rpc-stdin-guard.ts`) before
   ending the child's stdin — the correct pattern to copy into your own RPC
   client. Run it with `npm run rpc:compact-driver --workspace
-  @a4s/context-expert -- --pi "$(command -v pion)" [-- <extra Pion args>]`.
+  @a4s/context-expert -- --pi "$(command -v pi)" [-- <extra Pi args>]`.
 - **Best-effort extension diagnostic**: when this extension classifies a
   compaction or retro failure as `"aborted"` while `ctx.mode === "rpc"`, it
   writes a single line to stderr prefixed
@@ -202,7 +202,7 @@ npm run e2e --workspace @a4s/context-expert -- --mode evidence
 ```
 
 This is a headless product test, not an E0 or fixture run. It starts the
-installed `pion` binary in RPC mode with this extension, uses the configured Pion
+installed `pi` binary in RPC mode with this extension, uses the configured Pi
 model and real TypeSafe/Jev provider, sends four distinct benign non-secret
 prompts generated for that run whose total exceeds Pi's production 20k
 retained-token threshold, compacts, and verifies persisted corpus chunks plus

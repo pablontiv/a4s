@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let Pi/Pion and Claude activate Synagent from an explicit workspace identity in the exact current directory when Git identity is unavailable.
+**Goal:** Let Pi and Claude activate Synagent from an explicit workspace identity in the exact current directory when Git identity is unavailable.
 
 **Architecture:** Keep v1 addresses unchanged and treat workspace as another source for the existing project token. The canonical protocol module owns strict parsing, exact-cwd file loading, precedence, and source reporting; both adapters consume it, while Claude's generated protocol copy remains byte-identical.
 
-**Tech Stack:** TypeScript 7, Node.js 22 built-ins, Node test runner, Pi/Pion extension APIs, Claude hook APIs.
+**Tech Stack:** TypeScript 7, Node.js 22 built-ins, Node test runner, Pi extension APIs, Claude hook APIs.
 
 **Spec:** https://github.com/pablontiv/a4s/issues/96
 
@@ -66,7 +66,7 @@ Run: `npm test --workspace @a4s/synagent -- --test-name-pattern='workspace|resol
 
 Expected: PASS.
 
-### Task 2: Pi/Pion Workspace Activation and Status
+### Task 2: Pi Workspace Activation and Status
 
 **Files:**
 - Modify: `packages/synagent/core/adapters/pi/index.ts`
@@ -74,7 +74,7 @@ Expected: PASS.
 
 **Interfaces:**
 - Consumes: `readWorkspaceProject` and `resolveProjectWithSource` from Task 1.
-- Produces: Pi/Pion activation from exact-cwd workspace plus effective source in startup, `/synagent status`, and settings labels.
+- Produces: Pi activation from exact-cwd workspace plus effective source in startup, `/synagent status`, and settings labels.
 
 - [ ] **Step 1: Write failing Pi integration tests**
 
@@ -91,7 +91,7 @@ Run: `npm test --workspace @a4s/synagent -- --test-name-pattern='Pi adapter.*wor
 
 Expected: FAIL because Pi does not read or report workspace identity.
 
-- [ ] **Step 3: Wire canonical resolution into Pi/Pion**
+- [ ] **Step 3: Wire canonical resolution into Pi**
 
 Read workspace only when no explicit project is configured, then read Git origin only when neither higher-precedence source exists. Store the effective source beside the active identity, clear both together on rebind, and include the source in startup/status/settings output. Extend unresolved remediation with `.workspace/config/synagent.json`.
 

@@ -320,7 +320,7 @@ test('Pi adapter persists and lists DLQ failures, then reinjects a record exactl
     .find(({ cause }) => cause === 'DELIVERY_DISPATCH_FAILED')
   assert.ok(dispatchRecord)
   assert.equal(dispatchRecord.payload, dispatchPayload)
-  assert.equal(dispatchRecord.harness, 'pion')
+  assert.equal(dispatchRecord.harness, 'pi')
   assert.equal(harness.received.length, 0)
 
   await harness.command('synagent', 'dlq')
@@ -1162,7 +1162,7 @@ test('Pi adapter records focused RCA events without message or transport data', 
   assert.ok(records.some(record => record['messaging.message.id_hash'] === undefined))
   assert.ok(records.some(record => typeof record['messaging.message.id_hash'] === 'string'))
   assert.ok(records.every(record => record.schema === 'a4s.log/1'))
-  assert.ok(records.every(record => record['resource.a4s.harness.name'] === 'pion'))
+  assert.ok(records.every(record => record['resource.a4s.harness.name'] === 'pi'))
   assert.ok(records.some(record => record['a4s.client.role'] === 'durable'))
   assert.ok(records.some(record => record['a4s.delivery.mode'] === 'idle'))
   assert.ok(records.some(record => record['a4s.timeout.ms'] === 20))
