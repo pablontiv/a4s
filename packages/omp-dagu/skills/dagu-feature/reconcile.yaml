@@ -171,7 +171,8 @@ steps:
     depends: observe
     action: state.get
     with:
-      scope: custom
+      # feature's state.set uses the default dag scope, whose namespace is the DAG name.
+      scope: dag
       namespace: feature
       key: issue-${ISSUE}/${RUN}/review-action
       default: none

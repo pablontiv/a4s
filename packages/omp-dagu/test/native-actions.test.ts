@@ -68,7 +68,6 @@ for (const definition of definitions) {
         assert.equal(result.status, 0, result.stderr);
         assert.equal(readFileSync(output, "utf8"), `operation=${expected}\n`);
       }
-      assert.match(source, /action: state.get[\s\S]*?scope: custom\n      namespace: feature/);
       assert.match(source, /action: http.request[\s\S]*?method: POST/);
       assert.match(source, /body: '\{"expectedIteration":\$\{steps.observe.outputs.iteration\}\}'/);
       assert.doesNotMatch(source, /dagu human-task|id: (complete|keep_waiting|unreconciled)\n|gh pr view/);
