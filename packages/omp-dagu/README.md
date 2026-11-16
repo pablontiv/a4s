@@ -153,7 +153,7 @@ El paquete distribuye `triage-reviewer` con `structured: true`, el JSON Schema d
 
 1. Intentar completar `triage` con `POC=no`. El guard responde `TRIAGE_REVIEW_REQUIRED` con el marcador de generación y la plantilla fija.
 2. Ejecutar `task agent=triage-reviewer` con el alcance, el marcador completo y la plantilla.
-3. Repetir la completion con el id asignado en `--input REVIEW=<id>` cuando la decisión sea `poc: "no"`. Una decisión `yes` mantiene triage en espera con la pregunta propuesta.
+3. Repeat the completion with the allocated id in `--input REVIEW=<id>` when the decision is `poc: "no"`. A `yes` keeps triage waiting with its proposed question. Another rejected `POC=no` completion emits a fresh `REQUEST` marker within the same generation: launch a new reviewer with that marker, the fixed prompt, and corrected scope or new evidence. The latest valid bound review decides; use its allocated id, not an earlier reviewer's.
 
 La aprobación pertenece a un DAG, run y generación; se consume tras una completion exitosa y se conserva si la completion falla. Volver a triage exige otra revisión. El guard exige que la completion de triage esté sola en su tool call. `POC=yes` pasa directamente.
 

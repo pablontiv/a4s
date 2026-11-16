@@ -242,12 +242,14 @@ steps:
         printf '## Pregunta\n\n%s\n\n## BASIS\n\n%s\n\n## REVIEW\n\n%s\n' "$QUESTION" "$BASIS" "${REVIEW:-}"
       } > "$STATE/triage.md"
       cd "$PRIMARY"
-      gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
       if [[ "$POC" == yes ]]; then
-        dagu enqueue --queue a4s --labels "issue=$ISSUE,kind=poc" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
-          ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
-          OMP_SESSION_ID="$OMP_SESSION_ID"
+        if ! dagu status --run-id "poc-$RUN" poc >/dev/null 2>&1; then
+          dagu enqueue --queue a4s --labels "issue=$ISSUE,kind=poc" --run-id "poc-$RUN" "$PRIMARY/.workspace/dagu/dags/poc.yaml" -- \
+            ISSUE="$ISSUE" QUESTION="$QUESTION" PRIMARY="$PRIMARY" BASE_BRANCH="$BASE_BRANCH" \
+            OMP_SESSION_ID="$OMP_SESSION_ID"
+        fi
       fi
+      gh issue comment "$ISSUE" --body-file "$STATE/triage.md"
 
   - id: start_gate
     depends: triage_decision
@@ -500,7 +502,6 @@ steps:
     preconditions:
       - condition: ${MERGE_POLL_RESULT.outputValues.recovery}
         expected: "true"
-    continue_on: skipped
     action: human.task
     with:
       prompt: "PR is BEHIND or DIRTY. The scheduled reconciler pushes back to rebase, reruns the gate, pushes and enables guarded auto-merge again."
@@ -508,7 +509,10 @@ steps:
         rewind_to: rebase
 
   - id: verify_merged
-    depends: merge_review
+    depends: verify_merge_poll
+    preconditions:
+      - condition: ${MERGE_POLL_RESULT.outputValues.recovery}
+        expected: "false"
     env:
       MERGED: ${MERGE_POLL_RESULT.outputValues.merged}
     run: |

@@ -229,6 +229,10 @@ subagent `TriageReview<ISSUE>`; retries append `v<N>`. Its structured decision
 auto-delivers to the coordinator. A `no` authorizes the current generation with
 that exact subagent name as `REVIEW`; a `yes` keeps triage waiting with its
 question.
+Another rejected `POC=no` completion emits a fresh `REQUEST` marker in the same
+generation. Launch the next reviewer with that marker, the fixed prompt, and
+corrected scope or new evidence. The latest valid bound review decides; submit
+its exact allocated ID as `REVIEW`, not an earlier reviewer's.
 
 ```sh
 dagu human-task complete feature --run-id <id> --step triage \
@@ -244,9 +248,11 @@ publishing the `poc-triage:no` comment, it reads the run through Dagu REST and
 requires exactly one `triage.startedAt`, then verifies the transcript's exact
 parent session, `triage-reviewer` agent, feature/RUN task marker, start strictly
 after that cutoff, and `poc=no` in the last yield. A missing, ambiguous, stale,
-malformed or mismatched transcript fails the step closed. `POC=yes` publishes
-`<!-- poc-triage:yes run:<RUN> -->`, enqueues the absolute repository `poc.yaml`
-with ISSUE and QUESTION, and ends the feature run.
+malformed or mismatched transcript fails the step closed. `POC=yes` reuses the
+existing `poc-<RUN>` regardless of status, or enqueues the absolute repository
+`poc.yaml` with ISSUE and QUESTION when absent. Only after reuse or successful
+enqueue does it publish `<!-- poc-triage:yes run:<RUN> -->`. The feature run ends
+`Succeeded` with implementation and close steps skipped.
 
 `checkpoint_push` compares dependency relationships and package/app directories
 against the merge base of `HEAD` and `origin/$BASE_BRANCH`, using the PoC-proven
