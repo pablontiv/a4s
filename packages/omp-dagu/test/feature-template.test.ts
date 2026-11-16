@@ -135,6 +135,61 @@ for (const [name, definition] of definitions) {
   const checkpointScript = extractScript(definition, "  - id: checkpoint_push");
   const closeGateScript = featureCloseScript(definition);
 
+  for (const existing of [false, true]) {
+    test(`${name} repeated POC=yes reuses ${existing ? "an existing" : "a newly queued"} child before commenting`, () => {
+      const repo = repository();
+      try {
+        const bin = join(repo.root, "bin"), calls = join(repo.root, "calls"), child = join(repo.root, "child");
+        mkdirSync(bin);
+        writeFileSync(calls, "");
+        if (existing) writeFileSync(child, "failed\n");
+        writeFileSync(join(bin, "dagu"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$1" >> "$CALLS"
+if [[ "$1" == status ]]; then
+  [[ "$*" == "status --run-id poc-test-run poc" ]]
+  test -f "$CHILD"
+else
+  [[ "$1" == enqueue && "$*" == *'--run-id poc-test-run '* ]]
+  test ! -f "$CHILD"
+  printf 'queued\\n' > "$CHILD"
+fi
+`, { mode: 0o755 });
+        writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+test -f "$CHILD"
+printf 'comment\\n' >> "$CALLS"
+`, { mode: 0o755 });
+        for (let iteration = 0; iteration < 2; iteration++) {
+          const result = runBash(extractScript(definition, "  - id: triage_decision"), {
+            encoding: "utf8",
+            env: { ...featureScriptEnv(repo), POC: "yes", QUESTION: "Runtime behavior", BASIS: "Unexercised runtime", REVIEW: "", CALLS: calls, CHILD: child },
+          });
+          assert.equal(result.status, 0, result.stdout + result.stderr);
+        }
+        assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"),
+          existing ? ["status", "comment", "status", "comment"] : ["status", "enqueue", "comment", "status", "comment"]);
+        assert.equal(readFileSync(child, "utf8"), existing ? "failed\n" : "queued\n");
+      } finally { rmSync(repo.root, { recursive: true, force: true }); }
+    });
+  }
+
+  test(`${name} a failed POC enqueue publishes no triage comment`, () => {
+    const repo = repository();
+    try {
+      const bin = join(repo.root, "bin"), published = join(repo.root, "published");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "dagu"), '#!/usr/bin/env bash\nif [[ "$1" == status ]]; then exit 1; fi\nexit 42\n', { mode: 0o755 });
+      writeFileSync(join(bin, "gh"), '#!/usr/bin/env bash\ntouch "$PUBLISHED"\n', { mode: 0o755 });
+      const result = runBash(extractScript(definition, "  - id: triage_decision"), {
+        encoding: "utf8",
+        env: { ...featureScriptEnv(repo), POC: "yes", QUESTION: "Runtime behavior", BASIS: "Unexercised runtime", REVIEW: "", PUBLISHED: published },
+      });
+      assert.equal(result.status, 42, result.stdout + result.stderr);
+      assert.equal(existsSync(published), false);
+    } finally { rmSync(repo.root, { recursive: true, force: true }); }
+  });
+
   test(`${name} close_gate reports a PRIMARY outside BASE_BRANCH`, () => {
     const repo = repository();
     try {

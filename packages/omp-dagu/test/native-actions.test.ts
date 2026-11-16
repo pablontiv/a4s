@@ -85,11 +85,11 @@ for (const definition of definitions) {
   });
 }
 
-async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = {}) {
+async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = {}, args: string[] = []) {
   const path = join(root, "fixture.yaml");
   writeFileSync(path, source);
   try {
-    const result = await execute(dagu!, ["start", "--run-id", "contract", path], {
+    const result = await execute(dagu!, ["start", "--run-id", "contract", path, ...args], {
       env: { ...process.env, DAGU_HOME: join(root, "dagu"), ...env },
       maxBuffer: 4 * 1024 * 1024,
     });
@@ -100,6 +100,13 @@ async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = 
   }
 }
 
+async function nativeStatus(root: string): Promise<string> {
+  const { stdout } = await execute(dagu!, ["status", "--run-id", "contract", "fixture"], {
+    env: { ...process.env, DAGU_HOME: join(root, "dagu") },
+  });
+  return stdout;
+}
+
 function contents(path: string): string {
   if (!existsSync(path)) return "";
   return readdirSync(path, { withFileTypes: true }).map((entry) => {
@@ -107,6 +114,49 @@ function contents(path: string): string {
     return entry.isDirectory() ? contents(child) : readFileSync(child, "utf8");
   }).join("\n");
 }
+
+test("Dagu 2.26.0 rendered feature POC=yes succeeds with its implementation and close path skipped", { skip: !dagu }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-native-poc-"));
+  try {
+    const primary = join(root, "primary"), bin = join(root, "bin"), calls = join(root, "calls");
+    mkdirSync(join(primary, ".workspace", "dagu", "dags"), { recursive: true });
+    mkdirSync(bin);
+    execFileSync("git", ["init", "-q", primary]);
+    writeFileSync(calls, "");
+    writeFileSync(join(primary, ".workspace", "dagu", "dags", "poc.yaml"), readFileSync(definitions[1]!.replace("feature.yaml", "poc.yaml"), "utf8"));
+    writeFileSync(join(bin, "dagu"), `#!/usr/bin/env bash
+set -euo pipefail
+export DAGU_HOME=${JSON.stringify(join(root, "dagu"))}
+if [[ "$1" == enqueue ]]; then printf 'enqueue\\n' >> ${JSON.stringify(calls)}; fi
+exec ${JSON.stringify(dagu)} "$@"
+`, { mode: 0o755 });
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1 $2" == "issue comment" ]]
+printf 'comment\\n' >> ${JSON.stringify(calls)}
+`, { mode: 0o755 });
+    const source = readFileSync(definitions[1]!, "utf8");
+    // Supply only the human answer; every downstream step is the actual rendered graph.
+    const steps = [...source.slice(0, source.indexOf("\nhandler_on:")).matchAll(/^  - id: (\S+)$/gm)]
+      .map((match) => match[1]!).filter((step) => step !== "triage");
+    const result = await nativeRun(root, source, {
+      PATH: `${bin}:${process.env.PATH}`,
+    }, [
+      ...steps.flatMap((step) => ["--only", step]),
+      "--output", "triage.POC=yes", "--output", "triage.QUESTION=Runtime behavior",
+      "--output", "triage.BASIS=Unexercised runtime", "--output", "triage.REVIEW=",
+      "--", "ISSUE=981", `PRIMARY=${primary}`, "BRANCH=dagu/issue-981",
+      "BASE_BRANCH=main", "OMP_SESSION_ID=fixture",
+    ]);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    const status = await nativeStatus(root);
+    assert.match(status, /Succeeded/);
+    for (const step of ["start_gate", "implement", "verify_merge_poll", "merge_review", "verify_merged", "close_gate"]) {
+      assert.match(status, new RegExp(`${step}[^\\n]*[Ss]kipped`), status);
+    }
+    assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), ["enqueue", "comment"]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("Dagu 2.26.0 native poll binding, exhausted-repeat guard and secret redaction", { skip: !dagu }, async () => {
   const source = readFileSync(definitions[0]!, "utf8");
@@ -133,17 +183,38 @@ test("Dagu 2.26.0 native poll binding, exhausted-repeat guard and secret redacti
     try {
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const parent = source.slice(source.indexOf("  - id: await_merge"), source.indexOf("  - id: merge_review"))
-        .replace("    depends: auto_merge\n", "")
-        .replace("${steps.auto_merge.outputs.repo}", "fixture")
-        .replace("${steps.auto_merge.outputs.pr}", '"1"')
+      // Load the real tail, including merge_review; earlier feature steps require an implementation and reviewer transcript.
+      const parent = source.slice(source.indexOf("  - id: await_merge"), source.indexOf("\nhandler_on:"))
+        .replace("    depends: auto_merge\n", "    depends: rebase\n")
+        .replaceAll("${steps.auto_merge.outputs.repo}", "fixture")
+        .replaceAll("${steps.auto_merge.outputs.pr}", '"1"')
         .replace("      interval_sec: 60", "      interval_sec: 1\n      limit: 2");
       const child = source.slice(source.indexOf("---\nname: poll-pr-merged"), source.indexOf("---\nname: close-feature"))
         .replace("https://api.github.com/repos/${REPO}/pulls/${PR}", `http://127.0.0.1:${address.port}/repos/fixture/pulls/1`);
-      const fixture = `shell: /run/current-system/sw/bin/bash\ntype: graph\nsteps:\n${parent}  - id: verify_merged\n    depends: verify_merge_poll\n    env:\n      MERGED: \${MERGE_POLL_RESULT.outputValues.merged}\n    run: |\n${(outcome === "recovery" ? 'test "$MERGED" = false\ntest "${MERGE_POLL_RESULT.outputValues.recovery}" = true' : extractScript(definitions[0]!, "  - id: verify_merged")).split("\n").map((line) => `      ${line}`).join("\n")}\n\n${child}`;
+      const closeHeader = source.slice(source.indexOf("---\nname: close-feature"), source.indexOf("  - id: reset_close_gate"));
+      const fixture = `shell: /run/current-system/sw/bin/bash
+type: graph
+params: {ISSUE: "966", RUN: contract, PRIMARY: "${root}", WORKTREE: "${root}", BRANCH: fixture, BASE_BRANCH: main, REQUIRED_CHECK: validate}
+steps:
+  - id: rebase
+    run: "true"
+${parent}
+${child}
+${closeHeader}  - id: closed
+    run: echo close-gate-ran
+`;
       const result = await nativeRun(root, fixture, { GH_TOKEN: token });
       assert.equal(result.status === 0, outcome !== "failure", `${result.stdout}\n${result.stderr}`);
       assert.equal(requested, calls);
+      const status = await nativeStatus(root);
+      if (outcome === "merged") {
+        assert.match(status, /merge_review[^\n]*[Ss]kipped/, status);
+        assert.match(status, /verify_merged[^\n]*[Ss]ucceeded/, status);
+        assert.match(status, /close_gate[^\n]*[Ss]ucceeded/, status);
+      } else if (outcome === "recovery") {
+        assert.match(status, /Waiting/);
+        assert.match(status, /merge_review[^\n]*[Ww]aiting/, status);
+      }
       const evidence = contents(join(root, "dagu"));
       assert.equal(evidence.includes(token), false, "secret must not appear in persisted runtime evidence");
       assert.match(evidence, /merge observation: /);
