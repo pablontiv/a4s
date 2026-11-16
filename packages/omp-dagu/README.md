@@ -223,14 +223,16 @@ imprime `confirm`.
 ## Desarrollo
 
 ```sh
-npm test --workspace @a4s/omp-dagu
+DAGU_BIN=$(command -v dagu) npm test --workspace @a4s/omp-dagu
 npm run typecheck --workspace @a4s/omp-dagu
 ```
 
 El gate completo del repositorio es:
 
 ```sh
-npm ci && npm test && npm run typecheck
+bash scripts/gate.sh
 ```
 
 Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, la correlación nativa y el contrato estructurado del guard de triage, y la verificación fail-closed del transcript real ejecutada desde ambos DAG `feature.yaml`.
+
+El gate requiere `DAGU_BIN` o `dagu` en `PATH` y ejecuta las pruebas nativas sin skips; CI instala Dagu 2.26.0 con checksum fijado. Los tests usan homes temporales y un puerto libre, sin reutilizar el `DAGU_HOME`, `DAGU_URL`, `DAGU_PORT` ni otras opciones `DAGU_*` heredadas de la estación. El contrato nativo usa el servidor y scheduler reales para compartir el estado de revisión entre `feature` y `reconcile-run` y completar/push-back de tareas humanas.

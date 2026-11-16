@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { extractScript, runBash } from "./shell.ts";
@@ -85,13 +86,50 @@ for (const definition of definitions) {
   });
 }
 
-async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = {}, args: string[] = []) {
-  const path = join(root, "fixture.yaml");
-  writeFileSync(path, source);
+test("repository gate requires and exports a Dagu binary before running npm", () => {
+  const root = mkdtempSync(join(tmpdir(), "omp-dagu-gate-"));
+  const gate = fileURLToPath(new URL("../../../scripts/gate.sh", import.meta.url));
   try {
-    const result = await execute(dagu!, ["start", "--run-id", "contract", path, ...args], {
-      env: { ...process.env, DAGU_HOME: join(root, "dagu"), ...env },
+    const bin = join(root, "bin"), binary = join(root, "native-dagu");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nprintf '%s\\n' ${JSON.stringify(root)}\n`, { mode: 0o755 });
+    writeFileSync(join(bin, "npm"), '#!/bin/sh\nprintf "%s: %s\\n" "$*" "$DAGU_BIN"\n', { mode: 0o755 });
+    writeFileSync(binary, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const run = (value: string) => runBash(`export PATH=${JSON.stringify(bin)}; source ${JSON.stringify(gate)}`, {
+      encoding: "utf8", env: { ...process.env, DAGU_BIN: value },
+    });
+    for (const value of ["", join(root, "missing")]) {
+      const result = run(value);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Dagu is required for native tests/);
+      assert.equal(result.stdout, "");
+    }
+    assert.equal(run(binary).stdout, `ci: ${binary}\ntest: ${binary}\nrun typecheck: ${binary}\n`);
+    writeFileSync(join(bin, "dagu"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const resolved = run("");
+    assert.equal(resolved.status, 0, resolved.stderr);
+    assert.equal(resolved.stdout, `ci: ${bin}/dagu\ntest: ${bin}/dagu\nrun typecheck: ${bin}/dagu\n`);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+function nativeEnv(root: string, env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("DAGU_"))),
+    DAGU_HOME: join(root, "dagu"),
+    DAGU_SKIP_EXAMPLES: "true",
+    ...env,
+  };
+}
+
+async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = {}, args: string[] = [], identity = { name: "fixture", runId: "contract" }) {
+  const path = join(root, `${identity.name}.yaml`);
+  // Production DAGs deliberately use the station's explicit NixOS shell.
+  writeFileSync(path, source.replaceAll("shell: /run/current-system/sw/bin/bash", "shell: bash"));
+  try {
+    const result = await execute(dagu!, ["start", "--run-id", identity.runId, path, ...args], {
+      env: nativeEnv(root, env),
       maxBuffer: 4 * 1024 * 1024,
+      timeout: 30_000,
     });
     return { status: 0, ...result };
   } catch (error) {
@@ -100,9 +138,10 @@ async function nativeRun(root: string, source: string, env: NodeJS.ProcessEnv = 
   }
 }
 
-async function nativeStatus(root: string): Promise<string> {
-  const { stdout } = await execute(dagu!, ["status", "--run-id", "contract", "fixture"], {
-    env: { ...process.env, DAGU_HOME: join(root, "dagu") },
+async function nativeStatus(root: string, name = "fixture", runId = "contract"): Promise<string> {
+  const { stdout } = await execute(dagu!, ["status", "--run-id", runId, name], {
+    env: nativeEnv(root),
+    timeout: 5_000,
   });
   return stdout;
 }
@@ -192,7 +231,7 @@ test("Dagu 2.26.0 native poll binding, exhausted-repeat guard and secret redacti
       const child = source.slice(source.indexOf("---\nname: poll-pr-merged"), source.indexOf("---\nname: close-feature"))
         .replace("https://api.github.com/repos/${REPO}/pulls/${PR}", `http://127.0.0.1:${address.port}/repos/fixture/pulls/1`);
       const closeHeader = source.slice(source.indexOf("---\nname: close-feature"), source.indexOf("  - id: reset_close_gate"));
-      const fixture = `shell: /run/current-system/sw/bin/bash
+      const fixture = `shell: bash
 type: graph
 params: {ISSUE: "966", RUN: contract, PRIMARY: "${root}", WORKTREE: "${root}", BRANCH: fixture, BASE_BRANCH: main, REQUIRED_CHECK: validate}
 steps:
@@ -236,7 +275,7 @@ test("Dagu 2.26.0 native worktree idempotence and root-DAG state reset", { skip:
     execFileSync("git", ["init", "-q", "-b", "main", repo]);
     execFileSync("git", ["-C", repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-q", "--allow-empty", "-m", "base"]);
     const fixture = `name: feature
-shell: /run/current-system/sw/bin/bash
+shell: bash
 type: graph
 steps:
   - id: add
@@ -276,7 +315,7 @@ steps:
     with: {path: ${worktree}, branch: fixture, delete_branch: true, force_delete_branch: true}
 ---
 name: reset-close
-shell: /run/current-system/sw/bin/bash
+shell: bash
 type: graph
 steps:
   - id: delete
@@ -290,54 +329,118 @@ steps:
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Dagu 2.26.0 native review POST fails on a stale expectedIteration", { skip: !dagu }, async () => {
-  const root = mkdtempSync(join(tmpdir(), "omp-dagu-native-review-"));
-  let received: unknown;
-  const server = createServer(async (request, response) => {
-    let body = "";
-    for await (const chunk of request) body += chunk;
-    received = { method: request.method, url: request.url, body: JSON.parse(body) };
-    response.writeHead(409, { "Content-Type": "application/json" });
-    response.end(JSON.stringify({ error: "expectedIteration is stale" }));
-  });
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  try {
-    const address = server.address();
+async function waitUntil(check: () => Promise<boolean>, evidence: () => string) {
+  // Real server/scheduler subprocesses cannot advance on this test process's fake clock.
+  const deadline = Date.now() + 30_000;
+  do {
+    if (await check()) return;
+    await setTimeout(100);
+  } while (Date.now() < deadline);
+  assert.fail(evidence());
+}
+
+test("Dagu 2.26.0 feature review state and reconciler complete/push-back contract", { skip: !dagu, timeout: 120_000 }, async () => {
+  for (const definition of definitions) {
+    const root = mkdtempSync(join(tmpdir(), "omp-dagu-native-review-"));
+    const bin = join(root, "bin"), repo = join(root, "repo");
+    mkdirSync(bin);
+    execFileSync("git", ["init", "-q", repo]);
+    execFileSync("git", ["-C", repo, "remote", "add", "origin", "https://example.invalid/fixture"]);
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  "repo view") echo fixture/repo ;;
+  "issue view") echo "OPEN closed_at=" ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+    const probe = createServer();
+    const listening = once(probe, "listening");
+    probe.listen(0, "127.0.0.1");
+    await listening;
+    const address = probe.address();
     assert.ok(address && typeof address !== "string");
-    const reconcile = readFileSync(definitions[0]!.replace("feature.yaml", "reconcile.yaml"), "utf8");
-    const transition = reconcile.slice(reconcile.indexOf("  - id: transition"), reconcile.indexOf("  - id: orphan"));
-    const fixture = `shell: /run/current-system/sw/bin/bash
-type: graph
-env:
-  RUN: fixture
-steps:
-  - id: observe
-    outputs:
-      - name: api_url
-      - name: step
-      - name: iteration
-    run: |
-      printf 'api_url=http://127.0.0.1:${address.port}\\nstep=merge_review\\niteration=0\\n' >> "$DAGU_OUTPUT_FILE"
-  - id: route
-    depends: observe
-    outputs:
-      - name: operation
-    run: printf 'operation=push-back\\n' >> "$DAGU_OUTPUT_FILE"
-${transition}`;
-    const result = await nativeRun(root, fixture);
-    assert.notEqual(result.status, 0, `${result.stdout}\n${result.stderr}`);
-    assert.deepEqual(received, {
-      method: "POST",
-      url: "/api/v1/dag-runs/feature/fixture/human-tasks/merge_review/push-back?expectedIteration=0",
-      body: {},
+    const released = once(probe, "close");
+    probe.close();
+    await released;
+    const url = `http://127.0.0.1:${address.port}`;
+    const env = {
+      PATH: `${bin}:${dirname(dagu!)}:${process.env.PATH}`,
+      DAGU_URL: url, DAGU_PORT: String(address.port),
+      DAGU_AUTH_MODE: "none", DAGU_COORDINATOR_ENABLED: "false", DAGU_SCHEDULER_PORT: "0",
+    };
+    const server = spawn(dagu!, ["start-all", "--host", "127.0.0.1", "--port", String(address.port)], {
+      env: nativeEnv(root, env), stdio: ["ignore", "pipe", "pipe"],
     });
-    assert.match(contents(join(root, "dagu")), /409|expectedIteration is stale/);
-  } finally {
-    const closed = once(server, "close");
-    server.close();
-    await closed;
-    rmSync(root, { recursive: true, force: true });
+    let evidence = "";
+    server.stdout.on("data", (data) => { evidence += data; });
+    server.stderr.on("data", (data) => { evidence += data; });
+    server.on("error", (error) => { evidence += error.message; });
+    try {
+      await waitUntil(async () => {
+        assert.equal(server.exitCode, null, evidence);
+        return fetch(`${url}/api/v1/dags`, { signal: AbortSignal.timeout(1_000) })
+          .then((response) => response.ok, () => false);
+      }, () => evidence);
+      const feature = readFileSync(definition, "utf8");
+      const reviews = feature.slice(feature.indexOf("  - id: conflict_action"), feature.indexOf("  - id: gate"));
+      const reconcile = readFileSync(definition.replace("feature.yaml", "reconcile.yaml"), "utf8");
+      const reader = reconcile.slice(reconcile.indexOf("name: reconcile-run"));
+      for (const [review, operation] of [["complete", "complete"], ["rewind", "push-back"]] as const) {
+        const featureRun = operation;
+        const fixture = `shell: bash
+type: graph
+params: {ISSUE: "976", RUN: "${featureRun}"}
+steps:
+  - id: implement
+    run: "true"
+  - id: rebase
+    depends: implement
+    outputs:
+      - name: action
+    run: printf 'action=${review}\\n' >> "$DAGU_OUTPUT_FILE"
+${reviews}  - id: done
+    depends: conflict_review
+    run: "true"
+`;
+        const started = await nativeRun(root, fixture, {}, [], { name: "feature", runId: featureRun });
+        assert.equal(started.status, 0, `${started.stdout}\n${started.stderr}`);
+        assert.match(await nativeStatus(root, "feature", featureRun), /conflict_review[^\n]*[Ww]aiting/);
+        const contract = `${reader}
+  - id: verify_review_action
+    depends: [review_action, route]
+    run: |
+      test '\${REVIEW_ACTION.found}' = true
+      test '\${REVIEW_ACTION.value}' = ${review}
+      test '\${steps.route.outputs.operation}' = ${operation}
+`;
+        const args = ["--", `RUN=${featureRun}`, "ISSUE=976", `PRIMARY=${repo}`, "BRANCH=fixture"];
+        const result = await nativeRun(root, contract, env, args, { name: "reconcile-run", runId: featureRun });
+        assert.equal(result.status, 0, `${definition}\n${result.stdout}\n${result.stderr}\n${evidence}`);
+        let status = "";
+        await waitUntil(async () => {
+          status = await nativeStatus(root, "feature", featureRun);
+          return operation === "complete"
+            ? /^Succeeded\b/m.test(status)
+            : /push-back iteration: 1/.test(status) && /conflict_review[^\n]*[Ww]aiting/.test(status);
+        }, () => `${status}\n${evidence}`);
+        if (operation === "push-back") {
+          const stale = contract.replace('"${ITERATION:-0}"', '"0"');
+          const rejected = await nativeRun(root, stale, env, args, { name: "reconcile-run", runId: "stale" });
+          assert.notEqual(rejected.status, 0, `${rejected.stdout}\n${rejected.stderr}`);
+          assert.match(contents(join(root, "dagu")), /409/);
+          const unchanged = await nativeStatus(root, "feature", featureRun);
+          assert.match(unchanged, /push-back iteration: 1/);
+          assert.match(unchanged, /conflict_review[^\n]*[Ww]aiting/);
+        }
+      }
+    } finally {
+      if (server.exitCode === null && server.signalCode === null) {
+        const exited = once(server, "exit");
+        server.kill("SIGTERM");
+        await exited;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });

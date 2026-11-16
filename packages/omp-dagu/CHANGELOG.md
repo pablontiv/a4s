@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Require Dagu-native tests in CI and the local gate with checksum-pinned Dagu 2.26.0, portable isolated fixtures, and a real-server review-state/human-task transition contract (#976).
 - Read widget and bundle-inspector station settings from repository/worktree `.workspace/config/dagu.json`, fetch the installed reconciler spec through that station's API, and stop guessing OMP profile/session paths (#982).
 - Add explicit supervisor/coordinator/researcher launcher roles and activate `dagu_session_id` only for coordinators, stripping it for other or unknown roles even when pre-listed (#981).
 - Require Dagu 2.26.0 for the bundle/bootstrap and align the a4s station templates, rendered DAG stamps and version fixtures without changing DAG behavior (#983).

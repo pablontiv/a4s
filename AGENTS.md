@@ -8,6 +8,7 @@ A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `agent
 
 - Node.js `>=22.19.0` y npm con soporte para workspaces y `package-lock.json`.
 - Acceso a las dependencias fijadas por el lockfile, desde sus servidores o desde la caché local de npm.
+- Dagu 2.26.0 en `PATH`, o su binario en `DAGU_BIN`, para las pruebas nativas aisladas que exige el gate.
 - Las integraciones reales requieren sus hosts y credenciales correspondientes (OMP, Pi o Claude); Synagent requiere su bus MQTT. El gate local comprueba el código y sus pruebas, no sustituye la verificación contra esos servicios.
 
 ## Setup y comandos soportados
@@ -21,7 +22,7 @@ npm ci
 El gate completo, desde la raíz del worktree, es:
 
 ```sh
-npm ci && npm test && npm run typecheck
+bash scripts/gate.sh
 ```
 
 `npm test` y `npm run typecheck` recorren los workspaces declarados por los scripts raíz.
