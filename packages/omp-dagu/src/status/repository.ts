@@ -10,6 +10,14 @@ export function repositoryName(remote: string, commonDir: string): string {
   return last || basename(dirname(commonDir));
 }
 
+export async function resolveRoot(cwd: string, signal: AbortSignal): Promise<string> {
+  try {
+    return (await exec("git", ["rev-parse", "--show-toplevel"], { cwd, signal, timeout: 5000 })).stdout.trim();
+  } catch {
+    return cwd;
+  }
+}
+
 export async function resolveRepository(cwd: string, signal: AbortSignal): Promise<string | undefined> {
   const git = async (args: string[]): Promise<string> =>
     (await exec("git", args, { cwd, signal, timeout: 5000 })).stdout.trim();

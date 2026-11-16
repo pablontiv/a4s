@@ -11,17 +11,28 @@ omp plugin uninstall @a4s/omp-dagu-status @a4s/omp-triage-guard
 omp plugin link "$(git rev-parse --show-toplevel)/packages/omp-dagu"
 ```
 
-Para usar un checkout sin cambiar la configuración global:
+To load a checkout without changing global settings:
 
 ```sh
-DAGU_URL=http://127.0.0.1:8080 omp -e /ruta/a/a4s/packages/omp-dagu
+omp -e /path/to/a4s/packages/omp-dagu
 ```
 
-Usar el directorio completo permite que OMP descubra las dos extensiones, `agents/triage-reviewer.md` y `skills/dagu-feature/`. `DAGU_URL` es la raíz del servidor (por defecto `http://127.0.0.1:8080`).
+Loading the whole directory lets OMP discover both extensions, `agents/triage-reviewer.md`, and `skills/dagu-feature/`.
+The widget and bundle inspection CLI read the station URL from `<repo root>/.workspace/config/dagu.json`, next to `refine.json`:
+
+```json
+{ "daguUrl": "http://127.0.0.1:8080" }
+```
+
+The file or key may be omitted to use `http://127.0.0.1:8080`; trailing slashes are removed.
+Malformed JSON, non-object files, and non-string `daguUrl` values fail with the config file path.
+The widget resolves the root with `git rev-parse --show-toplevel` from the session cwd, falling back to that cwd outside Git.
+A linked worktree uses its own root's config. `DAGU_URL` and `DAGU_HOME` do not configure either consumer.
+Subagent activity uses only the session directory supplied by OMP; without it, transcript activity remains empty rather than guessing profile paths.
 
 ## Estación aislada de 14 pasos
 
-La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME=~/.dagu-14steps` y `DAGU_URL=http://127.0.0.1:8090`. Cada rol se inicia con `a4s-14steps <supervisor|coordinator|researcher>` (OMP con este paquete cargado y el rol declarado); `a4s-14steps dagu ...` ejecuta comandos de la CLI de Dagu contra esa estación.
+The isolated station runs as the user unit `dagu-14steps.service`, with its Dagu CLI/service home at `~/.dagu-14steps` and HTTP endpoint at `http://127.0.0.1:8090`. Set `"daguUrl": "http://127.0.0.1:8090"` in each repository/worktree's `.workspace/config/dagu.json` for the widget and bundle inspector. Each role starts with `a4s-14steps <supervisor|coordinator|researcher>`; `a4s-14steps dagu ...` still selects the CLI's service home through the launcher's environment, independently of the plugin config.
 
 Command mode (`a4s-14steps <cmd...>`) preserves the caller's working directory; run worktree gates from that worktree. No-argument, role and flag forms start OMP in the primary clone. Without an explicit role, `dagu_session_id` stays inactive; `a4s-14steps --help` prints OMP's usage.
 
@@ -186,18 +197,18 @@ versión: exige el mismo major y, mientras sea `0`, también el mismo minor. Un
 DAG sin etiqueta queda `unstamped`; una versión fuera de la regla queda
 `incompatible`. Ambos estados se muestran como advertencia y no bloquean runs.
 
-Para inspeccionar uno o más clones, el reconciliador instalado y la versión
-exacta de Dagu requerida:
+To inspect one or more clones, the station's reconciler, and the exact required Dagu version:
 
 ```sh
-node /ruta/a/a4s/packages/omp-dagu/bin/dagu-feature-bundle.ts /ruta/al/clon
+node /path/to/a4s/packages/omp-dagu/bin/dagu-feature-bundle.ts /path/to/clone
 ```
 
-Sin rutas, el comando usa el toplevel Git del directorio actual. Sale con código
-distinto de cero si algún DAG, el reconciliador o Dagu no es compatible. Node.js
->=22.19 ejecuta directamente ese archivo TypeScript; se documenta la ruta real
-del paquete porque Node rechaza el type stripping de archivos `.ts` bajo
-`node_modules`.
+With no paths, the command inspects the current directory's Git toplevel.
+It selects `daguUrl` from the first successfully inspected repository's `.workspace/config/dagu.json`, or from the cwd if none resolves.
+Repository `feature.yaml` and `poc.yaml` stamps are read locally; the reconciler stamp comes only from the verbatim JSON `spec` returned by `GET <daguUrl>/api/v1/dags/reconcile/spec`.
+HTTP 404 means `unstamped`; any other non-200 response, invalid spec response, or transport failure prints `reconcile.yaml ... compat=unreachable`.
+The command exits nonzero if any DAG, reconciler, or local `dagu version` is incompatible, unstamped, or unreachable.
+Node.js >=22.19 runs this TypeScript file directly; use its real package path because Node rejects type stripping for `.ts` files under `node_modules`.
 
 El bootstrap verifica que el paquete fuente esté limpio, que su `HEAD` pertenezca
 a la rama remota por defecto y que `dagu version` produzca exactamente la versión

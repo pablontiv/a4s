@@ -1,9 +1,10 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { loadDaguConfig } from "../config.ts";
 import { activityTarget, readActivity } from "./activity.ts";
 import { ghIssueTitleResolver, IssueTitles } from "./issue-title.ts";
 import { isActive, issueNumber, renderRun, topicFor, Transitions } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
-import { resolveRepository } from "./repository.ts";
+import { resolveRepository, resolveRoot } from "./repository.ts";
 import { SSEParser } from "./sse.ts";
 import type { SSEEvent } from "./sse.ts";
 
@@ -117,10 +118,9 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function observe(ctx: Context, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
+async function observe(ctx: Context, base: string, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
-  const base = (process.env.DAGU_URL || "http://127.0.0.1:8080").replace(/\/+$/, "");
   const runs = new Map<string, RunDetails>();
   const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
@@ -301,9 +301,12 @@ export default function daguStatus(pi: ExtensionAPI): void {
     await applyRole(pi);
     if (!ctx.hasUI && ctx.agent.kind !== "main") return;
     activeContext = ctx;
-    controller = new AbortController();
+    const observation = new AbortController();
+    controller = observation;
+    const { daguUrl } = loadDaguConfig(await resolveRoot(ctx.cwd, observation.signal));
+    if (observation.signal.aborted) return;
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
-    void observe(ctx, controller.signal, message => {
+    void observe(ctx, daguUrl, observation.signal, message => {
       pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
     }).catch(() => {});
   };
