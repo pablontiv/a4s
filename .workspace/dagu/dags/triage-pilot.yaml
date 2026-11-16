@@ -1,0 +1,107 @@
+# Pre-pilot only: do not enqueue on an operator station before R28 and pilot authorization.
+name: triage-pilot
+shell: bash
+type: graph
+labels:
+  workspace: a4s
+  dagu-feature-bundle: 0.2.0
+params:
+  ISSUE: ''
+  OMP_SESSION_ID: ''
+  REPO: ''
+  STATE_ROOT: ''
+  MODEL: ''
+  MAX_COST: '0.50'
+  SCOPE: ''
+  feedback: ''
+env:
+  DAG_PUSHBACK_ITERATION: '0'
+steps:
+  - id: role
+    action: dag.run
+    timeout_sec: 330
+    continue_on:
+      failure: true
+    with:
+      dag: triage-pilot-child
+      params:
+        RUN: ${DAG_RUN_ID}
+        VERSION: ${DAG_PUSHBACK_ITERATION}
+        REPO: ${REPO}
+        STATE_ROOT: ${STATE_ROOT}
+        MODEL: ${MODEL}
+        MAX_COST: ${MAX_COST}
+        SCOPE: ${SCOPE}
+        FEEDBACK: ${feedback}
+  - id: escalation
+    depends: role
+    preconditions:
+      - condition: ${role.exit_code}
+        expected: '0'
+        negate: true
+    action: human.task
+    with:
+      prompt: 'Triage failed for issue ${ISSUE}. Inspect the child logs and cleanup records before retrying.'
+      push_back:
+        rewind_to: role
+        form:
+          type: object
+          required: [feedback]
+          additionalProperties: false
+          properties:
+            feedback: {type: string, minLength: 1}
+---
+name: triage-pilot-child
+shell: bash
+type: graph
+params:
+  RUN: ''
+  VERSION: '0'
+  REPO: ''
+  STATE_ROOT: ''
+  MODEL: ''
+  MAX_COST: '0.50'
+  SCOPE: ''
+  FEEDBACK: ''
+steps:
+  - id: triage
+    timeout_sec: 150
+    run: python3 "$REPO/packages/omp-dagu/scripts/triage-role.py" run triage
+    output: TRIAGE
+    output_schema:
+      type: object
+      required: [poc, behavior, question, reason, run, version]
+      additionalProperties: false
+      properties:
+        poc: {type: string, enum: ['no', 'yes']}
+        behavior: {type: string}
+        question: {type: string}
+        reason: {type: string}
+        run: {type: string}
+        version: {type: string}
+  - id: reviewer
+    depends: triage
+    preconditions:
+      - condition: ${TRIAGE.poc}
+        expected: 'no'
+    continue_on:
+      skipped: true
+    timeout_sec: 150
+    run: python3 "$REPO/packages/omp-dagu/scripts/triage-role.py" run reviewer
+    output: REVIEW
+    output_schema:
+      type: object
+      required: [poc, behavior, question, reason, run, version, agree]
+      additionalProperties: false
+      properties:
+        poc: {type: string, enum: ['no', 'yes']}
+        behavior: {type: string}
+        question: {type: string}
+        reason: {type: string}
+        run: {type: string}
+        version: {type: string}
+        agree: {type: boolean}
+  - id: semantic_check
+    depends: reviewer
+    timeout_sec: 10
+    run: python3 "$REPO/packages/omp-dagu/scripts/triage-role.py" check

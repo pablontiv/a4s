@@ -224,3 +224,38 @@ test("widget and DAGU STATE notice report ok, incompatible and unstamped bundle 
     );
   }
 });
+
+test("supervisor wakes once for each escalation and feature/PoC decision, including startup", () => {
+  for (const [name, step] of [["triage-pilot", "escalation"], ["feature", "decide"], ["poc", "decide"]] as const) {
+    const transitions = new Transitions("session-a", "supervisor");
+    const candidate = waitingAt(step, undefined, name);
+    const notice = transitions.observe(candidate, { baseline: true }).wakeMessage;
+    assert.match(notice!, new RegExp(`dag=${name} .*step=${step} issue=176`));
+    assert.equal(transitions.observe(candidate).wakeMessage, undefined, "REST/SSE duplicates");
+    const { nodes, ...summary } = candidate;
+    assert.equal(transitions.observe(summary).wakeMessage, undefined);
+    assert.equal(transitions.observe(candidate).wakeMessage, undefined, "summary without nodes is not a new task");
+    transitions.observe({ ...candidate, statusLabel: "running", nodes: [] });
+    assert.equal(transitions.observe(candidate).wakeMessage, notice, "push-back creates a new wait");
+  }
+});
+
+test("supervisor waiting deduplication tracks every task and its start, not just the current step", () => {
+  const transitions = new Transitions("session-a", "supervisor");
+  const candidate = waitingAt("decide");
+  transitions.observe(candidate);
+  candidate.nodes!.push({ step: { id: "role-review", name: "escalation" }, statusLabel: "waiting", startedAt: "2026-11-15T01:00:00Z" });
+  assert.match(transitions.observe(candidate).wakeMessage!, /step=escalation/);
+  assert.equal(transitions.observe(candidate).wakeMessage, undefined);
+  candidate.nodes![1]!.startedAt = "2026-11-15T02:00:00Z";
+  assert.match(transitions.observe(candidate).wakeMessage!, /step=escalation/);
+});
+
+test("supervisor wakes exclude other sessions, coordinator gates, unrelated gates and subagents", () => {
+  for (const [name, step] of [["feature", "triage"], ["feature", "implement"], ["poc", "triage"], ["other", "decide"]] as const) {
+    assert.equal(new Transitions("session-a", "supervisor").observe(waitingAt(step, undefined, name)).wakeMessage, undefined);
+  }
+  assert.equal(new Transitions("session-b", "supervisor").observe(waitingAt("decide")).wakeMessage, undefined);
+  assert.equal(new Transitions(undefined, "supervisor").observe(waitingAt("decide")).wakeMessage, undefined);
+  assert.equal(new Transitions("session-a", "researcher").observe(waitingAt("decide")).wakeMessage, undefined);
+});

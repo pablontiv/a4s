@@ -61,7 +61,7 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 
 Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
 
-`--a4s-role` activates `dagu_session_id` only for `coordinator`. Supervisor, researcher, no role and unknown roles remove it on session start and switch, even when `--tools` lists it; an unknown role also reports the valid roles. The role comes from the launch, including when resuming a session.
+`--a4s-role` activates `dagu_session_id` for `coordinator` and `supervisor`. Researcher, no role and unknown roles remove it on session start and switch, even when `--tools` lists it; an unknown role also reports the valid roles. The role comes from the launch, including when resuming a session.
 
 This is a convention aid, not access control: any session can read `$PI_SESSION_ID` and run `dagu enqueue` or call the station API. Possible future mitigations are a bypassable `tool_call` guard and Dagu-side authentication; both are out of scope.
 
@@ -145,15 +145,17 @@ After that acceptance, the supervisor proposes the tag to the operator; the tag 
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
 
-La herramienta LLM `dagu_session_id`, activa solo para `--a4s-role coordinator`, devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. Cuando un run entra en `waiting` en `triage` o `implement`, o pasa a `failed` o `aborted`, la extensión entrega:
+The LLM tool `dagu_session_id` is available to the main session under `--a4s-role coordinator` or `supervisor`; subagents cannot use it. Pass its result as `OMP_SESSION_ID` when starting a run. Coordinators keep their existing `feature` triage/implementation and failure wakes. A supervisor receives one hidden aside per waiting role `escalation`, `feature` `decide`, or `poc` `decide`, without a coordinator session:
 
 ```text
 [DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
 ```
 
-El aviso se entrega oculto al chat con `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`: inicia o continúa el turno del modelo sin renderizar una línea en la conversación. Solo se emite si el agente es `main`, el DAG es `feature`, existe `ISSUE` y `OMP_SESSION_ID` coincide exactamente con el ID de esa sesión. En estados terminales, `step` identifica el nodo fallido o abortado que alcanzó el run. Se aceptan los params Dagu tanto en formato CLI `KEY=value` como JSON.
+Supervisor waiting notices also include `dag=<name>`.
 
-REST y SSE alimentan una sola máquina de transiciones. El primer barrido tras `session_start` o `session_switch` establece una línea base silenciosa para los runs que ya existen. Un run descubierto en un barrido posterior ya esperando sí despierta; un barrido REST recupera una transición que SSE haya perdido; snapshots repetidos no duplican el aviso; y una reentrada real `running → waiting`, incluso al mismo paso, vuelve a avisar.
+The notice uses `pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" })`, starting or continuing the model turn without adding a visible chat line. It requires agent `main`, an `ISSUE`, and an exact `OMP_SESSION_ID` match. Terminal notices identify the failed/aborted node. Params may use CLI `KEY=value` or JSON.
+
+REST and SSE share one transition state. Supervisor startup delivers already-waiting tasks; coordinator startup remains a silent baseline. Waiting-task deduplication uses the run, step identity and step start timestamp, so repeated snapshots do not duplicate an aside, parallel tasks each wake once, and a fresh wait after push-back wakes again. Deduplication is in-process: restarting the supervisor re-delivers an outstanding wait.
 
 Cada línea del widget identifica el DAG y el issue, muestra el progreso por nodos, el paso actual y, cuando existe, su actividad. La CLI `gh` es opcional y añade el slug del título.
 
@@ -228,6 +230,27 @@ valores actuales mostrados por `answers`, abre el issue de adopción y encola el
 `Dagu-Feature-Bundle`, `Dagu-Feature-Source` y `Dagu-Feature-Bootstrap` que
 imprime `confirm`.
 
+## Headless triage pre-pilot (#920)
+
+`.workspace/dagu/dags/triage-pilot.yaml` is an opt-in root/child pair, not a replacement for the installed `feature` flow or a bootstrap/bundle template. Use an isolated `DAGU_HOME` with Dagu 2.26.0; F1 already shipped separately. Do not enqueue it on either operator station until the R28 binding decision and the five-issue headless-versus-TUI pilot are authorized. No operator acceptance is recorded here.
+
+The root takes `ISSUE`, the supervisor's `OMP_SESSION_ID`, absolute `REPO` and private `STATE_ROOT` paths, `MODEL`, and the issue/research context in `SCOPE`. `STATE_ROOT` must be owned by the current user with mode 0700. Every run/push-back generation gets fresh role directories. A failed child reaches the root `escalation` human task; push-back requires feedback and starts a fresh generation.
+
+`scripts/triage-role.py` runs triage and, only for `poc=no`, an independent reviewer. Roles load no extensions, context files, rules, skills or tools; their explicit config sets `features.unexpectedStopDetection` to `none`. The launcher preserves a nonzero role exit, extracts the last single-line JSON object before Dagu's `output_schema`, and then performs a separate semantic check. Missing JSON, schema errors, disagreement or stale identity fail the child. `poc=yes` bypasses reviewer artifacts, but not the triage identity/schema checks.
+
+R28 remains an operator decision: the pre-pilot keeps the researched run+generation binding, first-prompt marker, unique fresh reviewer transcript and private session directory. Tests reject duplicate transcripts and each stale dimension independently. This does **not** establish authenticated native task/agent parentage or bind the decision to an independently authenticated final reviewer yield; the existing coordinator/native triage guard remains unchanged. Recommended operator choice: authorize only the isolated pilot under that stated limitation, not a production cutover.
+
+`scripts/role-guard.py` requires Linux pidfds and a working systemd user manager and fails closed otherwise. Each role runs in a private user-service cgroup with a subreaper, launcher pidfd, `KillMode=control-group`, a one-second stop limit, `TasksMax=128`, and a runtime ceiling. The deadlines are `omp --max-time 120s` < guard 135s + stop 1s < role step 150s < root `dag.run` 330s; both roles plus the semantic check fit within 330s. The cgroup test covers normal exit 7, launcher SIGKILL, guard SIGKILL and runtime expiry while detached/double-forked, late-forking, TERM-ignoring descendants exist. This is not containment against privileged/same-UID cgroup migration, user-manager failure or uninterruptible kernel tasks.
+
+### Observed RPC ownership
+
+On 2026-11-16 at 05:00 UTC, an isolated Dagu 2.26.0 parent/child run (`issue-920-rpc-live`) successfully owned one real OMP 18.20.3 RPC child for its entire lifetime. `scripts/probe-role-rpc.py`, under the same cleanup guard, used `anthropic/claude-haiku-4-5` and a host-owned tool gate to keep the role busy. All eleven command IDs were acknowledged individually; `steer` and `follow_up` appeared in their respective queues and then in assistant replies. `abort` returned an acknowledgement, an `aborted` prompt result and host-tool cancellation. The session ID/file stayed unchanged, stdin EOF exited 0, and both Dagu runs succeeded in 5.7 seconds. The test home was removed after recording these results.
+
+This proves that a Dagu step can own and drain the RPC channel; it does not add a supervisor transport/daemon, retire Tern, or complete the live-issue pilot. To reproduce after authorization, run the probe inside `role-guard.py --runtime-seconds 135 --log <private-path> --`, in an isolated Dagu child step with a 150-second timeout and a longer parent `dag.run`. Pass `--model <available-model> --state <private-directory>` to the probe; it writes its assertions and command/event evidence there.
+
+The RPC contract and cleanup behavior were checked against the installed-version source directories `~/.opensrc/repos/github.com/can1357/oh-my-pi/v18.20.3` and `~/.opensrc/repos/github.com/dagu-org/dagu/v2.26.0`, not an unversioned repository snapshot.
+
+
 ## Desarrollo
 
 ```sh
@@ -243,4 +266,4 @@ bash scripts/gate.sh
 
 Las pruebas cubren el parser SSE, progreso y actividad viva de comandos y subagentes, identidad y títulos de issues, resolución de repositorios/worktrees, transiciones y avisos del widget, la correlación nativa y el contrato estructurado del guard de triage, y la verificación fail-closed del transcript real ejecutada desde ambos DAG `feature.yaml`.
 
-El gate requiere `DAGU_BIN` o `dagu` en `PATH` y ejecuta las pruebas nativas sin skips; CI instala Dagu 2.26.0 con checksum fijado. Los tests usan homes temporales y un puerto libre, sin reutilizar el `DAGU_HOME`, `DAGU_URL`, `DAGU_PORT` ni otras opciones `DAGU_*` heredadas de la estación. El contrato nativo usa el servidor y scheduler reales para compartir el estado de revisión entre `feature` y `reconcile-run` y completar/push-back de tareas humanas.
+The gate requires `DAGU_BIN` or `dagu` on `PATH`; CI pins Dagu 2.26.0 by checksum. Native tests use temporary homes and free ports, without inheriting station `DAGU_*` settings. The real-server contract exercises review state and human-task complete/push-back. Linux cgroup/role-child integration tests additionally require a working systemd user manager and explicitly skip where it is unavailable. The supervisor wake integration starts its own station and runs the actual extension's UI-context observer without any coordinator. The live RPC probe is opt-in and is not run by the gate.

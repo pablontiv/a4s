@@ -56,7 +56,7 @@ for (const role of ["coordinator", "supervisor", "researcher", undefined]) {
         await fire(event);
         assert.deepEqual(
           state.active,
-          role === "coordinator" ? ["read", "bash", "dagu_session_id"] : ["read", "bash"],
+          role === "coordinator" || role === "supervisor" ? ["read", "bash", "dagu_session_id"] : ["read", "bash"],
           event,
         );
       }

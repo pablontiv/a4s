@@ -17,6 +17,7 @@ export interface RunDetails {
 export interface RunNode {
   step: { id?: string; name: string };
   statusLabel: string;
+  startedAt?: string;
 }
 
 export const isActive = (run: RunDetails): boolean =>
@@ -100,12 +101,13 @@ interface State {
   status: string;
   step: string | undefined;
   silentUnresolvedWaiting: boolean;
+  waiting: Set<string>;
 }
 
 export class Transitions {
   private states = new Map<string, State>();
 
-  constructor(private readonly sessionId?: string) {}
+  constructor(private readonly sessionId?: string, private readonly role = "coordinator") {}
 
   observe(run: RunDetails, options: { baseline?: boolean; slug?: string } = {}): TransitionEffects {
     const key = topicFor(run);
@@ -118,10 +120,15 @@ export class Transitions {
     const baseline = options.baseline === true;
     const suppressResolvedBaseline = previous?.silentUnresolvedWaiting === true
       && previous.status === "waiting" && previous.step === undefined && step !== undefined;
+    const waiting = run.nodes === undefined && run.statusLabel === "waiting"
+      ? previous?.waiting ?? new Set<string>()
+      : new Set((run.nodes ?? []).filter(node => node.statusLabel === "waiting")
+        .map(node => JSON.stringify([node.step.id ?? node.step.name, node.startedAt])));
     this.states.set(key, {
       status: run.statusLabel,
       step,
       silentUnresolvedWaiting: baseline && run.statusLabel === "waiting" && step === undefined,
+      waiting,
     });
 
     const firstAfterStartup = !previous && !baseline;
@@ -132,13 +139,24 @@ export class Transitions {
     );
     const effects: TransitionEffects = {};
     const issue = issueNumber(run);
-    const targeted = this.sessionId !== undefined && run.name === "feature" && issue !== undefined
+    const targeted = this.sessionId !== undefined && issue !== undefined
       && runParam(run, "OMP_SESSION_ID") === this.sessionId;
+    const coordinator = targeted && this.role === "coordinator" && run.name === "feature";
     const bundle = runBundleState(run);
     const bundleNotice = ` bundle=${plain(bundle.displayVersion)} extension=${bundle.extensionVersion} compat=${bundle.compat}`;
 
+    if (targeted && this.role === "supervisor" && isActive(run)) {
+      const messages = (run.nodes ?? []).filter(node => {
+        const task = JSON.stringify([node.step.id ?? node.step.name, node.startedAt]);
+        return node.statusLabel === "waiting" && !previous?.waiting.has(task)
+          && (node.step.name === "escalation"
+            || (["feature", "poc"].includes(run.name) && node.step.name === "decide"));
+      }).map(node => `[DAGU STATE] dag=${plain(run.name)} run=${plain(run.dagRunId)} status=waiting step=${plain(node.step.name)} issue=${issue}${bundleNotice}`);
+      if (messages.length) effects.wakeMessage = messages.join("\n");
+    }
+
     if (enteredWaiting) {
-      if (targeted && (step === "triage" || step === "implement")) {
+      if (coordinator && (step === "triage" || step === "implement")) {
         effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=waiting step=${step} issue=${issue}${bundleNotice}`;
       }
       return effects;
@@ -151,7 +169,7 @@ export class Transitions {
         type: run.statusLabel === "succeeded" ? "info" : run.statusLabel === "failed" ? "error" : "warning",
       };
       const noticeStep = terminalStep ?? previous.step;
-      if (targeted && (run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
+      if ((coordinator || (targeted && this.role === "supervisor")) && (run.statusLabel === "failed" || run.statusLabel === "aborted") && noticeStep) {
         effects.wakeMessage = `[DAGU STATE] run=${plain(run.dagRunId)} status=${run.statusLabel} step=${plain(noticeStep)} issue=${issue}${bundleNotice}`;
       }
     }

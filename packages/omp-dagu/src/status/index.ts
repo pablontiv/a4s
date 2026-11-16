@@ -57,7 +57,7 @@ const SESSION_ID_TOOL = "dagu_session_id";
 async function applyRole(pi: ExtensionAPI): Promise<void> {
   const role = pi.getFlag("a4s-role");
   const others = pi.getActiveTools().filter(name => name !== SESSION_ID_TOOL);
-  await pi.setActiveTools(role === "coordinator" ? [...others, SESSION_ID_TOOL] : others);
+  await pi.setActiveTools(role === "coordinator" || role === "supervisor" ? [...others, SESSION_ID_TOOL] : others);
   // Strip first: OMP reports hook errors but keeps the session running.
   if (role !== undefined && !ROLES.includes(role as string)) {
     throw new Error(`unknown --a4s-role ${JSON.stringify(role)}; expected ${ROLES.join(" | ")}`);
@@ -118,11 +118,11 @@ async function streamTopics(base: string, topics: string[], signal: AbortSignal,
   }
 }
 
-async function observe(ctx: Context, base: string, signal: AbortSignal, wake: (message: string) => void): Promise<void> {
+async function observe(ctx: Context, base: string, signal: AbortSignal, wake: (message: string) => void, role: string): Promise<void> {
   const repo = await resolveRepository(ctx.cwd, signal);
   if (!repo || signal.aborted) return;
   const runs = new Map<string, RunDetails>();
-  const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined);
+  const transitions = new Transitions(ctx.agent.kind === "main" ? ctx.sessionManager.getSessionId() : undefined, role);
   const titles = new IssueTitles(ghIssueTitleResolver(ctx.cwd));
   const activities = new Map<string, string>();
   const activityWatches = new Map<string, { key: string; controller: AbortController }>();
@@ -307,8 +307,10 @@ export default function daguStatus(pi: ExtensionAPI): void {
     if (observation.signal.aborted) return;
     // Every detached promise has an error boundary; shutdown aborts fetches and sleeps.
     void observe(ctx, daguUrl, observation.signal, message => {
-      pi.sendMessage({ customType: "dagu-state", content: message, display: false }, { deliverAs: "aside" });
-    }).catch(() => {});
+      for (const content of message.split("\n")) {
+        pi.sendMessage({ customType: "dagu-state", content, display: false }, { deliverAs: "aside" });
+      }
+    }, String(pi.getFlag("a4s-role") ?? "")).catch(() => {});
   };
   pi.on("session_start", start);
   pi.on("session_switch", start);
