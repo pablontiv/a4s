@@ -155,6 +155,12 @@ test("missing command logs and subagent transcripts leave activity empty", async
   }
 });
 
+test("agent activity without the host session directory stays empty instead of guessing profile paths", async () => {
+  const target = activityTarget(agentRun);
+  assert.ok(target);
+  assert.equal(await readActivity("http://unused", agentRun, target, {}, new AbortController().signal), undefined);
+});
+
 test("activity text replaces controls and truncates the widget payload", () => {
   const result = sanitizeActivity(`tool\u001b\n${"x".repeat(ACTIVITY_MAX_LENGTH + 40)}`);
   assert.equal(result.includes("\u001b"), false);

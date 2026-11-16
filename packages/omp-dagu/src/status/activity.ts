@@ -1,5 +1,4 @@
-import { open, readdir, realpath, stat } from "node:fs/promises";
-import os from "node:os";
+import { open, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { currentNode, issueNumber, runParam, topicFor } from "./progress.ts";
 import type { RunDetails } from "./progress.ts";
@@ -71,31 +70,6 @@ async function commandActivity(
   return undefined;
 }
 
-function profileName(): string | undefined {
-  const raw = process.env.OMP_PROFILE !== undefined ? process.env.OMP_PROFILE : process.env.PI_PROFILE;
-  const value = raw?.trim();
-  return !value || value === "default" ? undefined : value;
-}
-
-async function encodedCwd(cwd: string): Promise<string> {
-  const resolved = await realpath(path.resolve(cwd)).catch(() => path.resolve(cwd));
-  const home = await realpath(os.homedir()).catch(() => path.resolve(os.homedir()));
-  const relative = path.relative(home, resolved);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
-    return relative ? `-${relative.replace(/[/\\:]/g, "-")}` : "-";
-  }
-  return `--${resolved.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
-}
-
-async function defaultSessionDir(primary: string): Promise<string> {
-  const profile = profileName();
-  if (!profile && process.env.PI_CODING_AGENT_DIR) {
-    return path.join(path.resolve(process.env.PI_CODING_AGENT_DIR), "sessions", await encodedCwd(primary));
-  }
-  const root = path.join(os.homedir(), process.env.PI_CONFIG_DIR || ".omp");
-  return path.join(root, ...(profile ? ["profiles", profile] : []), "agent", "sessions", await encodedCwd(primary));
-}
-
 async function newestFile(directory: string, names: string[], accepts: (name: string) => boolean): Promise<string | undefined> {
   let newest: { file: string; mtime: number } | undefined;
   for (const name of names) {
@@ -112,10 +86,9 @@ async function locateTranscript(
   agentName: string,
   preferredSessionDir?: string,
 ): Promise<string | undefined> {
-  const primary = runParam(run, "PRIMARY");
   const sessionId = runParam(run, "OMP_SESSION_ID");
-  if (!primary || !sessionId) return undefined;
-  const sessionDir = preferredSessionDir || await defaultSessionDir(primary);
+  if (!preferredSessionDir || !sessionId) return undefined;
+  const sessionDir = preferredSessionDir;
   const coordinatorNames = await readdir(sessionDir);
   const coordinator = await newestFile(
     sessionDir,
