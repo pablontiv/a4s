@@ -29,7 +29,7 @@ Los agentes para Pi, Claude y Superpowers están en [`agents/`](agents/).
 
 ## Flujo de issues
 
-a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `npm ci && npm test && npm run typecheck`, y `dagu-14steps` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `dagu-14steps`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
+a4s usa su propio ciclo `dagu-feature`, versionado en [`.workspace/dagu/dags/feature.yaml`](.workspace/dagu/dags/feature.yaml). El gate local es `bash scripts/gate.sh` y requiere Dagu 2.26.0 en `PATH` o `DAGU_BIN`; `dagu-14steps` exige el check `validate` de [`.github/workflows/ci.yml`](.github/workflows/ci.yml). Cada issue se lleva con un run desde el clone (no desde un worktree), limpio y en `dagu-14steps`. El DAG crea el worktree del issue en `.workspace/worktrees/issue-<n>`:
 
 ```sh
 n=<issue>
@@ -42,9 +42,7 @@ El checkpoint `implement`, el polling nativo de `await_merge` y la recuperación
 ## Verificación
 
 ```sh
-npm ci
-npm test
-npm run typecheck
+bash scripts/gate.sh
 ```
 
 La historia completa anterior a esta reducción queda en la rama `legacy`.

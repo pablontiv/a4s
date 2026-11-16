@@ -22,4 +22,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Install Dagu 2.26.0
+        env:
+          DAGU_ASSET_URL: https://github.com/dagucloud/dagu/releases/download/v2.26.0/dagu_2.26.0_linux_amd64.tar.gz
+        run: |
+          archive="$RUNNER_TEMP/dagu_2.26.0_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location "$DAGU_ASSET_URL" --output "$archive"
+          # From the official v2.26.0 release's checksums.txt.
+          echo "2b1cab5dbab7c7dc6607d807e2cbf6597f26d5a5d09442e2c2abcfe1acbf9e68  $archive" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/dagu-2.26.0"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/dagu-2.26.0" dagu
+          echo "DAGU_BIN=$RUNNER_TEMP/dagu-2.26.0/dagu" >> "$GITHUB_ENV"
       - run: bash scripts/gate.sh
