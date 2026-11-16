@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Add explicit supervisor/coordinator/researcher launcher roles and activate `dagu_session_id` only for coordinators, stripping it for other or unknown roles even when pre-listed (#981).
 - Require Dagu 2.26.0 for the bundle/bootstrap and align the a4s station templates, rendered DAG stamps and version fixtures without changing DAG behavior (#983).
 - Version the complete bundle, stamp rendered DAGs with their package/source/bootstrap/Dagu identity, report compatibility in the extension, and add the `dagu-feature-bundle` inspection CLI.
 

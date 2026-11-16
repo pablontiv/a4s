@@ -24,6 +24,7 @@ interface SessionIdTool {
   description: string;
   parameters: { type: "object"; properties: Record<string, never>; additionalProperties: false };
   loadMode: "essential";
+  defaultInactive: true;
   execute(
     toolCallId: string,
     params: Record<string, never>,
@@ -40,9 +41,26 @@ interface CustomMessage {
   attribution?: string;
 }
 interface ExtensionAPI {
-  on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void): void;
+  on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void | Promise<void>): void;
   registerTool(tool: SessionIdTool): void;
+  registerFlag(name: string, options: { description: string; type: "string" }): void;
+  getFlag(name: string): boolean | string | undefined;
+  getActiveTools(): string[];
+  setActiveTools(toolNames: string[]): Promise<void>;
   sendMessage(message: CustomMessage, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" }): void;
+}
+
+const ROLES = ["supervisor", "coordinator", "researcher"];
+const SESSION_ID_TOOL = "dagu_session_id";
+
+async function applyRole(pi: ExtensionAPI): Promise<void> {
+  const role = pi.getFlag("a4s-role");
+  const others = pi.getActiveTools().filter(name => name !== SESSION_ID_TOOL);
+  await pi.setActiveTools(role === "coordinator" ? [...others, SESSION_ID_TOOL] : others);
+  // Strip first: OMP reports hook errors but keeps the session running.
+  if (role !== undefined && !ROLES.includes(role as string)) {
+    throw new Error(`unknown --a4s-role ${JSON.stringify(role)}; expected ${ROLES.join(" | ")}`);
+  }
 }
 
 async function discover(base: string, repo: string, signal: AbortSignal): Promise<RunDetails[]> {
@@ -254,11 +272,13 @@ async function observe(ctx: Context, signal: AbortSignal, wake: (message: string
 export default function daguStatus(pi: ExtensionAPI): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
+  pi.registerFlag("a4s-role", { description: `a4s role: ${ROLES.join(" | ")}`, type: "string" });
   pi.registerTool({
-    name: "dagu_session_id",
+    name: SESSION_ID_TOOL,
     label: "Dagu session ID",
     description: "Return the persistent OMP session ID to pass as OMP_SESSION_ID when enqueueing a Dagu run.",
     loadMode: "essential",
+    defaultInactive: true,
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       if (ctx.agent.kind !== "main") {
@@ -276,8 +296,9 @@ export default function daguStatus(pi: ExtensionAPI): void {
     activeContext = undefined;
     controller = undefined;
   };
-  const start = (_event: unknown, ctx: Context): void => {
+  const start = async (_event: unknown, ctx: Context): Promise<void> => {
     stop();
+    await applyRole(pi);
     if (!ctx.hasUI && ctx.agent.kind !== "main") return;
     activeContext = ctx;
     controller = new AbortController();

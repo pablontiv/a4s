@@ -21,9 +21,9 @@ Usar el directorio completo permite que OMP descubra las dos extensiones, `agent
 
 ## Estación aislada de 14 pasos
 
-La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME=~/.dagu-14steps` y `DAGU_URL=http://127.0.0.1:8090`. El coordinador se inicia con `a4s-14steps` (OMP con este paquete cargado); `a4s-14steps dagu ...` ejecuta comandos de la CLI de Dagu contra esa estación.
+La estación corre como unidad de usuario `dagu-14steps.service`, con `DAGU_HOME=~/.dagu-14steps` y `DAGU_URL=http://127.0.0.1:8090`. Cada rol se inicia con `a4s-14steps <supervisor|coordinator|researcher>` (OMP con este paquete cargado y el rol declarado); `a4s-14steps dagu ...` ejecuta comandos de la CLI de Dagu contra esa estación.
 
-Command mode (`a4s-14steps <cmd...>`) preserves the caller's working directory; run worktree gates from that worktree. Only no-argument OMP mode changes to the primary clone.
+Command mode (`a4s-14steps <cmd...>`) preserves the caller's working directory; run worktree gates from that worktree. No-argument, role and flag forms start OMP in the primary clone. Without an explicit role, `dagu_session_id` stays inactive; `a4s-14steps --help` prints OMP's usage.
 
 La rama base es `dagu-14steps`, el valor predeterminado de `BASE_BRANCH` en los DAGs estampados.
 
@@ -44,11 +44,15 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 
 | Role | Where | Outbound channels | Authority |
 |---|---|---|---|
-| Supervisor | Always in PRIMARY | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
-| Coordinator | One new Tern tab per issue, launched with `a4s-14steps` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
-| Researcher | Its own Tern tab, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, hands off only after explicit operator approval, and never creates issues. |
+| Supervisor | Always in PRIMARY; the operator launches `a4s-14steps supervisor` | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
+| Coordinator | One new Tern tab per issue, launched with `a4s-14steps coordinator` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
+| Researcher | Its own Tern tab, launched with `a4s-14steps researcher`, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, hands off only after explicit operator approval, and never creates issues. |
 
 Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
+
+`--a4s-role` activates `dagu_session_id` only for `coordinator`. Supervisor, researcher, no role and unknown roles remove it on session start and switch, even when `--tools` lists it; an unknown role also reports the valid roles. The role comes from the launch, including when resuming a session.
+
+This is a convention aid, not access control: any session can read `$PI_SESSION_ID` and run `dagu enqueue` or call the station API. Possible future mitigations are a bypassable `tool_call` guard and Dagu-side authentication; both are out of scope.
 
 #### Channels and delivery confirmation
 
@@ -82,7 +86,7 @@ The supervisor launches a **new** coordinator tab from PRIMARY for each issue, n
 primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 issue=965 # Replace with the issue to enqueue.
-tern new tab --cwd "$primary" --json -- a4s-14steps omp -e "$primary/packages/omp-dagu" \
+tern new tab --cwd "$primary" --json -- a4s-14steps coordinator \
   "Enqueue issue #$issue as run a4s-issue-$issue using dagu-feature. Supervisor pane: $supervisor_pane. Follow SKILL.md exactly and handle every checkpoint yourself. This is the only input you will get. When an operator decision is required, end your turn with the question in plain text. Report in the Turn status format. You are the coordinator for this issue: enqueue and human.task only; use task for leaf work. Do not use ask, tern new or tern close. When emitting a Turn status report, notify only supervisor pane $supervisor_pane via $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[coordinator $issue] <one-line summary>\"; never notify on silent checkpoint turns. On exit 1 or 2, report delivery failure in your own pane and do not resend."
 ```
 
@@ -94,7 +98,7 @@ The supervisor launches a researcher with a concrete question and its own pane a
 primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 question='Replace with the research question.'
-tern new tab --cwd "$primary" --json -- a4s-14steps omp -e "$primary/packages/omp-dagu" \
+tern new tab --cwd "$primary" --json -- a4s-14steps researcher \
   "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Present findings to the operator and keep iterating in this tab. Notify the supervisor only after the operator explicitly approves the handoff; quote that approval in the artifact. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
 ```
 
@@ -122,7 +126,7 @@ Tab closure stays deliberately outside `close_gate`: the DAG runs under `systemd
 
 La extensión de status observa los runs activos del repositorio de la sesión mediante barridos REST y eventos SSE. Con UI muestra una línea por run en un widget `aboveEditor`; no muestra toasts de espera y conserva los toasts terminales para `succeeded`, `failed` y `aborted`. La observación que despierta al coordinador también funciona con `hasUI=false`. Resuelve el repositorio desde `origin`, incluso en linked worktrees, y consulta runs `running`, `queued` y `waiting` de las últimas 48 horas con la etiqueta `workspace=<repo>`.
 
-La herramienta LLM `dagu_session_id` devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. Cuando un run entra en `waiting` en `triage` o `implement`, o pasa a `failed` o `aborted`, la extensión entrega:
+La herramienta LLM `dagu_session_id`, activa solo para `--a4s-role coordinator`, devuelve `ctx.sessionManager.getSessionId()` únicamente a la sesión principal que la llama y rechaza subagentes. El coordinador la llama antes de `dagu enqueue` y pasa el valor como parámetro `OMP_SESSION_ID`. Cuando un run entra en `waiting` en `triage` o `implement`, o pasa a `failed` o `aborted`, la extensión entrega:
 
 ```text
 [DAGU STATE] run=<run-id> status=<waiting|failed|aborted> step=<step> issue=<issue> bundle=<version|unstamped> extension=<version> compat=<ok|incompatible|unstamped>
