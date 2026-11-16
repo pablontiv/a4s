@@ -2,6 +2,8 @@
 
 ## 0.2.0
 
+- Add an opt-in headless triage pre-pilot with bounded cgroup cleanup, fail-closed role output/schema/semantic checks, run+generation reviewer-binding negatives, and a reproducible Dagu-owned RPC steering probe; retain the operator's R28 and live-pilot gates (#920).
+- Wake the targeted supervisor once per role escalation or feature/PoC decision task, including outstanding tasks at startup, and expose `dagu_session_id` to supervisors without requiring a coordinator (#920).
 - Define `dagu-golden-vN` as the stable-version tag: both lifecycle paths accepted on the commit the station ran, without supervisor intervention, created only after operator approval.
 - Require Dagu-native tests in CI and the local gate with checksum-pinned Dagu 2.26.0, portable isolated fixtures, and a real-server review-state/human-task transition contract (#976).
 - Read widget and bundle-inspector station settings from repository/worktree `.workspace/config/dagu.json`, fetch the installed reconciler spec through that station's API, and stop guessing OMP profile/session paths (#982).
