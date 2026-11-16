@@ -7,6 +7,16 @@ if [[ $# != 2 || ! $1 =~ ^[0-9]+$ || -z $2 || $2 == *$'\n'* || $2 == *$'\r'* ]];
 fi
 pane=$1
 line=$2
+payload=$line
+if [[ $payload == \[*\]\ * ]]; then
+  payload=${payload#*] }
+fi
+absolute_path=$'(^|[[:space:]"\'`(])/[^[:space:]]+'
+sentence_boundary=$'[.!?][]"\')]*[[:space:]]+[^[:space:]]'
+if [[ ! $payload =~ $absolute_path && $payload =~ $sentence_boundary ]]; then
+  echo 'Rejected: multi-sentence payload requires an absolute artifact path; nothing was pasted' >&2
+  exit 3
+fi
 tern_bin=${TERN_BIN:-tern}
 timeout=${TERN_NOTIFY_TIMEOUT:-120}
 if [[ ! $timeout =~ ^[0-9]+$ ]]; then

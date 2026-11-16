@@ -206,13 +206,13 @@ A turn started by a `[DAGU STATE]` notice that only advances checkpoints complet
 
 Every emitted report contains all four sections; a section with no entries says `none`. A turn that reaches a human task owned by the operator emits the report because it requires an operator decision.
 
-When the enqueue prompt names a supervisor pane, notify **only that pane** exactly when emitting a Turn status report (terminal state, blocker, or operator decision), never on a silent checkpoint turn:
+When the launch artifact names a supervisor pane, notify **only that pane** exactly when emitting a Turn status report (terminal state, blocker, or operator decision), never on a silent checkpoint turn:
 
 ```sh
 <package-dir>/scripts/tern-notify.sh <supervisor-pane> "[coordinator <issue>] <one-line summary>"
 ```
 
-The full report stays in this session's `.jsonl`; the one-line notification needs no duplicate artifact. The helper confirms exact user-message receipt with a unique token (default timeout 120 seconds). On exit `1` (contaminated) or `2` (unconfirmed), report the result to the operator in this session's own pane and never resend blindly or clear/edit the target editor. Existing operator text can be submitted with the notification; a busy OMP 18.20.2 pane receives it immediately as steering and may background an active tool, not defer it until turn end. Without a supervisor pane in the prompt, behavior is unchanged and no Tern command is required. This is coordinator session behavior, not a DAG step.
+The full report stays in this session's `.jsonl`; a trivial single-sentence notification needs no duplicate artifact. The helper rejects a payload after its `[coordinator N] `-style prefix when it contains more than one sentence and no absolute artifact path: exit `3`, with nothing pasted. Point a longer notification to the absolute transcript or handoff artifact path; the canonical [Communication protocol](../../README.md#communication-protocol) defines sentence/path matching and launch/decision rules. The helper confirms exact user-message receipt with a unique token (default timeout 120 seconds). On exit `1` (contaminated) or `2` (unconfirmed), report the result to the operator in this session's own pane and never resend blindly or clear/edit the target editor. On exit `3` (rejected), report the rejection in your own pane; it was not sent. Existing operator text can be submitted with the notification; a busy OMP 18.20.2 pane receives it immediately as steering and may background an active tool, not defer it until turn end. Without a supervisor pane in the launch artifact, behavior is unchanged and no Tern command is required. This is coordinator session behavior, not a DAG step.
 
 ## Triage
 

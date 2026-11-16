@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import extension from "../src/status/index.ts";
 
@@ -18,7 +19,7 @@ interface Tool {
   ): Promise<{ content: { type: "text"; text: string }[] }>;
 }
 
-type Hook = (event: unknown, ctx: unknown) => void | Promise<void>;
+type Hook = (event: unknown, ctx: unknown) => unknown;
 
 function load(role: string | undefined, active: string[]) {
   let registered: Tool | undefined;
@@ -43,7 +44,7 @@ function load(role: string | undefined, active: string[]) {
     // A headless subagent returns before observe(), avoiding Dagu and git calls.
     await handler({}, { hasUI: false, agent: { kind: "sub" } });
   };
-  return { registered, flag, state, fire };
+  return { registered, flag, state, fire, hooks };
 }
 
 for (const role of ["coordinator", "supervisor", "researcher", undefined]) {
@@ -99,3 +100,39 @@ test("dagu_session_id returns the caller main session id and rejects subagents",
     /dagu_session_id rejected: agent.kind=sub/,
   );
 });
+
+test("each role card matches the README and appends to every received request policy", async () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.equal(readme.split("\n## Communication protocol\n").length, 2);
+  const protocol = readme.split("\n## Communication protocol\n")[1]!.split("\n## ")[0]!;
+  for (const role of ["supervisor", "coordinator", "researcher"]) {
+    const card = protocol.split(`#### ${role}\n\n\`\`\`text\n`)[1]?.split("\n```")[0];
+    assert.ok(card, `${role} card is documented inside Communication protocol`);
+    const { hooks } = load(role, []);
+    const handler = hooks.get("before_agent_start");
+    assert.ok(handler);
+    for (const policy of [["base policy", "previous extension policy"], ["policy after compaction"]]) {
+      const systemPrompt = Object.freeze([...policy]);
+      assert.deepEqual(await handler({ reason: "prompt", systemPrompt }, {}), {
+        systemPrompt: [...policy, card],
+      });
+      assert.deepEqual(systemPrompt, policy, "received policy is not mutated");
+    }
+    if (role === "researcher") {
+      const rule = card.split("\n").find(line => line.startsWith("Role rule:"));
+      assert.ok(rule);
+      assert.ok(protocol.split("### Launch prompts\n")[1]?.includes(rule), "researcher launch includes the standing user request verbatim");
+    }
+  }
+});
+
+for (const role of [undefined, "", "admin", "constructor", "toString", "__proto__"]) {
+  test(`${role ?? "no role"} does not receive a protocol card`, async () => {
+    const { hooks } = load(role, []);
+    const handler = hooks.get("before_agent_start");
+    assert.ok(handler);
+    const systemPrompt = Object.freeze(["existing policy"]);
+    assert.equal(await handler({ reason: "prompt", systemPrompt }, {}), undefined);
+    assert.deepEqual(systemPrompt, ["existing policy"]);
+  });
+}

@@ -96,3 +96,52 @@ test("times out on a missing token and ignores assistant, tool and custom tokens
 test("ignores a partially written trailing JSONL record", () => {
   runFixture(["idle"], 0, "0", true);
 });
+
+test("rejects non-artifact multi-sentence payloads before any transport call", () => {
+  const directory = mkdtempSync(join(tmpdir(), "omp-dagu-tern-notify-"));
+  try {
+    const callsFile = join(directory, "calls.jsonl");
+    const tern = join(directory, "tern.cjs");
+    writeFileSync(tern, `#!${process.execPath}
+const { appendFileSync } = require("node:fs");
+appendFileSync(process.env.CALLS_FILE, JSON.stringify(process.argv.slice(2)) + "\\n");
+process.exit(1);
+`, { mode: 0o755 });
+    for (const [payload, expected] of [
+      ["[coordinator 998] First sentence. Second sentence.", 3],
+      ["[researcher] First? Second!", 3],
+      ["[supervisor] First. An unfinished second sentence", 3],
+      ['[researcher] "First sentence." Second sentence.', 3],
+      ["[coordinator /not-a-payload-path] First. Second.", 3],
+      ["[researcher] First. See https://example.test/handoff.md", 3],
+      ["[researcher] First. See ./handoff.md", 3],
+      ["[researcher] First. See ~/handoff.md", 3],
+      ["[coordinator 998] One trivial notice.", 2],
+      ["[researcher] Review OMP v18.21.0 and README.md", 2],
+      ["[supervisor] First. See /home/operator/handoff.md", 2],
+      ['[researcher] First. See "/home/operator/handoff.md"', 2],
+      ["[researcher] First. See '/home/operator/handoff.md'", 2],
+      ["[researcher] First. See `/home/operator/handoff.md`", 2],
+    ] as const) {
+      writeFileSync(callsFile, "");
+      const result = spawnSync(script, [pane, payload], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: { ...process.env, TERN_BIN: tern, TERN_NOTIFY_TIMEOUT: "0", CALLS_FILE: callsFile },
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, expected, `${payload}: ${result.stdout}${result.stderr}`);
+      const calls = readFileSync(callsFile, "utf8").trimEnd();
+      if (expected === 3) {
+        assert.equal(calls, "", "rejection must not paste, press Enter or inspect");
+        assert.match(result.stderr, /absolute artifact path; nothing was pasted/);
+      } else {
+        const [command, target, action, sent] = JSON.parse(calls);
+        assert.deepEqual([command, target, action], ["send", pane, "paste"]);
+        assert.ok(sent.startsWith(`${payload} [msg `));
+      }
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
