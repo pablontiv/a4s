@@ -49,6 +49,8 @@ El run conserva su rama y worktree hasta que `close_gate` termina correctamente.
 - Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
 - Referencia golden: el `dagu-golden-vN` más reciente; criterio y rollback en [Golden tags](#golden-tags).
 
+## Communication protocol
+
 ### Roles
 
 These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coordinator** means the OMP role below, not the Dagu `coordinator:` service in `station/config.yaml` or the Pi Orchestrator in `agents/common/AGENTS.md`.
@@ -65,11 +67,65 @@ Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their 
 
 This is a convention aid, not access control: any session can read `$PI_SESSION_ID` and run `dagu enqueue` or call the station API. Possible future mitigations are a bypassable `tool_call` guard and Dagu-side authentication; both are out of scope.
 
-#### Channels and delivery confirmation
+### Pinned role cards
+
+`src/status/index.ts` appends the matching card to the **received** `before_agent_start.systemPrompt` array before every prepared request, preserving the host policy and earlier extensions. This reapplies after compaction and uses the current launch's `--a4s-role`, including on resume. No role or an unknown role adds no card. The cards live in code; `test/status.test.ts` requires an exact match with these cards inside this canonical section, so edits must update both together.
+
+#### supervisor
+
+```text
+[a4s supervisor communication protocol]
+Stay in PRIMARY; operate the station and launch only operator-approved work. Close only owned idle tabs with nothing pending.
+Send [supervisor] only to coordinators/researchers through tern-notify.sh; never use raw tern send or cross-coordinator channels.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Never use ask forms while coordinators or researchers may notify.
+Honor research freezes, require quoted operator handoff approval, verify load-bearing claims against live state, and pause affected queued issues.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
+```
+
+#### coordinator
+
+```text
+[a4s coordinator communication protocol]
+Enqueue and human.task only; use task for leaf work. Never use ask, tern new or tern close.
+Send [coordinator <issue>] only to your supervisor through tern-notify.sh when emitting Turn status; silent checkpoint turns send nothing.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Follow dagu-feature; report Done, Pending, Blockers and decisions, and Proposals. Keep full Turn status reports in your session .jsonl.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
+```
+
+#### researcher
+
+```text
+[a4s researcher communication protocol]
+Read-only; never modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents.
+Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Never use ask forms while coordinators or researchers may notify.
+Wait for the operator's handoff instruction; never ask for or offer it. Only then send [researcher] through tern-notify.sh to your supervisor, quoting that approval in the artifact.
+Separate sourced evidence from [INFERENCE], identify affected queued issues, and finish with an explicit account of anything pending.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
+```
+
+### Operator decisions
+
+Batch **every decision known at a blocking point** into one artifact or message; never send one decision per message. Include the recommended choices, alternatives and already-made decisions so the operator can answer the whole batch. The artifact-first exception below permits only trivial single-sentence inline notices.
+
+Before launching a session or enqueueing work, sweep the task, inputs and dependencies for known decisions. Obtain all required answers first and record them in the launch artifact: **no enqueue while a known decision is open**. For an unforeseen decision, take and record the conservative option unless it is irreversible; stop and obtain operator approval before an irreversible choice.
+
+Do not use `ask` forms while any coordinator or researcher may notify: a pending form swallows pasted notifications. Present batched decisions in plain text instead. A researcher investigates unknowns proactively through read-only subagents, including OMP config; it waits for the operator's handoff instruction and never asks for or offers that handoff.
+
+### Channels and delivery confirmation
 
 Every inter-session message, in every direction, uses `packages/omp-dagu/scripts/tern-notify.sh <pane> <line>`, never a raw `tern send`. Allowed routes are supervisor → coordinator/researcher with `[supervisor]`, coordinator → its supervisor with `[coordinator <issue>]`, and researcher → its supervisor with `[researcher]`. No direct researcher/coordinator or cross-coordinator channel.
 
-Use artifact-first delivery: one concise line, `<prefix> <intent>: <absolute artifact path>`. Put the payload under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed. Inline text is only for trivial one-line notices. A coordinator's notification is already one line; its full Turn status report remains in its own session `.jsonl` and needs no duplicate artifact.
+Use artifact-first delivery for **every inter-session message, launch prompts included**: one concise line, `<prefix> <intent>: <absolute artifact path>`. Put the question or task, inputs, supervisor pane, authorization and pre-made decisions under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed and use an absolute path. Inline text is only for trivial single-sentence notices. A coordinator's full Turn status report remains in its own session `.jsonl` and needs no duplicate artifact; a multi-sentence notification must point to that absolute transcript path or a handoff artifact.
 
 ```sh
 # Run from PRIMARY; substitute the recipient pane and an existing absolute artifact path.
@@ -82,40 +138,43 @@ The helper appends a unique `[msg <epoch>-<rand>]` token, pastes the line, press
 - `0`: confirmed — the user message equals the sent line exactly.
 - `1`: contaminated — a user message contains the token but includes different text.
 - `2`: unconfirmed — no user message with the token was observed before the timeout, or delivery/inspection failed.
+- `3`: rejected — after removing a `[coordinator N] `-style prefix, the payload has more than one sentence and no absolute artifact path; nothing is pasted and no Tern command runs.
 
-On `1` or `2`, **never resend blindly**: the message may already have arrived. Report the result to the operator in the sender's own pane. Never clear or edit another pane's editor.
+The guard recognizes a sentence boundary as `.`, `!` or `?`, optionally followed by closing quotes/brackets, then whitespace and more text (even an unfinished second sentence). Abbreviations can therefore require an artifact. A path starts with `/` at the beginning of the payload or after whitespace, a quote, backtick or `(`; URLs, relative paths and `~/` do not qualify. This is a lexical check, not a check that the artifact exists.
+
+On `1` or `2`, **never resend blindly**: the message may already have arrived. Report the result to the operator in the sender's own pane. Never clear or edit another pane's editor. On `3`, report the rejection in your own pane; the original notification was not sent.
 
 **Residual channel risks:** partial operator editor text is concatenated with the pasted line into one submitted user message. Confirmation detects that contamination only after submission; it cannot prevent the operator's text from reaching the recipient. In the [PASS probe](https://github.com/pablontiv/a4s/issues/965#issuecomment-6891533774) on Tern 0.9.18 / OMP 18.20.2, a busy pane recorded the message **immediately** with `steering:true` and could background its active tool to handle it; delivery was not deferred until turn end. Keep the 120-second confirmation bound, but do not treat a busy session as a passive mailbox. Offline fixtures verify matching, not live scheduling.
 
 For offline transport tests, `TERN_BIN` overrides the `tern` executable and `TERN_NOTIFY_TIMEOUT` overrides the timeout in whole seconds (default `120`).
 
-#### Launch prompts
+### Launch prompts
 
-The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt. Only one feature run may be active or enqueued at a time (queue concurrency is one). After the current run is `Succeeded`, its post-run acceptance checks pass, and its coordinator tab has been closed, automatically launch the next unpaused operator-approved issue in approval order, without waiting for another message. Approval means explicit operator acceptance of that named issue or its plan; creating an issue is not approval. If acceptance fails, launch nothing and report the failure.
+The supervisor launches a **new** coordinator tab from PRIMARY for each issue. First write the task artifact with the issue/run IDs, the supervisor pane (`$TERN_PANE`), inputs, authorization, all pre-made decisions, and the required acceptance checks; finish the decision sweep before launch. Only one feature run may be active or enqueued at a time (queue concurrency is one). After the current run is `Succeeded`, its post-run acceptance checks pass, and its coordinator tab has been closed, automatically launch the next unpaused operator-approved issue in approval order, without waiting for another message. Approval means explicit operator acceptance of that named issue or its plan; creating an issue is not approval. If acceptance fails, launch nothing and report the failure.
 
 ```sh
 primary=$(git rev-parse --show-toplevel)
-supervisor_pane=$TERN_PANE
-issue=965 # Replace with the issue to enqueue.
+artifact="${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/coordinator-965.md"
+# Write the artifact above first; substitute the approved issue's existing absolute artifact path.
 tern new tab --cwd "$primary" --json -- a4s-14steps coordinator \
-  "Enqueue issue #$issue as run a4s-issue-$issue using dagu-feature. Supervisor pane: $supervisor_pane. Follow SKILL.md exactly and handle every checkpoint yourself. This is the only input you will get. When an operator decision is required, end your turn with the question in plain text. Report in the Turn status format. You are the coordinator for this issue: enqueue and human.task only; use task for leaf work. Do not use ask, tern new or tern close. When emitting a Turn status report, notify only supervisor pane $supervisor_pane via $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[coordinator $issue] <one-line summary>\"; never notify on silent checkpoint turns. On exit 1 or 2, report delivery failure in your own pane and do not resend."
+  "You are the coordinator. Read and execute this task artifact under the Communication protocol and dagu-feature: $artifact"
 ```
 
-The coordinator ends a decision turn with the question in its Turn status and the confirmed notification above; the supervisor relays the question to the operator rather than polling the coordinator pane.
+The coordinator handles every checkpoint through `dagu-feature`, emits the full Turn status in its own session and notifies only the supervisor pane named in the artifact. At a blocking point it includes the entire decision batch, not one question per notification. The supervisor relays that batch to the operator rather than polling the coordinator pane.
 
 The operator can freeze research. While frozen, the supervisor rejects every handoff, including approved handoffs, and launches no researcher. Otherwise, concurrent researchers remain allowed. A researcher must identify queued issues its findings would change; the supervisor pauses those issues until the operator decides.
 
-The supervisor launches a researcher with a concrete question and its own pane as the only handoff target:
+The supervisor launches a researcher with an existing artifact containing the concrete question, inputs, pre-made decisions and its own pane as the only handoff target. The fixed role rule stays in the launch user message as the standing user request to investigate OMP config:
 
 ```sh
 primary=$(git rev-parse --show-toplevel)
-supervisor_pane=$TERN_PANE
-question='Replace with the research question.'
+artifact="${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/researcher-question.md"
+# Write the artifact above first; substitute its existing absolute path.
 tern new tab --cwd "$primary" --json -- a4s-14steps researcher \
-  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Identify any queued issues your findings would change. Present findings to the operator and keep iterating in this tab. Notify the supervisor only after the operator explicitly approves the handoff; quote that approval in the artifact. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
+  "You are a read-only researcher. Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error. Read and investigate this question artifact under the Communication protocol: $artifact"
 ```
 
-#### Reality-check and session closure
+### Reality-check and session closure
 
 1. A handoff without a quoted operator approval is invalid. The supervisor does not act on it and tells the operator.
 2. Researcher output is **input, not truth**. Before creating an issue, changing PRIMARY or the station, or steering a coordinator, the supervisor checks every load-bearing claim in the approved handoff against live state: cited `file:line` still says that, and runtime, station and run state match. Verify each `[INFERENCE]` or carry it into the issue as an open question.
@@ -135,7 +194,7 @@ Then it reads the coordinator's final report, checks that the owned session is i
 
 Tab closure stays deliberately outside `close_gate`: the DAG runs under `systemd` and must not depend on Tern or OMP, the same coupling removed in #954.
 
-#### Golden tags
+## Golden tags
 
 `dagu-golden-vN` is an annotated tag on the `dagu-14steps` commit the station ran (installed bundle and launcher), not on the merge a run produced. It marks a stable version only when runs launched on that commit covered both lifecycle paths: one no-PoC run, and one PoC PASS plus its promoted run. Each must reach `Succeeded`, pass the post-run acceptance above, and need no intervention beyond the coordinator's human tasks: no supervisor stop or abort, no out-of-band human-task completion, no fix merged mid-run.
 

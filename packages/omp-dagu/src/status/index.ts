@@ -43,6 +43,10 @@ interface CustomMessage {
 }
 interface ExtensionAPI {
   on(event: "session_start" | "session_switch" | "session_shutdown", handler: (event: unknown, ctx: Context) => void | Promise<void>): void;
+  on(
+    event: "before_agent_start",
+    handler: (event: { systemPrompt: string[]; reason: "prompt" | "revive" }, ctx: Context) => { systemPrompt: string[] } | void,
+  ): void;
   registerTool(tool: SessionIdTool): void;
   registerFlag(name: string, options: { description: string; type: "string" }): void;
   getFlag(name: string): boolean | string | undefined;
@@ -51,7 +55,36 @@ interface ExtensionAPI {
   sendMessage(message: CustomMessage, options?: { deliverAs?: "steer" | "followUp" | "nextTurn" | "aside" }): void;
 }
 
-const ROLES = ["supervisor", "coordinator", "researcher"];
+const ROLE_CARDS: Record<string, string> = {
+  supervisor: `[a4s supervisor communication protocol]
+Stay in PRIMARY; operate the station and launch only operator-approved work. Close only owned idle tabs with nothing pending.
+Send [supervisor] only to coordinators/researchers through tern-notify.sh; never use raw tern send or cross-coordinator channels.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Never use ask forms while coordinators or researchers may notify.
+Honor research freezes, require quoted operator handoff approval, verify load-bearing claims against live state, and pause affected queued issues.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
+  coordinator: `[a4s coordinator communication protocol]
+Enqueue and human.task only; use task for leaf work. Never use ask, tern new or tern close.
+Send [coordinator <issue>] only to your supervisor through tern-notify.sh when emitting Turn status; silent checkpoint turns send nothing.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Follow dagu-feature; report Done, Pending, Blockers and decisions, and Proposals. Keep full Turn status reports in your session .jsonl.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
+  researcher: `[a4s researcher communication protocol]
+Read-only; never modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents.
+Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error.
+Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
+Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
+Never use ask forms while coordinators or researchers may notify.
+Wait for the operator's handoff instruction; never ask for or offer it. Only then send [researcher] through tern-notify.sh to your supervisor, quoting that approval in the artifact.
+Separate sourced evidence from [INFERENCE], identify affected queued issues, and finish with an explicit account of anything pending.
+On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
+};
+const ROLES = Object.keys(ROLE_CARDS);
 const SESSION_ID_TOOL = "dagu_session_id";
 
 async function applyRole(pi: ExtensionAPI): Promise<void> {
@@ -273,6 +306,13 @@ export default function daguStatus(pi: ExtensionAPI): void {
   let controller: AbortController | undefined;
   let activeContext: Context | undefined;
   pi.registerFlag("a4s-role", { description: `a4s role: ${ROLES.join(" | ")}`, type: "string" });
+  pi.on("before_agent_start", event => {
+    const role = pi.getFlag("a4s-role");
+    const card = typeof role === "string" && ROLES.includes(role) ? ROLE_CARDS[role] : undefined;
+    if (!card) return;
+    // OMP discards this result for reason: "revive".
+    return { systemPrompt: [...event.systemPrompt, card] };
+  });
   pi.registerTool({
     name: SESSION_ID_TOOL,
     label: "Dagu session ID",
