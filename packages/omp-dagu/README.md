@@ -91,7 +91,7 @@ For offline transport tests, `TERN_BIN` overrides the `tern` executable and `TER
 
 #### Launch prompts
 
-The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt. Only one feature run may be active or enqueued at a time (queue concurrency is one). After the current run is `Succeeded`, its post-run acceptance checks pass, and its coordinator tab has been closed, automatically launch the next operator-approved issue in approval order, without waiting for another message. Approval means explicit operator acceptance of that named issue or its plan; creating an issue is not approval. If acceptance fails, launch nothing and report the failure.
+The supervisor launches a **new** coordinator tab from PRIMARY for each issue, naming its own pane explicitly in the enqueue prompt. Only one feature run may be active or enqueued at a time (queue concurrency is one). After the current run is `Succeeded`, its post-run acceptance checks pass, and its coordinator tab has been closed, automatically launch the next unpaused operator-approved issue in approval order, without waiting for another message. Approval means explicit operator acceptance of that named issue or its plan; creating an issue is not approval. If acceptance fails, launch nothing and report the failure.
 
 ```sh
 primary=$(git rev-parse --show-toplevel)
@@ -103,6 +103,8 @@ tern new tab --cwd "$primary" --json -- a4s-14steps coordinator \
 
 The coordinator ends a decision turn with the question in its Turn status and the confirmed notification above; the supervisor relays the question to the operator rather than polling the coordinator pane.
 
+The operator can freeze research. While frozen, the supervisor rejects every handoff, including approved handoffs, and launches no researcher. Otherwise, concurrent researchers remain allowed. A researcher must identify queued issues its findings would change; the supervisor pauses those issues until the operator decides.
+
 The supervisor launches a researcher with a concrete question and its own pane as the only handoff target:
 
 ```sh
@@ -110,16 +112,16 @@ primary=$(git rev-parse --show-toplevel)
 supervisor_pane=$TERN_PANE
 question='Replace with the research question.'
 tern new tab --cwd "$primary" --json -- a4s-14steps researcher \
-  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Present findings to the operator and keep iterating in this tab. Notify the supervisor only after the operator explicitly approves the handoff; quote that approval in the artifact. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
+  "Research this question: $question. You are a read-only researcher, not a coordinator. Do not modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents. Separate observed evidence with sources (file:line, runtime, station or run observations) from [INFERENCE]. Identify any queued issues your findings would change. Present findings to the operator and keep iterating in this tab. Notify the supervisor only after the operator explicitly approves the handoff; quote that approval in the artifact. Write your handoff artifact under \${XDG_STATE_HOME:-\$HOME/.local/state}/a4s/handoffs/, outside the repo and /tmp. Send one line with $primary/packages/omp-dagu/scripts/tern-notify.sh $supervisor_pane \"[researcher] handoff: <absolute artifact path>\". On exit 1 or 2, report delivery failure in your own pane and do not resend. Finish with an explicit account of anything pending."
 ```
 
 #### Reality-check and session closure
 
 1. A handoff without a quoted operator approval is invalid. The supervisor does not act on it and tells the operator.
 2. Researcher output is **input, not truth**. Before creating an issue, changing PRIMARY or the station, or steering a coordinator, the supervisor checks every load-bearing claim in the approved handoff against live state: cited `file:line` still says that, and runtime, station and run state match. Verify each `[INFERENCE]` or carry it into the issue as an open question.
-3. The supervisor sends stale or false findings back to the researcher as a `[supervisor]` artifact. The researcher revises them with the operator and hands off again only after a new explicit operator approval, quoted in the artifact.
-4. The supervisor presents the final proposal to the operator with these sections: **BLUF**, **claims vs findings table**, **what the research missed**, **what the supervisor did**, **decision needed**.
-5. The supervisor creates issues only after the operator approves that proposal, then closes the researcher tab after the session checks below.
+3. The supervisor sends stale or false findings back to the researcher as a `[supervisor]` artifact. The researcher revises them with the operator and hands off again only after a new explicit operator approval, quoted in the artifact. The supervisor re-checks that approved handoff once, then fixes any remaining minor corrections in the issue text instead of returning them to the researcher.
+4. The supervisor presents the issue drafts to the operator and creates the issues only after the operator approves them.
+5. Every research ends in issue(s) or a recorded **no action**. In both cases, the supervisor closes the researcher tab after the session checks below.
 
 When a run reaches `Succeeded`, the supervisor checks the existing acceptance contract:
 
@@ -129,7 +131,7 @@ When a run reaches `Succeeded`, the supervisor checks the existing acceptance co
 - PRIMARY is clean and equal to `origin/dagu-14steps`.
 - The run's worktree and local/remote branch are gone.
 
-Then it reads the coordinator's final report, checks that the owned session is idle and leaves nothing pending, and closes that tab with `tern close <pane>`. When the supervisor turns a researcher's handoff into an issue, it likewise checks that the owned researcher session is idle and its last report leaves nothing pending, then closes that researcher tab with `tern close <pane>`. Retain each session's `.jsonl` as evidence.
+Then it reads the coordinator's final report, checks that the owned session is idle and leaves nothing pending, and closes that tab with `tern close <pane>`. When research ends in issues or a recorded **no action**, it likewise checks that the owned researcher session is idle and its last report leaves nothing pending, then closes that researcher tab with `tern close <pane>`. Retain each session's `.jsonl` as evidence.
 
 Tab closure stays deliberately outside `close_gate`: the DAG runs under `systemd` and must not depend on Tern or OMP, the same coupling removed in #954.
 
