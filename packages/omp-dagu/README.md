@@ -47,7 +47,7 @@ El run conserva su rama y worktree hasta que `close_gate` termina correctamente.
 - Ejecutar el [bootstrap](skills/dagu-feature/SKILL.md#1-bootstrap) desde el clon primario, con el entorno de `a4s-14steps` y `SKILL_DIR=/home/shared/harness/a4s/packages/omp-dagu/skills/dagu-feature` absoluto (una ruta relativa falla en `detect`). Responder `GATE=bash scripts/gate.sh`, `REQUIRED_CHECK=validate` y `TEST_PATHS=(^|/)(test|tests)/|\.test\.(ts|cjs)$`.
 - Configurar GitHub con rama predeterminada `dagu-14steps`, status check requerido `validate` y auto-merge habilitado. El servicio obtiene `GH_TOKEN` con `gh auth token` al arrancar y falla si no puede; el usuario del servicio debe estar autenticado. Reiniciar tras rotar el token. Solo el sub-DAG de polling lo declara como secreto de entorno; no escribirlo en YAML, params o logs.
 - Añadir `/poc/` y `/.workspace/legacy-worktrees/` al `.git/info/exclude` local.
-- Referencia golden: tag `dagu-golden-v1`, run de aceptación `a4s-issue-955` (#955, PR #956).
+- Referencia golden: el `dagu-golden-vN` más reciente; criterio y rollback en [Golden tags](#golden-tags).
 
 ### Roles
 
@@ -134,6 +134,12 @@ When a run reaches `Succeeded`, the supervisor checks the existing acceptance co
 Then it reads the coordinator's final report, checks that the owned session is idle and leaves nothing pending, and closes that tab with `tern close <pane>`. When research ends in issues or a recorded **no action**, it likewise checks that the owned researcher session is idle and its last report leaves nothing pending, then closes that researcher tab with `tern close <pane>`. Retain each session's `.jsonl` as evidence.
 
 Tab closure stays deliberately outside `close_gate`: the DAG runs under `systemd` and must not depend on Tern or OMP, the same coupling removed in #954.
+
+#### Golden tags
+
+`dagu-golden-vN` is an annotated tag on the `dagu-14steps` commit the station ran (installed bundle and launcher), not on the merge a run produced. It marks a stable version only when runs launched on that commit covered both lifecycle paths: one no-PoC run, and one PoC PASS plus its promoted run. Each must reach `Succeeded`, pass the post-run acceptance above, and need no intervention beyond the coordinator's human tasks: no supervisor stop or abort, no out-of-band human-task completion, no fix merged mid-run.
+
+After that acceptance, the supervisor proposes the tag to the operator; the tag message lists the commit, runs and PRs. It creates and pushes the tag only after operator approval. Published tags are never moved or rewritten. Rollback reinstalls the bundle and launcher from the latest golden tag.
 
 ## Estado, progreso y despertar dirigido
 
