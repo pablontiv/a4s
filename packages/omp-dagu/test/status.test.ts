@@ -108,6 +108,8 @@ test("each role card matches the README and appends to every received request po
   for (const role of ["supervisor", "coordinator", "researcher"]) {
     const card = protocol.split(`#### ${role}\n\n\`\`\`text\n`)[1]?.split("\n```")[0];
     assert.ok(card, `${role} card is documented inside Communication protocol`);
+    assert.ok(card.includes("Every inter-session message and launch is exactly [<sender>] <absolute artifact path>; all context lives in the artifact."));
+    assert.doesNotMatch(card, /fixed role instruction plus|inline only|single-sentence/);
     const { hooks } = load(role, []);
     const handler = hooks.get("before_agent_start");
     assert.ok(handler);
@@ -121,9 +123,21 @@ test("each role card matches the README and appends to every received request po
     if (role === "researcher") {
       const rule = card.split("\n").find(line => line.startsWith("Role rule:"));
       assert.ok(rule);
-      assert.ok(protocol.split("### Launch prompts\n")[1]?.includes(rule), "researcher launch includes the standing user request verbatim");
+      assert.ok(protocol.split("### Launch prompts\n")[1]?.includes(rule), "researcher artifact contents include the role rule verbatim");
     }
   }
+});
+
+test("README launch prompts carry only sender and one artifact path", () => {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const commands = readme.replace(/\\\n[ \t]*/g, "");
+  const launches = [...commands.matchAll(/^(?:tern new tab .* -- )?a4s-14steps (supervisor|coordinator|researcher) (.+)$/gm)];
+  assert.deepEqual(launches.map(match => match[1]).sort(), ["coordinator", "researcher", "supervisor"]);
+  for (const launch of launches) {
+    assert.equal(launch[2], '"[supervisor] $artifact"', `${launch[1]} launch has no inline context`);
+  }
+  assert.match(readme, /3\. Every inter-session message, launches included, is exactly `\[<sender>\] <absolute artifact path>`/);
+  assert.doesNotMatch(readme, /fixed role instruction plus|stays in the launch user message|only trivial single-sentence|only for trivial single-sentence/);
 });
 
 for (const role of [undefined, "", "admin", "constructor", "toString", "__proto__"]) {
