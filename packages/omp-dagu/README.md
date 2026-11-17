@@ -51,6 +51,24 @@ El run conserva su rama y worktree hasta que `close_gate` termina correctamente.
 
 ## Communication protocol
 
+### Rules
+
+These rules are authoritative. The sections below define how to apply them.
+
+1. Four channels exist: operator ↔ supervisor, operator ↔ researcher, supervisor ↔ coordinator and supervisor ↔ researcher. No other channel exists.
+2. Every inter-agent message goes through `tern-notify.sh` with delivery confirmation.
+3. Every inter-agent message is one line with the absolute path of an artifact that holds the detail; only a trivial single-sentence notice may go inline.
+4. An unconfirmed delivery is never resent blindly; the sender reports it in its own pane. No agent edits another session's editor.
+5. All decisions known at a blocking point travel together in one message. The supervisor relays them to the operator and never polls the coordinator's pane.
+6. No agent uses `ask` forms; decisions are requested in plain text.
+7. The researcher waits for the operator's handoff instruction, never asks for or offers it, and quotes it in the handoff artifact. A handoff without that quote is invalid.
+8. Researcher output is input, not truth: the supervisor checks every claim against live state before acting and returns false findings to the researcher.
+9. The researcher investigates every unknown through read-only subagents without waiting to be asked.
+10. The supervisor processes every handoff completely and closes it as issue proposals or a recorded no-action; the operator only decides. The supervisor closes each session it launched once its work is done and nothing is pending.
+11. Every launch carries an artifact with every decision already made; nothing is enqueued while a decision is open.
+12. Independent work is split across parallel subagents.
+13. Every inter-agent message separates verified facts from inferences.
+
 ### Roles
 
 These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coordinator** means the OMP role below, not the Dagu `coordinator:` service in `station/config.yaml` or the Pi Orchestrator in `agents/common/AGENTS.md`.
@@ -59,7 +77,7 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 |---|---|---|---|
 | Supervisor | Always in PRIMARY; the operator launches `a4s-14steps supervisor` | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
 | Coordinator | One new Tern tab per issue, launched with `a4s-14steps coordinator` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
-| Researcher | Its own Tern tab, launched with `a4s-14steps researcher`, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, waits for the operator's handoff instruction without asking for or offering it, and never creates issues. |
+| Researcher | Its own Tern tab, launched with `a4s-14steps researcher`, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; plain text to the operator; read-only subagents | Read-only research; iterates with the operator in its own tab, waits for the operator's handoff instruction without asking for or offering it, and never creates issues. |
 
 Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
 
@@ -80,8 +98,10 @@ Send [supervisor] only to coordinators/researchers through tern-notify.sh; never
 Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
-Never use ask forms while coordinators or researchers may notify.
-Honor research freezes, require quoted operator handoff approval, verify load-bearing claims against live state, and pause affected queued issues.
+Never use ask forms; request decisions in plain text.
+Require quoted operator handoff approval, verify load-bearing claims against live state, return false findings to the researcher, and pause affected queued issues.
+Process every handoff completely into issue proposals or a recorded no-action; the operator only decides.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
@@ -95,6 +115,7 @@ Artifact-first for every inter-session message and launch: fixed role instructio
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
 Follow dagu-feature; report Done, Pending, Blockers and decisions, and Proposals. Keep full Turn status reports in your session .jsonl.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
@@ -107,9 +128,10 @@ Role rule: whenever you do not know something, investigate it through read-only 
 Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
-Never use ask forms while coordinators or researchers may notify.
+Never use ask forms; request decisions in plain text.
 Wait for the operator's handoff instruction; never ask for or offer it. Only then send [researcher] through tern-notify.sh to your supervisor, quoting that approval in the artifact.
-Separate sourced evidence from [INFERENCE], identify affected queued issues, and finish with an explicit account of anything pending.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
+Identify affected queued issues and finish with an explicit account of anything pending.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
@@ -119,11 +141,11 @@ Batch **every decision known at a blocking point** into one artifact or message;
 
 Before launching a session or enqueueing work, sweep the task, inputs and dependencies for known decisions. Obtain all required answers first and record them in the launch artifact: **no enqueue while a known decision is open**. For an unforeseen decision, take and record the conservative option unless it is irreversible; stop and obtain operator approval before an irreversible choice.
 
-Do not use `ask` forms while any coordinator or researcher may notify: a pending form swallows pasted notifications. Present batched decisions in plain text instead. A researcher investigates unknowns proactively through read-only subagents, including OMP config; it waits for the operator's handoff instruction and never asks for or offers that handoff.
+Never use `ask` forms: a pending form swallows pasted notifications. Request decisions in plain text. A researcher investigates unknowns proactively through read-only subagents, including OMP config; it waits for the operator's handoff instruction and never asks for or offers that handoff.
 
 ### Channels and delivery confirmation
 
-Every inter-session message, in every direction, uses `packages/omp-dagu/scripts/tern-notify.sh <pane> <line>`, never a raw `tern send`. Allowed routes are supervisor → coordinator/researcher with `[supervisor]`, coordinator → its supervisor with `[coordinator <issue>]`, and researcher → its supervisor with `[researcher]`. No direct researcher/coordinator or cross-coordinator channel.
+Every inter-session message, in every direction, uses `packages/omp-dagu/scripts/tern-notify.sh <pane> <line>`, never a raw `tern send`. Allowed routes are supervisor → coordinator/researcher with `[supervisor]`, coordinator → its supervisor with `[coordinator <issue>]`, and researcher → its supervisor with `[researcher]`. No direct researcher/coordinator or cross-coordinator channel. The operator talks to the supervisor and to researchers in their own tabs, never to coordinators.
 
 Use artifact-first delivery for **every inter-session message, launch prompts included**: one concise line, `<prefix> <intent>: <absolute artifact path>`. Put the question or task, inputs, supervisor pane, authorization and pre-made decisions under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed and use an absolute path. Inline text is only for trivial single-sentence notices. A coordinator's full Turn status report remains in its own session `.jsonl` and needs no duplicate artifact; a multi-sentence notification must point to that absolute transcript path or a handoff artifact.
 
@@ -162,7 +184,7 @@ tern new tab --cwd "$primary" --json -- a4s-14steps coordinator \
 
 The coordinator handles every checkpoint through `dagu-feature`, emits the full Turn status in its own session and notifies only the supervisor pane named in the artifact. At a blocking point it includes the entire decision batch, not one question per notification. The supervisor relays that batch to the operator rather than polling the coordinator pane.
 
-The operator can freeze research. While frozen, the supervisor rejects every handoff, including approved handoffs, and launches no researcher. Otherwise, concurrent researchers remain allowed. A researcher must identify queued issues its findings would change; the supervisor pauses those issues until the operator decides.
+Concurrent researchers are allowed. A researcher must identify queued issues its findings would change; the supervisor pauses those issues until the operator decides.
 
 The supervisor launches a researcher with an existing artifact containing the concrete question, inputs, pre-made decisions and its own pane as the only handoff target. The fixed role rule stays in the launch user message as the standing user request to investigate OMP config:
 
