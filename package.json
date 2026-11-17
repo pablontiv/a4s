@@ -24,6 +24,12 @@
     "test": "npm test --workspace @a4s/context-expert && npm test --workspace @a4s/omp-cross-family-review && npm test --workspace @a4s/omp-dagu && npm test --workspace @a4s/synagent && npm test --workspace @a4s/synagent-bus",
     "bus": "npm run bus --workspace @a4s/synagent-bus --"
   },
+  "overrides": {
+    "@earendil-works/pi-coding-agent": {
+      "minimatch": "11.0.1",
+      "undici": "8.12.2"
+    }
+  },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.99.1",
     "@types/node": "26.6.1",
