@@ -57,9 +57,9 @@ These rules are authoritative. The sections below define how to apply them.
 
 1. Four channels exist: operator ↔ supervisor, operator ↔ researcher, supervisor ↔ coordinator and supervisor ↔ researcher. No other channel exists.
 2. Every inter-agent message goes through `tern-notify.sh` with delivery confirmation.
-3. Every inter-agent message is one line with the absolute path of an artifact that holds the detail; only a trivial single-sentence notice may go inline.
+3. Every inter-session message, launches included, is exactly `[<sender>] <absolute artifact path>`. Everything else (role rule, task, question, decisions, pane ids) lives in the artifact.
 4. An unconfirmed delivery is never resent blindly; the sender reports it in its own pane. No agent edits another session's editor.
-5. All decisions known at a blocking point travel together in one message. The supervisor relays them to the operator and never polls the coordinator's pane.
+5. All decisions known at a blocking point travel together in one artifact. The supervisor relays them to the operator and never polls the coordinator's pane.
 6. No agent uses `ask` forms; decisions are requested in plain text.
 7. The researcher waits for the operator's handoff instruction, never asks for or offers it, and quotes it in the handoff artifact. A handoff without that quote is invalid.
 8. Researcher output is input, not truth: the supervisor checks every claim against live state before acting and returns false findings to the researcher.
@@ -67,7 +67,7 @@ These rules are authoritative. The sections below define how to apply them.
 10. The supervisor processes every handoff completely and closes it as issue proposals or a recorded no-action; the operator only decides. The supervisor closes each session it launched once its work is done and nothing is pending.
 11. Every launch carries an artifact with every decision already made; nothing is enqueued while a decision is open.
 12. Independent work is split across parallel subagents.
-13. Every inter-agent message separates verified facts from inferences.
+13. Every message artifact separates verified facts from inferences.
 
 ### Roles
 
@@ -95,13 +95,13 @@ This is a convention aid, not access control: any session can read `$PI_SESSION_
 [a4s supervisor communication protocol]
 Stay in PRIMARY; operate the station and launch only operator-approved work. Close only owned idle tabs with nothing pending.
 Send [supervisor] only to coordinators/researchers through tern-notify.sh; never use raw tern send or cross-coordinator channels.
-Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Every inter-session message and launch is exactly [<sender>] <absolute artifact path>; all context lives in the artifact.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
 Never use ask forms; request decisions in plain text.
 Require quoted operator handoff approval, verify load-bearing claims against live state, return false findings to the researcher, and pause affected queued issues.
 Process every handoff completely into issue proposals or a recorded no-action; the operator only decides.
-Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every message artifact.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
@@ -111,11 +111,11 @@ On tern-notify exits 1/2, report in your own pane and never resend blindly or ed
 [a4s coordinator communication protocol]
 Enqueue and human.task only; use task for leaf work. Never use ask, tern new or tern close.
 Send [coordinator <issue>] only to your supervisor through tern-notify.sh when emitting Turn status; silent checkpoint turns send nothing.
-Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Every inter-session message and launch is exactly [<sender>] <absolute artifact path>; all context lives in the artifact.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
-Follow dagu-feature; report Done, Pending, Blockers and decisions, and Proposals. Keep full Turn status reports in your session .jsonl.
-Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
+Follow dagu-feature; write each Turn status report (Done, Pending, Blockers and decisions, Proposals) to a handoff artifact before notifying.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every message artifact.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
@@ -125,19 +125,19 @@ On tern-notify exits 1/2, report in your own pane and never resend blindly or ed
 [a4s researcher communication protocol]
 Read-only; never modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents.
 Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error.
-Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
+Every inter-session message and launch is exactly [<sender>] <absolute artifact path>; all context lives in the artifact.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
 Never use ask forms; request decisions in plain text.
 Wait for the operator's handoff instruction; never ask for or offer it. Only then send [researcher] through tern-notify.sh to your supervisor, quoting that approval in the artifact.
-Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every message artifact.
 Identify affected queued issues and finish with an explicit account of anything pending.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.
 ```
 
 ### Operator decisions
 
-Batch **every decision known at a blocking point** into one artifact or message; never send one decision per message. Include the recommended choices, alternatives and already-made decisions so the operator can answer the whole batch. The artifact-first exception below permits only trivial single-sentence inline notices.
+Batch **every decision known at a blocking point** into one artifact; never send one decision per message. Include the recommended choices, alternatives and already-made decisions so the operator can answer the whole batch.
 
 Before launching a session or enqueueing work, sweep the task, inputs and dependencies for known decisions. Obtain all required answers first and record them in the launch artifact: **no enqueue while a known decision is open**. For an unforeseen decision, take and record the conservative option unless it is irreversible; stop and obtain operator approval before an irreversible choice.
 
@@ -147,22 +147,22 @@ Never use `ask` forms: a pending form swallows pasted notifications. Request dec
 
 Every inter-session message, in every direction, uses `packages/omp-dagu/scripts/tern-notify.sh <pane> <line>`, never a raw `tern send`. Allowed routes are supervisor → coordinator/researcher with `[supervisor]`, coordinator → its supervisor with `[coordinator <issue>]`, and researcher → its supervisor with `[researcher]`. No direct researcher/coordinator or cross-coordinator channel. The operator talks to the supervisor and to researchers in their own tabs, never to coordinators.
 
-Use artifact-first delivery for **every inter-session message, launch prompts included**: one concise line, `<prefix> <intent>: <absolute artifact path>`. Put the question or task, inputs, supervisor pane, authorization and pre-made decisions under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed and use an absolute path. Inline text is only for trivial single-sentence notices. A coordinator's full Turn status report remains in its own session `.jsonl` and needs no duplicate artifact; a multi-sentence notification must point to that absolute transcript path or a handoff artifact.
+Every inter-session message, **launch prompts included**, is exactly `[<sender>] <absolute artifact path>`: the sender prefix, one space, one absolute path, nothing else. Role rules, the question or task, inputs, supervisor pane, authorization and pre-made decisions all go in the artifact. Write artifacts under `${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/`, outside the repository (including PRIMARY) and outside `/tmp`, so research stays read-only and the evidence survives. Create that directory as needed. A coordinator writes each Turn status report to such an artifact before notifying.
 
 ```sh
 # Run from PRIMARY; substitute the recipient pane and an existing absolute artifact path.
 packages/omp-dagu/scripts/tern-notify.sh "$recipient_pane" \
-  "[supervisor] review handoff: $artifact"
+  "[supervisor] $artifact"
 ```
 
-The helper appends a unique `[msg <epoch>-<rand>]` token, pastes the line, presses Enter, resolves the recipient's `omp_session_file` through `tern inspect --json`, and waits up to **120 seconds** for receipt. It checks only top-level `type=="message"` entries with `message.role=="user"`, joins decoded text content parts (also accepting string content), and compares the **full** decoded text, including the token, without trimming or stripping tags. Assistant, tool and custom entries do not confirm receipt.
+The helper first resolves the recipient's `omp_session_file` through `tern inspect --json` and records its size; if the transcript cannot be read, it exits `2` without pasting. It then pastes the line unchanged, presses Enter, and waits up to **120 seconds** for receipt in the transcript bytes written after that snapshot, so an older identical message cannot confirm a new delivery. It checks only top-level `type=="message"` entries with `message.role=="user"`, joins decoded text content parts (also accepting string content), and compares the **full** decoded text without trimming or stripping tags. Assistant, tool and custom entries do not confirm receipt.
 
 - `0`: confirmed — the user message equals the sent line exactly.
-- `1`: contaminated — a user message contains the token but includes different text.
-- `2`: unconfirmed — no user message with the token was observed before the timeout, or delivery/inspection failed.
-- `3`: rejected — after removing a `[coordinator N] `-style prefix, the payload has more than one sentence and no absolute artifact path; nothing is pasted and no Tern command runs.
+- `1`: contaminated — a new user message contains the line but includes different text.
+- `2`: unconfirmed — the transcript was unreadable before sending, no new user message containing the line was observed before the timeout, or delivery/inspection failed.
+- `3`: rejected — the line is not exactly `[<sender>] <absolute path>` (one bracketed sender, one space, one path starting with `/` and containing no whitespace); nothing is pasted and no Tern command runs.
 
-The guard recognizes a sentence boundary as `.`, `!` or `?`, optionally followed by closing quotes/brackets, then whitespace and more text (even an unfinished second sentence). Abbreviations can therefore require an artifact. A path starts with `/` at the beginning of the payload or after whitespace, a quote, backtick or `(`; URLs, relative paths and `~/` do not qualify. This is a lexical check, not a check that the artifact exists.
+The format check is lexical; it does not check that the artifact exists.
 
 On `1` or `2`, **never resend blindly**: the message may already have arrived. Report the result to the operator in the sender's own pane. Never clear or edit another pane's editor. On `3`, report the rejection in your own pane; the original notification was not sent.
 
@@ -179,21 +179,34 @@ primary=$(git rev-parse --show-toplevel)
 artifact="${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/coordinator-965.md"
 # Write the artifact above first; substitute the approved issue's existing absolute artifact path.
 tern new tab --cwd "$primary" --json -- a4s-14steps coordinator \
-  "You are the coordinator. Read and execute this task artifact under the Communication protocol and dagu-feature: $artifact"
+  "[supervisor] $artifact"
 ```
 
 The coordinator handles every checkpoint through `dagu-feature`, emits the full Turn status in its own session and notifies only the supervisor pane named in the artifact. At a blocking point it includes the entire decision batch, not one question per notification. The supervisor relays that batch to the operator rather than polling the coordinator pane.
 
 Concurrent researchers are allowed. A researcher must identify queued issues its findings would change; the supervisor pauses those issues until the operator decides.
 
-The supervisor launches a researcher with an existing artifact containing the concrete question, inputs, pre-made decisions and its own pane as the only handoff target. The fixed role rule stays in the launch user message as the standing user request to investigate OMP config:
+The supervisor launches a researcher with an existing artifact containing the concrete question, inputs, pre-made decisions and its own pane as the only handoff target. The artifact starts with this role rule, verbatim, as the standing user request to investigate OMP config:
+
+```text
+Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error.
+```
 
 ```sh
 primary=$(git rev-parse --show-toplevel)
 artifact="${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/researcher-question.md"
 # Write the artifact above first; substitute its existing absolute path.
 tern new tab --cwd "$primary" --json -- a4s-14steps researcher \
-  "You are a read-only researcher. Role rule: whenever you do not know something, investigate it through read-only subagents without waiting to be asked, including OMP config (cfg://, ~/.omp), docs, sessions and handoffs; acknowledging an unknown without investigating it is a role error. Read and investigate this question artifact under the Communication protocol: $artifact"
+  "[supervisor] $artifact"
+```
+
+A supervisor hands its work to a successor the same way, with a handoff artifact holding open work, panes, runs and pending operator decisions:
+
+```sh
+primary=$(git rev-parse --show-toplevel)
+artifact="${XDG_STATE_HOME:-$HOME/.local/state}/a4s/handoffs/supervisor-handoff.md"
+tern new tab --cwd "$primary" --json -- a4s-14steps supervisor \
+  "[supervisor] $artifact"
 ```
 
 ### Reality-check and session closure
