@@ -62,8 +62,10 @@ Send [supervisor] only to coordinators/researchers through tern-notify.sh; never
 Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
-Never use ask forms while coordinators or researchers may notify.
-Honor research freezes, require quoted operator handoff approval, verify load-bearing claims against live state, and pause affected queued issues.
+Never use ask forms; request decisions in plain text.
+Require quoted operator handoff approval, verify load-bearing claims against live state, return false findings to the researcher, and pause affected queued issues.
+Process every handoff completely into issue proposals or a recorded no-action; the operator only decides.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
   coordinator: `[a4s coordinator communication protocol]
 Enqueue and human.task only; use task for leaf work. Never use ask, tern new or tern close.
@@ -72,6 +74,7 @@ Artifact-first for every inter-session message and launch: fixed role instructio
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
 Follow dagu-feature; report Done, Pending, Blockers and decisions, and Proposals. Keep full Turn status reports in your session .jsonl.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
   researcher: `[a4s researcher communication protocol]
 Read-only; never modify PRIMARY or the station, create issues, enqueue runs, complete Dagu human tasks, push, or open PRs. Use only read-only subagents.
@@ -79,9 +82,10 @@ Role rule: whenever you do not know something, investigate it through read-only 
 Artifact-first for every inter-session message and launch: fixed role instruction plus one absolute artifact path; inline only trivial single-sentence notices.
 Batch all decisions known at a blocking point; sweep before launch and never enqueue with a known decision open.
 Record unforeseen conservative decisions; obtain operator approval before irreversible choices.
-Never use ask forms while coordinators or researchers may notify.
+Never use ask forms; request decisions in plain text.
 Wait for the operator's handoff instruction; never ask for or offer it. Only then send [researcher] through tern-notify.sh to your supervisor, quoting that approval in the artifact.
-Separate sourced evidence from [INFERENCE], identify affected queued issues, and finish with an explicit account of anything pending.
+Split independent work across parallel subagents; separate verified facts from [INFERENCE] in every inter-agent message.
+Identify affected queued issues and finish with an explicit account of anything pending.
 On tern-notify exits 1/2, report in your own pane and never resend blindly or edit a recipient editor; exit 3 rejects before any paste.`,
 };
 const ROLES = Object.keys(ROLE_CARDS);
