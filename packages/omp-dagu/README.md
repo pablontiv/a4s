@@ -59,7 +59,7 @@ These are top-level OMP sessions, not spawnable agents in `agents/`. Here, **coo
 |---|---|---|---|
 | Supervisor | Always in PRIMARY; the operator launches `a4s-14steps supervisor` | `tern new tab` / `tern close` for owned coordinator and researcher tabs; confirmed messages to those sessions; plain text to the operator | Operates PRIMARY and the station, creates issues, launches coordinators, and authorizes push/PR on the operator's behalf. |
 | Coordinator | One new Tern tab per issue, launched with `a4s-14steps coordinator` | `[coordinator <issue>]` notifications to the supervisor; `task` to subagents; Dagu | Enqueue and `human.task` only; no `ask`, `tern new` or `tern close`. |
-| Researcher | Its own Tern tab, launched with `a4s-14steps researcher`, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, hands off only after explicit operator approval, and never creates issues. |
+| Researcher | Its own Tern tab, launched with `a4s-14steps researcher`, replacing side/discussion sessions | `[researcher]` handoffs to the supervisor; read-only subagents | Read-only research; iterates with the operator in its own tab, waits for the operator's handoff instruction without asking for or offering it, and never creates issues. |
 
 Leaf subagents (`triage-reviewer`, `Implement<ISSUE>`, `Poc<ISSUE>`) keep their existing roles. Native DAG actions own worktree lifecycle, polling and state; the scheduled reconciler posts review transitions to the local API. CI still runs `validate`.
 

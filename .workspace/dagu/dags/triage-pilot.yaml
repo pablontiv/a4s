@@ -11,7 +11,6 @@ params:
   REPO: ''
   STATE_ROOT: ''
   MODEL: ''
-  MAX_COST: '0.50'
   SCOPE: ''
   feedback: ''
 env:
@@ -30,7 +29,6 @@ steps:
         REPO: ${REPO}
         STATE_ROOT: ${STATE_ROOT}
         MODEL: ${MODEL}
-        MAX_COST: ${MAX_COST}
         SCOPE: ${SCOPE}
         FEEDBACK: ${feedback}
   - id: escalation
@@ -60,7 +58,6 @@ params:
   REPO: ''
   STATE_ROOT: ''
   MODEL: ''
-  MAX_COST: '0.50'
   SCOPE: ''
   FEEDBACK: ''
 steps:
