@@ -1,5 +1,7 @@
 # Synagent Workspace Identity Implementation Plan
 
+Historical, unimplemented plan; not current instructions. The current [Synagent identity contract](../../packages/synagent/core/README.md#identidad-desde-origin) and [resolver](../../packages/synagent/core/protocol.ts) use Git origin only, not settings/workspace precedence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let Pi and Claude activate Synagent from an explicit workspace identity in the exact current directory when Git identity is unavailable.

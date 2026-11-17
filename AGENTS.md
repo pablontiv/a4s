@@ -4,6 +4,8 @@
 
 A4S es un monorepo npm privado con extensiones en `packages/`, agentes en `agents/` y skills en `skills/`. `README.md` describe sus componentes y `.workspace/dagu/dags/feature.yaml` define el ciclo de issues. Los cambios deben mantener los contratos de los hosts y las pruebas de los workspaces afectados.
 
+See the [glossary](docs/glossary.md) for scoped terminology; the linked package and skill documents remain authoritative.
+
 ## Prerrequisitos externos
 
 - Node.js `>=22.19.0` y npm con soporte para workspaces y `package-lock.json`.
