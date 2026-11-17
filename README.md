@@ -2,6 +2,8 @@
 
 Repositorio reducido a las extensiones verificadas, los agentes y los skills distribuidos por sus paquetes.
 
+See the [glossary](docs/glossary.md) for scoped terminology across the packages and issue lifecycle.
+
 ## Extensiones
 
 - [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi y Claude.

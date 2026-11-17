@@ -166,7 +166,7 @@ The guard recognizes a sentence boundary as `.`, `!` or `?`, optionally followed
 
 On `1` or `2`, **never resend blindly**: the message may already have arrived. Report the result to the operator in the sender's own pane. Never clear or edit another pane's editor. On `3`, report the rejection in your own pane; the original notification was not sent.
 
-**Residual channel risks:** partial operator editor text is concatenated with the pasted line into one submitted user message. Confirmation detects that contamination only after submission; it cannot prevent the operator's text from reaching the recipient. In the [PASS probe](https://github.com/pablontiv/a4s/issues/965#issuecomment-6891533774) on Tern 0.9.18 / OMP 18.20.2, a busy pane recorded the message **immediately** with `steering:true` and could background its active tool to handle it; delivery was not deferred until turn end. Keep the 120-second confirmation bound, but do not treat a busy session as a passive mailbox. Offline fixtures verify matching, not live scheduling.
+**Residual channel risks:** partial operator editor text is concatenated with the pasted line into one submitted user message. Confirmation detects that contamination only after submission; it cannot prevent the operator's text from reaching the recipient. Keep the 120-second confirmation bound, but do not treat a busy session as a passive mailbox or assume delivery waits until turn end. The [historical notification probe](../../docs/history/tern-notification-delivery.md) records the observed scheduling; offline fixtures verify matching, not live scheduling.
 
 For offline transport tests, `TERN_BIN` overrides the `tern` executable and `TERN_NOTIFY_TIMEOUT` overrides the timeout in whole seconds (default `120`).
 
@@ -313,7 +313,7 @@ imprime `confirm`.
 
 ## Headless triage pre-pilot (#920)
 
-`.workspace/dagu/dags/triage-pilot.yaml` is an opt-in root/child pair, not a replacement for the installed `feature` flow or a bootstrap/bundle template. Use an isolated `DAGU_HOME` with Dagu 2.26.0; F1 already shipped separately. Do not enqueue it on either operator station until the R28 binding decision and the five-issue headless-versus-TUI pilot are authorized. No operator acceptance is recorded here.
+`.workspace/dagu/dags/triage-pilot.yaml` is an opt-in root/child pair, not a replacement for the installed `feature` flow or a bootstrap/bundle template. Use an isolated `DAGU_HOME` with Dagu 2.26.0. Do not enqueue it on either operator station until the [reviewer-binding decision (R28)](../../docs/glossary.md#decision-codes) and the five-issue headless-versus-TUI pilot are authorized. No operator acceptance is recorded here.
 
 The root takes `ISSUE`, the supervisor's `OMP_SESSION_ID`, absolute `REPO` and private `STATE_ROOT` paths, `MODEL`, and the issue/research context in `SCOPE`. `STATE_ROOT` must be owned by the current user with mode 0700. Every run/push-back generation gets fresh role directories. A failed child reaches the root `escalation` human task; push-back requires feedback and starts a fresh generation.
 
@@ -323,13 +323,7 @@ R28 remains an operator decision: the pre-pilot keeps the researched run+generat
 
 `scripts/role-guard.py` requires Linux pidfds and a working systemd user manager and fails closed otherwise. Each role runs in a private user-service cgroup with a subreaper, launcher pidfd, `KillMode=control-group`, a one-second stop limit, `TasksMax=128`, and a runtime ceiling. The deadlines are `omp --max-time 120s` < guard 135s + stop 1s < role step 150s < root `dag.run` 330s; both roles plus the semantic check fit within 330s. The cgroup test covers normal exit 7, launcher SIGKILL, guard SIGKILL and runtime expiry while detached/double-forked, late-forking, TERM-ignoring descendants exist. This is not containment against privileged/same-UID cgroup migration, user-manager failure or uninterruptible kernel tasks.
 
-### Observed RPC ownership
-
-On 2026-11-16 at 05:00 UTC, an isolated Dagu 2.26.0 parent/child run (`issue-920-rpc-live`) successfully owned one real OMP 18.20.3 RPC child for its entire lifetime. `scripts/probe-role-rpc.py`, under the same cleanup guard, used `anthropic/claude-haiku-4-5` and a host-owned tool gate to keep the role busy. All eleven command IDs were acknowledged individually; `steer` and `follow_up` appeared in their respective queues and then in assistant replies. `abort` returned an acknowledgement, an `aborted` prompt result and host-tool cancellation. The session ID/file stayed unchanged, stdin EOF exited 0, and both Dagu runs succeeded in 5.7 seconds. The test home was removed after recording these results.
-
-This proves that a Dagu step can own and drain the RPC channel; it does not add a supervisor transport/daemon, retire Tern, or complete the live-issue pilot. To reproduce after authorization, run the probe inside `role-guard.py --runtime-seconds 135 --log <private-path> --`, in an isolated Dagu child step with a 150-second timeout and a longer parent `dag.run`. Pass `--model <available-model> --state <private-directory>` to the probe; it writes its assertions and command/event evidence there.
-
-The RPC contract and cleanup behavior were checked against the installed-version source directories `~/.opensrc/repos/github.com/can1357/oh-my-pi/v18.20.3` and `~/.opensrc/repos/github.com/dagu-org/dagu/v2.26.0`, not an unversioned repository snapshot.
+The [2026-11-16 RPC ownership probe](../../docs/history/2026-11-16-dagu-rpc-ownership.md) records historical observations and an authorized reproduction procedure; it is not pilot acceptance.
 
 
 ## Desarrollo

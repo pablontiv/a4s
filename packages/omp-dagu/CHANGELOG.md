@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Add a scoped terminology glossary and reviewer-binding decision index; archive the unused workspace-identity plan and dated probe evidence outside the current contract.
 - Add canonical inter-agent communication rules to the protocol: four channels including operator ↔ researcher, no `ask` forms in any role, complete supervisor handoff processing, parallel subagents and verified-vs-inferred messages in every role card; drop research freezes.
 - Add an opt-in headless triage pre-pilot with bounded cgroup cleanup, fail-closed role output/schema/semantic checks, run+generation reviewer-binding negatives, and a reproducible Dagu-owned RPC steering probe; retain the operator's R28 and live-pilot gates (#920).
 - Wake the targeted supervisor once per role escalation or feature/PoC decision task, including outstanding tasks at startup, and expose `dagu_session_id` to supervisors without requiring a coordinator (#920).
