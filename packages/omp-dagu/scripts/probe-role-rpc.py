@@ -27,7 +27,7 @@ def main():
     with (state / "stderr.txt").open("w") as stderr, (state / "events.jsonl").open("w") as log:
         child = subprocess.Popen(["omp", "--mode", "rpc", "--no-ui", "--no-extensions", "--no-context-files",
                                   "--no-skills", "--no-rules", "--no-title", "--no-lsp", "--no-tools", "--offline",
-                                  "--max-time", "120s", "--max-cost", "0.10", "--thinking", "off",
+                                  "--max-time", "120s", "--thinking", "off",
                                   "--config", str(config), "--session-dir", str(state / "sessions"),
                                   "--model", args.model, "--system-prompt", "Follow the host's short test instructions exactly."],
                                  cwd=state, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, bufsize=0)

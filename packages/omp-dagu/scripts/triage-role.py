@@ -62,7 +62,7 @@ def run_role(role):
     config = directory / "config.yaml"
     config.write_text(json.dumps({"features": {"unexpectedStopDetection": "none"}}))
     command = ["omp", "-p", "--mode", "text", "--wait-async", "--max-time", f"{MAX_TIME}s",
-               "--max-cost", os.environ.get("MAX_COST", "0.50"), "--config", str(config),
+               "--config", str(config),
                "--session-dir", str(sessions), "--no-extensions", "--no-context-files",
                "--no-skills", "--no-rules", "--no-title", "--no-lsp", "--no-tools", "--thinking", "off",
                "--model", os.environ["MODEL"], "--system-prompt", "Return only the requested JSON object.", prompt]
