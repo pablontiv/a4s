@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "access": "observe",
+  "apiPort": 49173,
+  "daguBin": "/absolute/path/to/dagu",
+  "daguHome": "/private/pi-slice/dagu",
+  "daguConfig": "/private/pi-slice/dagu/config.yaml",
+  "dagFile": "/private/pi-slice/dagu/dags/pi-triage-slice.yaml",
+  "workerEntry": "/absolute/checkout/pilots/pi-triage/worker/triage.mjs",
+  "stateRoot": "/private/pi-slice/state",
+  "pathDirs": ["/absolute/bin/with/node-and-shell", "/usr/bin", "/bin"]
+}
