@@ -3,21 +3,22 @@
 # -> operator click -> integrate -> close. Control is deterministic here;
 # interpretation happens in the worker and arrives as a structured verdict.
 type: graph
+# PRIMARY/FACTORY/T3_HOME/STATE default from A4S_* variables set in Dagu's base config.
 params:
   # issue number (or fixture id in the selftest)
   - name: ISSUE
     required: true
   # primary checkout of the trunk repository
   - name: PRIMARY
-    required: true
+    default: "${A4S_PRIMARY}"
   # absolute path to packages/factory, read from the trunk checkout
   - name: FACTORY
-    required: true
+    default: "${A4S_FACTORY}"
   - name: T3_HOME
-    required: true
+    default: "${A4S_T3_HOME}"
   # in-flight state, outside the code
   - name: STATE
-    required: true
+    default: "${A4S_STATE}"
   - name: BASE
     default: main
   # optional; defaults to the GitHub issue title and body
@@ -44,6 +45,12 @@ steps:
   - id: prepare
     run: |
       set -euo pipefail
+      for p in PRIMARY FACTORY T3_HOME STATE; do
+        if [ -z "${!p}" ]; then
+          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
+          exit 1
+        fi
+      done
       mkdir -p "$ISSUE_STATE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
       test -z "$(git -C "$PRIMARY" status --porcelain \

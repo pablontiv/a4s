@@ -4,23 +4,25 @@
 # rejected by Dagu and are not errors. The label `factory` never admits.
 type: graph
 schedule: "*/5 * * * *"
+# PRIMARY/FACTORY/T3_HOME/STATE default from A4S_* variables the operator sets
+# in Dagu's base config.
 params:
   - name: PRIMARY
-    required: true
+    default: "${A4S_PRIMARY}"
   - name: FACTORY
-    required: true
+    default: "${A4S_FACTORY}"
   - name: T3_HOME
-    required: true
+    default: "${A4S_T3_HOME}"
   - name: STATE
-    required: true
+    default: "${A4S_STATE}"
   # injectable issue source: same JSON as `gh issue list --json number,labels`;
   # empty = ask GitHub
   - name: ISSUES_FILE
     default: ""
   # where the runs are enqueued; empty = Dagu's defaults
-  - name: DAGU_HOME
+  - name: TARGET_DAGU_HOME
     default: ""
-  - name: DAGU_CONFIG
+  - name: TARGET_DAGU_CONFIG
     default: ""
   # optional cycle params passed through
   - name: GATE
@@ -37,16 +39,23 @@ steps:
   - id: admit
     run: |
       set -uo pipefail
+      for p in PRIMARY FACTORY T3_HOME STATE; do
+        if [ -z "${!p}" ]; then
+          echo "admit: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
+          exit 30
+        fi
+      done
+      origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
       src="$ISSUES_FILE"
       if [ -z "$src" ]; then
+        [ -n "$origin" ] || { echo "admit: PRIMARY has no origin remote" >&2; exit 30; }
         src=$(mktemp)
-        origin=$(git -C "$PRIMARY" remote get-url origin)
         gh issue list -R "$origin" --label factory:ready --state open \
           --limit 200 --json number,labels > "$src" || exit 30
       fi
       opts=()
-      [ -n "$DAGU_HOME" ] && opts+=(--dagu-home "$DAGU_HOME")
-      [ -n "$DAGU_CONFIG" ] && opts+=(--config "$DAGU_CONFIG")
+      [ -n "$TARGET_DAGU_HOME" ] && opts+=(--dagu-home "$TARGET_DAGU_HOME")
+      [ -n "$TARGET_DAGU_CONFIG" ] && opts+=(--config "$TARGET_DAGU_CONFIG")
       for p in PRIMARY FACTORY T3_HOME STATE GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
         v="${!p}"; [ -n "$v" ] && opts+=(--param "$p=$v")
       done
@@ -54,7 +63,7 @@ steps:
       rc_all=0
       for n in $numbers; do
         node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" \
-          --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}"
+          ${origin:+--repo "$origin"} --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}"
         rc=$?
         case "$rc" in 0|20|21) ;; *) rc_all=30 ;; esac
       done

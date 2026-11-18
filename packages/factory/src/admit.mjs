@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Admission: admit ONE issue as a factory run.
-//   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F] [--dagu-home D] [--config C] [--param K=V ...]
+//   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F | --repo R] [--dagu-home D] [--config C] [--param K=V ...]
 // Admits only when the issue carries the label `factory:ready` (never plain `factory`, the classification label).
 // Run-id is deterministic (`factory-issue-<n>`); Dagu rejects a duplicate run-id, reported as "duplicate".
 // Exit codes: 0 admitted, 20 not labelled, 21 duplicate, 30 infra.
@@ -27,6 +27,7 @@ function parseArgs(argv) {
     const a = argv[i];
     const v = () => argv[++i];
     if (a === "--issue") o.issue = v();
+    else if (a === "--repo") o.repo = v();
     else if (a === "--dag") o.dag = v();
     else if (a === "--issues-file") o.issuesFile = v();
     else if (a === "--dagu-home") o.daguHome = v();
@@ -43,7 +44,8 @@ function loadIssue(o) {
     const all = JSON.parse(readFileSync(o.issuesFile, "utf8"));
     return all.find((i) => String(i.number) === String(o.issue)) ?? { number: o.issue, labels: [] };
   }
-  const r = spawnSync("gh", ["issue", "view", String(o.issue), "--json", "number,labels"], { encoding: "utf8" });
+  if (!o.repo) throw new Error("--repo is required without --issues-file");
+  const r = spawnSync("gh", ["issue", "view", String(o.issue), "-R", o.repo, "--json", "number,labels"], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`gh issue view failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }

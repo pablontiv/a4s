@@ -115,7 +115,7 @@ try {
   const daguAd = (sub, ...a) => spawnSync(DAGU_BIN, [sub, "--dagu-home", adHome, "--config", adCfg, ...a], { encoding: "utf8", env: adEnv });
   const queued = (n) => daguAd("status", "--run-id", `factory-issue-${n}`, cycleDag).status === 0;
   const admitCli = (n) => spawnSync("node", [join(FACTORY, "src", "admit.mjs"), "--issue", String(n), "--issues-file", issuesFile, "--dagu-home", adHome, "--config", adCfg, "--dag", cycleDag, "--param", `PRIMARY=${repo}`, "--param", `FACTORY=${FACTORY}`, "--param", `T3_HOME=${t3Home}`, "--param", `STATE=${join(root, "state-admit")}`], { encoding: "utf8", env: adEnv }).status;
-  const adm = daguAd("start", "--run-id", `admit${Date.now()}`, admitDag, "--", `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state-admit")}`, `ISSUES_FILE=${issuesFile}`, `DAGU_HOME=${adHome}`, `DAGU_CONFIG=${adCfg}`);
+  const adm = daguAd("start", "--run-id", `admit${Date.now()}`, admitDag, "--", `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state-admit")}`, `ISSUES_FILE=${issuesFile}`, `TARGET_DAGU_HOME=${adHome}`, `TARGET_DAGU_CONFIG=${adCfg}`);
   log("admit dag ->", adm.status);
   checks.admit_dag_succeeded = adm.status === 0;
   checks.admit_ready_enqueued = queued(7001);
