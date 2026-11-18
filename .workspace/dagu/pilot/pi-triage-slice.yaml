@@ -1,0 +1,48 @@
+---
+# Standalone fixture DAG. Do not install it in the operator's Dagu station.
+# Dagu 2.26.0 derives the entrypoint name from pi-triage-slice.yaml.
+type: graph
+working_dir: .
+dotenv: []
+params:
+  - name: ISSUE
+    type: string
+    default: fixture-1
+  - name: WORKER_ENTRY
+    type: string
+    required: true
+  - name: STATE_ROOT
+    type: string
+    required: true
+steps:
+  - id: triage
+    action: exec
+    timeout_sec: 155
+    with:
+      command: node
+      args: [./pi-triage-slice.mjs, triage]
+
+  - id: decide
+    depends: triage
+    action: human.task
+    with:
+      prompt: >-
+        Inspect triage.json, then enter APPROVE or REJECT.
+        Neither decision runs a PoC.
+      form:
+        type: object
+        required: [DECISION]
+        additionalProperties: false
+        properties:
+          DECISION:
+            type: string
+            enum: [APPROVE, REJECT]
+
+  - id: record_decision
+    depends: decide
+    env:
+      PI_SLICE_DECISION: ${steps.decide.outputs.DECISION}
+    action: exec
+    with:
+      command: node
+      args: [./pi-triage-slice.mjs, record-decision]
