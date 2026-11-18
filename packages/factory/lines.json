@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "lines": {
+    "impl": {
+      "provider": "pi-impl",
+      "model": "anthropic/claude-sonnet-5-5",
+      "thinking": "medium",
+      "escalate_to": "anthropic/claude-opus-5-5",
+      "instance": {
+        "displayName": "Factory · impl",
+        "accentColor": "#f59e0b",
+        "prompt": "prompts/impl.md",
+        "tools": ["read", "bash", "edit", "write", "*delegate_task", "*task_status"]
+      }
+    }
+  },
+  "isolation": ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes", "--no-mcp"]
+}

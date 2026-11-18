@@ -4,6 +4,10 @@ Repositorio reducido a las extensiones verificadas, los agentes y los skills dis
 
 See the [glossary](docs/glossary.md) for scoped terminology across the packages and issue lifecycle.
 
+## Fábrica (T3/Dagu/Pi)
+
+- [`packages/factory/`](packages/factory/): ciclo de entrega auto-construido sobre T3, Dagu y Pi (semilla VS0). Plan y slices: épica #1009.
+
 ## Extensiones
 
 - [`packages/context-expert/`](packages/context-expert/): núcleo compartido y adaptadores de Context Expert para Pi y Claude.

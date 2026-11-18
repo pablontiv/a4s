@@ -1,0 +1,148 @@
+---
+# Factory cycle (seed, VS0): issue -> implementation thread in T3 -> gate
+# -> operator click -> integrate -> close. Control is deterministic here;
+# interpretation happens in the worker and arrives as a structured verdict.
+type: graph
+params:
+  # issue number (or fixture id in the selftest)
+  - name: ISSUE
+    required: true
+  # primary checkout of the trunk repository
+  - name: PRIMARY
+    required: true
+  # absolute path to packages/factory, read from the trunk checkout
+  - name: FACTORY
+    required: true
+  - name: T3_HOME
+    required: true
+  # in-flight state, outside the code
+  - name: STATE
+    required: true
+  - name: BASE
+    default: main
+  # optional; defaults to the GitHub issue title and body
+  - name: BRIEF_FILE
+    default: ""
+  # repository gate + selftest on the operator host
+  - name: GATE
+    default: "bash scripts/factory-gate.sh"
+  # push the trunk after integrating
+  - name: PUSH
+    default: "true"
+  # close the GitHub issue after integrating
+  - name: CLOSE_ISSUE
+    default: "true"
+  # optional line table override (the selftest uses a cheap model)
+  - name: LINES
+    default: ""
+env:
+  - WT: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
+  - BRANCH: factory/issue-${ISSUE}
+  - ISSUE_STATE: ${STATE}/${ISSUE}
+steps:
+  - id: prepare
+    run: |
+      set -euo pipefail
+      mkdir -p "$ISSUE_STATE"
+      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
+      test -z "$(git -C "$PRIMARY" status --porcelain \
+        --untracked-files=no)"
+      if [ ! -d "$WT" ]; then
+        git -C "$PRIMARY" worktree add -q -B "$BRANCH" "$WT" "$BASE"
+      fi
+      node "$FACTORY/src/t3cli.mjs" project add \
+        --title "issue-$ISSUE" "$WT" || echo "project already registered"
+      if [ -n "$BRIEF_FILE" ]; then
+        cp "$BRIEF_FILE" "$ISSUE_STATE/brief.md"
+      else
+        origin=$(git -C "$PRIMARY" remote get-url origin)
+        gh issue view "$ISSUE" -R "$origin" --json title,body \
+          --jq '"# " + .title + "\n\n" + .body' > "$ISSUE_STATE/brief.md"
+      fi
+
+  - id: implement
+    depends: prepare
+    retry_policy:
+      limit: 1
+      interval_sec: 5
+      exit_code: [10, 40]
+    outputs:
+      - {name: result}
+      - {name: thread_id}
+      - {name: model}
+      - {name: question}
+      - {name: commit}
+      - {name: findings}
+      - {name: worktree}
+    run: |
+      lines="$LINES"; [ -n "$lines" ] || lines="$FACTORY/lines.json"
+      exec node "$FACTORY/src/station.mjs" --line impl \
+        --issue "$ISSUE" --run "$DAG_RUN_ID" --project "$WT" \
+        --brief "$ISSUE_STATE/brief.md" --t3-home "$T3_HOME" \
+        --state "$STATE" --lines "$lines"
+
+  - id: require_pass
+    depends: implement
+    env:
+      - RESULT: ${steps.implement.outputs.result}
+      - QUESTION: ${steps.implement.outputs.question}
+    run: |
+      if [ "$RESULT" != "pass" ]; then
+        # seed: blocked is handled by hand until VS3/VS5
+        echo "worker result=$RESULT question=$QUESTION" >&2
+        exit 1
+      fi
+
+  - id: gate
+    depends: require_pass
+    run: |
+      set -euo pipefail
+      cd "$WT"
+      test -z "$(git status --porcelain)"
+      test "$(git rev-list --count "$BASE..HEAD")" -ge 1
+      bash -euo pipefail -c "$GATE"
+      printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"
+
+  - id: approve_merge
+    depends: gate
+    action: human.task
+    with:
+      prompt: "Factory: approve integrating the issue branch (gate passed)."
+      form:
+        type: object
+        required: [DECISION]
+        additionalProperties: false
+        properties:
+          DECISION:
+            type: string
+            enum: [APPROVE, REJECT]
+
+  - id: integrate
+    depends: approve_merge
+    preconditions:
+      - condition: "${steps.approve_merge.outputs.DECISION}"
+        expected: APPROVE
+    run: |
+      set -euo pipefail
+      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
+      git -C "$WT" rebase -q "$BASE"
+      (cd "$WT" && bash -euo pipefail -c "$GATE") >/dev/null
+      git -C "$PRIMARY" merge -q --ff-only "$BRANCH"
+      if [ "$PUSH" = "true" ]; then
+        git -C "$PRIMARY" push -q origin "$BASE"
+      fi
+      printf 'merged_sha=%s\n' "$(git -C "$PRIMARY" rev-parse HEAD)"
+
+  - id: close
+    depends: integrate
+    run: |
+      set -euo pipefail
+      sha=$(git -C "$PRIMARY" rev-parse HEAD)
+      if [ "$CLOSE_ISSUE" = "true" ]; then
+        origin=$(git -C "$PRIMARY" remote get-url origin)
+        gh issue close "$ISSUE" -R "$origin" \
+          --comment "Integrated by the factory in $sha."
+      fi
+      git -C "$PRIMARY" worktree remove --force "$WT"
+      git -C "$PRIMARY" branch -q -d "$BRANCH"
+      echo "closed issue=$ISSUE sha=$sha"
