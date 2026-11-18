@@ -4,17 +4,17 @@
 # rejected by Dagu and are not errors. The label `factory` never admits.
 type: graph
 schedule: "*/5 * * * *"
-# PRIMARY/FACTORY/T3_HOME/STATE default from A4S_* variables the operator sets
-# in Dagu's base config.
+# PRIMARY/FACTORY/T3_HOME/STATE: when empty, resolved from A4S_* declared in
+# Dagu's base config `env:` (param defaults are not expanded by Dagu).
 params:
   - name: PRIMARY
-    default: "${A4S_PRIMARY}"
+    default: ""
   - name: FACTORY
-    default: "${A4S_FACTORY}"
+    default: ""
   - name: T3_HOME
-    default: "${A4S_T3_HOME}"
+    default: ""
   - name: STATE
-    default: "${A4S_STATE}"
+    default: ""
   # injectable issue source: same JSON as `gh issue list --json number,labels`;
   # empty = ask GitHub
   - name: ISSUES_FILE
@@ -39,6 +39,8 @@ steps:
   - id: admit
     run: |
       set -uo pipefail
+      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
+      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
       for p in PRIMARY FACTORY T3_HOME STATE; do
         if [ -z "${!p}" ]; then
           echo "admit: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
@@ -56,7 +58,9 @@ steps:
       opts=()
       [ -n "$TARGET_DAGU_HOME" ] && opts+=(--dagu-home "$TARGET_DAGU_HOME")
       [ -n "$TARGET_DAGU_CONFIG" ] && opts+=(--config "$TARGET_DAGU_CONFIG")
-      for p in PRIMARY FACTORY T3_HOME STATE GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
+      # PRIMARY/FACTORY/T3_HOME/STATE are forwarded only when passed explicitly;
+      # otherwise the admitted run resolves them from the base config itself.
+      for p in GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
         v="${!p}"; [ -n "$v" ] && opts+=(--param "$p=$v")
       done
       numbers=$(node "$FACTORY/src/admit.mjs" --list "$src") || exit 30
