@@ -104,6 +104,23 @@ try {
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
   };
+  // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
+  const adHome = join(root, "dagu-admit"); mkdirSync(adHome, { recursive: true });
+  const adCfg = join(adHome, "config.yaml");
+  writeFileSync(adCfg, "auth: {mode: none}\n");
+  const adEnv = { PATH: process.env.PATH, HOME: process.env.HOME, DAGU_HOME: adHome, DAGU_SKIP_EXAMPLES: "true" };
+  const issuesFile = join(root, "issues.json");
+  writeFileSync(issuesFile, JSON.stringify([{ number: 7001, labels: [{ name: "factory:ready" }, { name: "factory" }] }, { number: 7002, labels: [{ name: "factory" }] }]));
+  const admitDag = join(FACTORY, "dags", "admit.yaml"), cycleDag = join(FACTORY, "dags", "cycle.yaml");
+  const daguAd = (sub, ...a) => spawnSync(DAGU_BIN, [sub, "--dagu-home", adHome, "--config", adCfg, ...a], { encoding: "utf8", env: adEnv });
+  const queued = (n) => daguAd("status", "--run-id", `factory-issue-${n}`, cycleDag).status === 0;
+  const admitCli = (n) => spawnSync("node", [join(FACTORY, "src", "admit.mjs"), "--issue", String(n), "--issues-file", issuesFile, "--dagu-home", adHome, "--config", adCfg, "--dag", cycleDag, "--param", `PRIMARY=${repo}`, "--param", `FACTORY=${FACTORY}`, "--param", `T3_HOME=${t3Home}`, "--param", `STATE=${join(root, "state-admit")}`], { encoding: "utf8", env: adEnv }).status;
+  const adm = daguAd("start", "--run-id", `admit${Date.now()}`, admitDag, "--", `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state-admit")}`, `ISSUES_FILE=${issuesFile}`, `DAGU_HOME=${adHome}`, `DAGU_CONFIG=${adCfg}`);
+  log("admit dag ->", adm.status);
+  checks.admit_dag_succeeded = adm.status === 0;
+  checks.admit_ready_enqueued = queued(7001);
+  checks.admit_again_is_duplicate = admitCli(7001) === 21;
+  checks.admit_factory_only_not_admitted = !queued(7002) && admitCli(7002) === 20;
   log(JSON.stringify(checks));
   if (final) for (const n of final.nodes ?? []) log(" step", n.step.id, n.statusLabel);
   ok = Object.values(checks).every(Boolean);

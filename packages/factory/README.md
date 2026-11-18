@@ -36,13 +36,12 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ## Manual steps (this list may only shrink)
 
-1. Enqueue the run (`dagu start/enqueue … cycle.yaml -- ISSUE=<n> …`) — VS1.
-2. Watch Dagu for waits and failures — VS2.
-3. Decide in the Dagu UI/API (merge approval, blocked answers) — VS3.
-4. Review quality by hand — VS4.
-5. Diagnose failures and blocked verdicts — VS5.
-6. Cancel or clean stuck runs; archive T3 projects of closed issues — VS6.
-7. Sync `lines.json` into the operator's T3 settings — VS7.
+1. Watch Dagu for waits and failures — VS2.
+2. Decide in the Dagu UI/API (merge approval, blocked answers) — VS3.
+3. Review quality by hand — VS4.
+4. Diagnose failures and blocked verdicts — VS5.
+5. Cancel or clean stuck runs; archive T3 projects of closed issues — VS6.
+6. Sync `lines.json` into the operator's T3 settings — VS7.
 8. Coordinate T3/Pi/Dagu updates — VS8.
 
 ## Run it
@@ -53,3 +52,7 @@ npm run selftest                          # binary proof (real model calls, ~2 m
 ```
 
 Selftest knobs: `SELFTEST_MODEL` (default `anthropic/claude-haiku-5-5`), `SELFTEST_KEEP=1`, `PI_BIN`, `DAGU_BIN`, `T3_BIN`, `T3_VERSIONS_DIR`.
+
+## Admission (VS1)
+
+`dags/admit.yaml` runs every 5 minutes, lists open issues labelled **`factory:ready`** (`gh issue list`, or the `ISSUES_FILE` fixture) and calls `src/admit.mjs` for each. It enqueues `cycle.yaml` with run-id `factory-issue-<n>`. Exit codes: 0 admitted, 20 not labelled, 21 duplicate (Dagu rejects the run-id), 30 infra. The classification label `factory` never admits.

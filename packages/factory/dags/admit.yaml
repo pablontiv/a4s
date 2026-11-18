@@ -1,0 +1,61 @@
+---
+# Admission (VS1): every 5 minutes, open issues labelled `factory:ready`
+# become factory runs (run-id factory-issue-<n>) of cycle.yaml. Duplicates are
+# rejected by Dagu and are not errors. The label `factory` never admits.
+type: graph
+schedule: "*/5 * * * *"
+params:
+  - name: PRIMARY
+    required: true
+  - name: FACTORY
+    required: true
+  - name: T3_HOME
+    required: true
+  - name: STATE
+    required: true
+  # injectable issue source: same JSON as `gh issue list --json number,labels`;
+  # empty = ask GitHub
+  - name: ISSUES_FILE
+    default: ""
+  # where the runs are enqueued; empty = Dagu's defaults
+  - name: DAGU_HOME
+    default: ""
+  - name: DAGU_CONFIG
+    default: ""
+  # optional cycle params passed through
+  - name: GATE
+    default: ""
+  - name: PUSH
+    default: ""
+  - name: CLOSE_ISSUE
+    default: ""
+  - name: LINE_TABLE
+    default: ""
+  - name: BRIEF_FILE
+    default: ""
+steps:
+  - id: admit
+    run: |
+      set -uo pipefail
+      src="$ISSUES_FILE"
+      if [ -z "$src" ]; then
+        src=$(mktemp)
+        origin=$(git -C "$PRIMARY" remote get-url origin)
+        gh issue list -R "$origin" --label factory:ready --state open \
+          --limit 200 --json number,labels > "$src" || exit 30
+      fi
+      opts=()
+      [ -n "$DAGU_HOME" ] && opts+=(--dagu-home "$DAGU_HOME")
+      [ -n "$DAGU_CONFIG" ] && opts+=(--config "$DAGU_CONFIG")
+      for p in PRIMARY FACTORY T3_HOME STATE GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
+        v="${!p}"; [ -n "$v" ] && opts+=(--param "$p=$v")
+      done
+      numbers=$(node "$FACTORY/src/admit.mjs" --list "$src") || exit 30
+      rc_all=0
+      for n in $numbers; do
+        node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" \
+          --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}"
+        rc=$?
+        case "$rc" in 0|20|21) ;; *) rc_all=30 ;; esac
+      done
+      exit $rc_all

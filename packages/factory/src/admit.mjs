@@ -1,0 +1,80 @@
+#!/usr/bin/env node
+// Admission: admit ONE issue as a factory run.
+//   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F] [--dagu-home D] [--config C] [--param K=V ...]
+// Admits only when the issue carries the label `factory:ready` (never plain `factory`, the classification label).
+// Run-id is deterministic (`factory-issue-<n>`); Dagu rejects a duplicate run-id, reported as "duplicate".
+// Exit codes: 0 admitted, 20 not labelled, 21 duplicate, 30 infra.
+//   admit.mjs --list F   prints the numbers of the issues in F that carry the label (one per line).
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+export const ADMIT_LABEL = "factory:ready";
+export const EXIT = Object.freeze({ ADMITTED: 0, NOT_LABELLED: 20, DUPLICATE: 21, INFRA: 30 });
+
+export const runIdFor = (n) => `factory-issue-${n}`;
+
+/** Label names of an issue-like object; labels may be strings or {name}. */
+export const labelNames = (issue) => (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+export const isAdmissible = (issue) => labelNames(issue).includes(ADMIT_LABEL);
+
+/** True when Dagu's enqueue failure means the run-id already exists. */
+export const isDuplicate = (text) => /already exists/i.test(text);
+
+function parseArgs(argv) {
+  const o = { params: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    const v = () => argv[++i];
+    if (a === "--issue") o.issue = v();
+    else if (a === "--dag") o.dag = v();
+    else if (a === "--issues-file") o.issuesFile = v();
+    else if (a === "--dagu-home") o.daguHome = v();
+    else if (a === "--config") o.config = v();
+    else if (a === "--param") o.params.push(v());
+    else if (a === "--list") o.list = v();
+    else throw new Error(`unknown argument ${a}`);
+  }
+  return o;
+}
+
+function loadIssue(o) {
+  if (o.issuesFile) {
+    const all = JSON.parse(readFileSync(o.issuesFile, "utf8"));
+    return all.find((i) => String(i.number) === String(o.issue)) ?? { number: o.issue, labels: [] };
+  }
+  const r = spawnSync("gh", ["issue", "view", String(o.issue), "--json", "number,labels"], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`gh issue view failed: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
+  let issue;
+  try { issue = loadIssue(o); } catch (e) { console.error(`admit: ${e.message}`); return EXIT.INFRA; }
+  if (!isAdmissible(issue)) { console.log(`not-labelled #${o.issue} (needs ${ADMIT_LABEL})`); return EXIT.NOT_LABELLED; }
+  const runId = runIdFor(o.issue);
+  const args = ["enqueue", "--run-id", runId];
+  if (o.daguHome) args.push("--dagu-home", o.daguHome);
+  if (o.config) args.push("--config", o.config);
+  args.push(o.dag, "--", `ISSUE=${o.issue}`, ...o.params);
+  const r = spawnSync(daguBin, args, { encoding: "utf8" });
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  if (r.error) { console.error(`admit: ${r.error.message}`); return EXIT.INFRA; }
+  if (r.status === 0) { console.log(`admitted #${o.issue} run-id=${runId}`); return EXIT.ADMITTED; }
+  if (isDuplicate(out)) { console.log(`duplicate #${o.issue} run-id=${runId}`); return EXIT.DUPLICATE; }
+  console.error(`admit: dagu enqueue -> ${r.status}\n${out}`);
+  return EXIT.INFRA;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  let o;
+  try { o = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`admit: ${e.message}`); process.exit(EXIT.INFRA); }
+  if (o.list) {
+    try {
+      for (const i of JSON.parse(readFileSync(o.list, "utf8"))) if (isAdmissible(i)) console.log(i.number);
+      process.exit(0);
+    } catch (e) { console.error(`admit: ${e.message}`); process.exit(EXIT.INFRA); }
+  }
+  if (!o.issue || !o.dag) { console.error("admit: --issue and --dag are required"); process.exit(EXIT.INFRA); }
+  process.exit(admit(o));
+}
