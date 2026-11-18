@@ -59,4 +59,22 @@ export default function piTriageSupervisor(pi: ExtensionAPI) {
       return result(await supervisor.decide(params.runId, decision, params.token, confirm, signal));
     },
   });
+
+  // One-click decision: the operator's button press is the authorization.
+  // The model only asks for the dialog; it never chooses the decision.
+  pi.registerTool({
+    name: "factory_request_decision",
+    label: "Pedir decisión al operador",
+    description: "Muestra al operador la tarjeta de un run en awaiting_decision con botones Aprobar/Rechazar/Después y aplica solo lo que el operador pulse. No eliges la decisión. Llámalo una vez por run; si devuelve deferred, no reintentes.",
+    parameters: run,
+    exposure: "model-only",
+    executionMode: "sequential",
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    async execute(_id, params, signal, _onUpdate, ctx) {
+      const choose = ctx.hasUI && (ctx.mode === "rpc" || ctx.mode === "tui")
+        ? (title: string, options: string[], dialogSignal: AbortSignal) => ctx.ui.select(title, options, { signal: dialogSignal })
+        : undefined;
+      return result(await supervisor.request(params.runId, choose, signal));
+    },
+  });
 }

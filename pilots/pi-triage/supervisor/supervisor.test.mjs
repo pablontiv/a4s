@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { requestDagu } from "./sandbox.ts";
-import { createSupervisor } from "./supervisor.ts";
+import { CHOICES, createSupervisor } from "./supervisor.ts";
 
 const dag = "pi-triage-slice";
 const runId = "pi-slice-test";
@@ -315,4 +315,56 @@ test("transporte HTTP directo no sigue redirects y serializa el POST exacto", as
   assert.equal((await requestDagu(new URL(getPath, origin), { method: "GET", signal })).status, 302);
   assert.equal((await requestDagu(new URL(postPath, origin), { method: "POST", signal, body: '{"DECISION":"REJECT"}' })).status, 200);
   assert.deepEqual(seen, [["GET", getPath, undefined, ""], ["POST", postPath, "application/json", '{"DECISION":"REJECT"}']]);
+});
+
+test("request: el clic del operador decide; el modelo nunca elige el valor", async (t) => {
+  for (const [choice, decision] of [[CHOICES.APPROVE, "APPROVE"], [CHOICES.REJECT, "REJECT"]]) {
+    const fx = fixture(t);
+    const result = await fx.supervisor.request(runId, async (title, options, signal) => {
+      assert.ok(title.includes(runId) && title.includes(issue));
+      assert.ok(title.includes(triage.question) && title.includes(triage.reason) && title.includes(startedAt));
+      assert.deepEqual(options, [CHOICES.APPROVE, CHOICES.REJECT, CHOICES.LATER]);
+      assert.equal(signal.aborted, false);
+      assert.deepEqual(methods(fx), ["GET"]);
+      return choice;
+    });
+    assert.equal(result.outcome, "completed");
+    assert.equal(result.decidedBy, "operator-click");
+    assert.deepEqual(methods(fx), ["GET", "GET", "GET", "POST"]);
+    assert.deepEqual(fx.calls.at(-1), { method: "POST", path: postPath, body: JSON.stringify({ DECISION: decision }) });
+  }
+});
+
+test("request: Después, sin respuesta, UI fallida, cancelada o ausente nunca envían POST", async (t) => {
+  const fx = fixture(t);
+  for (const choose of [async () => CHOICES.LATER, async () => undefined, async () => "aprobar", async () => { throw new Error("UI perdida"); }]) {
+    assert.equal((await fx.supervisor.request(runId, choose)).outcome, "deferred");
+  }
+  const controller = new AbortController();
+  const cancelled = await fx.supervisor.request(runId, async () => { controller.abort(); return CHOICES.APPROVE; }, controller.signal);
+  assert.equal(cancelled.outcome, "deferred");
+  assert.equal((await fx.supervisor.request(runId)).outcome, "denied");
+  assert.ok(fx.calls.every(({ method }) => method === "GET"));
+});
+
+test("request: sin espera abierta no muestra botones y la evidencia cambiada invalida el clic", async (t) => {
+  const fx = fixture(t);
+  fx.details.statusLabel = "running";
+  const inactive = await fx.supervisor.request(runId, () => assert.fail("no hay decisión pendiente"));
+  assert.equal(inactive.outcome, "observed");
+  assert.equal(inactive.snapshot.phase, "inactive");
+  fx.details.statusLabel = "waiting";
+  const changed = await fx.supervisor.request(runId, async () => {
+    json(join(fx.runDir, "triage.json"), { ...triage, question: "¿Cambió?" });
+    return CHOICES.APPROVE;
+  });
+  assert.equal(changed.outcome, "stale");
+  assert.ok(fx.calls.every(({ method }) => method === "GET"));
+});
+
+test("request: el perfil observe no muestra botones ni decide", async (t) => {
+  const fx = fixture(t);
+  json(fx.configPath, { ...fx.config, access: "observe" });
+  assert.equal((await fx.supervisor.request(runId, () => assert.fail("UI en perfil observe"))).outcome, "read_only");
+  assert.deepEqual(fx.calls, []);
 });

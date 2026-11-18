@@ -8,11 +8,16 @@ import {
 export const DECISIONS = ["APPROVE", "REJECT"] as const;
 type Decision = typeof DECISIONS[number];
 type Confirm = (message: string, signal: AbortSignal) => Promise<boolean>;
+type Choose = (title: string, options: string[], signal: AbortSignal) => Promise<string | undefined>;
+/** Button labels for the one-click decision dialog. Only an exact match decides. */
+export const CHOICES = { APPROVE: "Aprobar", REJECT: "Rechazar", LATER: "Después" } as const;
+const DECISION_BY_CHOICE = new Map<string | undefined, Decision>([[CHOICES.APPROVE, "APPROVE"], [CHOICES.REJECT, "REJECT"]]);
 const RUN_STATUSES = ["not_started", "running", "failed", "aborted", "succeeded", "queued", "partially_succeeded", "waiting", "rejected"] as const;
 const STEP_STATUSES = [...RUN_STATUSES, "skipped", "retrying"] as const;
 const RFC3339 = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/;
 const readTimeout = 5_000;
 const confirmTimeout = 60_000;
+const chooseTimeout = 15 * 60_000;
 
 interface Triage {
   schemaVersion: 1;
@@ -37,7 +42,7 @@ interface Snapshot {
   token: string | null;
 }
 
-type Outcome = { outcome: string; runId: string; message?: string; snapshot?: Snapshot; queued?: boolean };
+type Outcome = { outcome: string; runId: string; message?: string; snapshot?: Snapshot; queued?: boolean; decidedBy?: "operator-click" };
 
 function member<T extends string>(list: readonly T[], value: JsonObject[string]): value is T {
   return list.some(item => item === value);
@@ -164,7 +169,7 @@ export function createSupervisor(configPath: string | undefined, { execute = exe
     finally { busy.delete(runId); }
   }
 
-  return {
+  const api = {
     async start(runId: string, signal?: AbortSignal): Promise<Outcome> {
       checkRunId(runId);
       const sandbox = loadSandbox(configPath);
@@ -236,5 +241,30 @@ export function createSupervisor(configPath: string | undefined, { execute = exe
         } catch { return uncertain; }
       });
     },
+
+    // One-click flow: the operator's button press is the authorization, so the
+    // model never chooses the decision. decide() still rechecks the token
+    // against Dagu before and after, exactly as with the confirmation dialog.
+    async request(runId: string, choose?: Choose, signal?: AbortSignal): Promise<Outcome> {
+      checkRunId(runId);
+      const sandbox = loadSandbox(configPath);
+      if (sandbox.access === "observe") return readOnly(runId);
+      if (!choose) return { outcome: "denied", runId, message: "Se requiere un diálogo interactivo del operador." };
+      const current = await observe(sandbox, runId, signal);
+      if (!current) return missing(runId);
+      if (current.phase !== "awaiting_decision" || !current.token || !current.triage) return { outcome: "observed", runId, snapshot: current };
+      const uiSignal = deadline(chooseTimeout, signal);
+      let choice: string | undefined;
+      try {
+        choice = await choose(`🔴 Decisión pendiente · ${runId} (${ISSUE})\n` +
+          `Pregunta: ${current.triage.question}\nMotivo del triage: ${current.triage.reason}\n` +
+          `Espera desde ${current.decideStartedAt}. Registra un veredicto del fixture; no ejecuta la PoC.`,
+        [CHOICES.APPROVE, CHOICES.REJECT, CHOICES.LATER], uiSignal);
+      } catch { /* A failed UI is not a decision. */ }
+      const decision = uiSignal.aborted ? undefined : DECISION_BY_CHOICE.get(choice);
+      if (!decision) return { outcome: "deferred", runId, message: "El operador dejó la decisión pendiente o no respondió; no se envió POST." };
+      return { ...(await api.decide(runId, decision, current.token, async () => true, signal)), decidedBy: "operator-click" };
+    },
   };
+  return api;
 }

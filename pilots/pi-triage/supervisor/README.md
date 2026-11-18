@@ -60,7 +60,7 @@ En **Environment variables** de cada instancia, pon `A4S_PI_TRIAGE_SUPERVISOR_CO
 --tools factory_start,factory_status,factory_decide
 ```
 
-Para la instancia de consulta, reemplaza el último argumento por `--tools factory_status`. No la uses si la sesión habilita herramientas ajenas al piloto. Aun si se expusieran `factory_start` o `factory_decide` accidentalmente, el perfil `observe` los deniega. Mantén el perfil manual en **Supervised**. La aprobación genérica de herramienta de T3, si aparece, no sustituye el diálogo `Confirmación del operador · triage A4S` de la extensión; solo este diálogo autoriza enviar el POST. Pi usa su API pública `ctx.ui.confirm`, que T3 presenta en el compositor por RPC. Sin diálogo interactivo, con cancelación o tras 60 segundos, no se aplica la decisión.
+Para la instancia de consulta, reemplaza el último argumento por `--tools factory_status`. Para una bandeja de decisiones con un clic (sección 4), usa `--tools factory_status,factory_request_decision`; así el modelo no tiene `factory_decide` y solo puede pedir los botones. No la uses si la sesión habilita herramientas ajenas al piloto. Aun si se expusieran `factory_start` o `factory_decide` accidentalmente, el perfil `observe` los deniega. Mantén el perfil manual en **Supervised**. La aprobación genérica de herramienta de T3, si aparece, no sustituye el diálogo `Confirmación del operador · triage A4S` de la extensión; solo este diálogo autoriza enviar el POST. Pi usa su API pública `ctx.ui.confirm`, que T3 presenta en el compositor por RPC. Sin diálogo interactivo, con cancelación o tras 60 segundos, no se aplica la decisión.
 
 ## 3. Turnos manuales y tarea de lectura
 
@@ -70,6 +70,17 @@ Usa el mismo ID de run en todos los pasos siguientes; `pi-slice-demo-01` es un e
 2. **Decisión manual**, una vez revisado el triage: «Consulta ahora `factory_status` para `pi-slice-demo-01`. Solo si está en `awaiting_decision`, presenta `factory_decide` con el token devuelto y mi propuesta `REJECT` [o `APPROVE`]. No repitas la llamada.» Comprueba que el diálogo muestre el ID, `DECISION`, la espera y la evidencia correctos antes de confirmarlo. Puedes denegarlo sin cambiar el run. Consulta luego el estado: `completed` significa que se completó el paso; el veredicto del DAG se comprueba cuando aparece `verdict` desde `decision.json`.
 3. **Tarea recurrente**, en T3 → **Settings → Scheduled tasks**: elige este proyecto/worktree, la instancia Pi `observe` y una frecuencia adecuada (p. ej. cada 15 minutos). En **Destination** elige **One thread, fresh session each run**: las entregas comparten el mismo hilo y cada ejecución vuelve a consultar sin usar el contexto de la anterior. Elige el hilo fijo de observación si ya existe; si no, la primera ejecución crea el destino que usarán las demás. No elijas **New thread each run**. Pega [`observe.prompt.md`](observe.prompt.md) sustituyendo el ID de ejemplo por el ID literal. Guarda y usa **Run now** sobre esa misma tarea para comprobar, antes de dejarla recurrente, que solo llama una vez a `factory_status`, no pide UI y vuelve al mismo hilo en el siguiente disparo. El texto y el perfil son los mismos en **Run now** y en la recurrencia.
 4. Al terminar el piloto, pausa la tarea, detén el `start-all` que lanzaste y elimina únicamente el sandbox descartable si ya no necesitas su evidencia.
+
+## 4. Bandeja con un clic (webhook de Dagu → T3)
+
+`factory_request_decision({runId})` consulta el run y, solo si está en `awaiting_decision`, muestra al operador un único diálogo `select` con la tarjeta (run, pregunta, motivo, espera) y los botones **Aprobar / Rechazar / Después**. El clic es la autorización: el modelo pide el diálogo pero nunca elige el valor. Con Aprobar o Rechazar se reutiliza `decide`, que vuelve a validar el token contra Dagu antes y después y hace un único POST. Con Después, sin respuesta en 15 minutos, con cancelación o con un fallo de la UI, devuelve `deferred` y no envía nada. Responde con `decidedBy: "operator-click"`.
+
+Para despertar la bandeja sin polling, se usó en un experimento local:
+
+- **Dagu 2.26.0:** `handler_on.wait` (y `handler_on.failure`) en una copia del DAG, que hace POST con `{source, event, dagName, runId}` al webhook de una tarea programada de T3.
+- **T3:** una tarea `webhook` ligada al hilo de la bandeja, con `freshSession`, un filtro `body.source` y un `dedupe.coalesceKey` de `{{body.event}}:{{body.runId}}`. El prompt debe usar plantillas `{{body.runId}}`: T3 no anexa el payload solo, y envuelve esos valores como datos no confiables. `coalesceWindowSeconds` retrasa cada entrega hasta que se cierra la ventana (mínimo 10 s).
+- **Sin T3 Connect**, `schedule_task` no devuelve `webhookUrl`; el endpoint local `http://127.0.0.1:<puerto>/api/hooks/<taskId>/<token>` sí funciona y el token se copia desde Settings. Trátalo como secreto.
+- **Límite conocido:** una pregunta pendiente bloquea el hilo; la siguiente tarjeta espera en cola hasta que se responde la anterior.
 
 ## Resultados y límites
 
