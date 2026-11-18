@@ -72,3 +72,10 @@ test("the cycle never uses LINES (shells export it as the terminal height)", () 
   assert.ok(dag.includes('--lines "$LINE_TABLE"'));
   assert.ok(!/\$LINES\b|name: LINES\b/.test(dag));
 });
+
+test("prepare rebases a reused worktree onto the trunk and a rejection fails the run", () => {
+  const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
+  assert.ok(dag.includes('git -C "$WT" reset -q --hard "$BASE"'));
+  assert.ok(dag.includes('git -C "$WT" rebase -q "$BASE"'));
+  assert.match(dag, /id: rejected[\s\S]*expected: REJECT[\s\S]*exit 1/);
+});

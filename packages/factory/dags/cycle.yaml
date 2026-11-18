@@ -50,6 +50,12 @@ steps:
         --untracked-files=no)"
       if [ ! -d "$WT" ]; then
         git -C "$PRIMARY" worktree add -q -B "$BRANCH" "$WT" "$BASE"
+      elif [ "$(git -C "$WT" rev-list --count "$BASE..HEAD")" = 0 ]; then
+        # reused worktree without work: restart it from the current trunk
+        git -C "$WT" reset -q --hard "$BASE"
+      else
+        # reused worktree with work: it must sit on the current trunk
+        git -C "$WT" rebase -q "$BASE" || { git -C "$WT" rebase --abort; exit 1; }
       fi
       node "$FACTORY/src/t3cli.mjs" project add \
         --title "issue-$ISSUE" "$WT" || echo "project already registered"
@@ -133,6 +139,16 @@ steps:
         git -C "$PRIMARY" push -q origin "$BASE"
       fi
       printf 'merged_sha=%s\n' "$(git -C "$PRIMARY" rev-parse HEAD)"
+
+  # a rejected merge must not look like a delivered issue
+  - id: rejected
+    depends: approve_merge
+    preconditions:
+      - condition: "${steps.approve_merge.outputs.DECISION}"
+        expected: REJECT
+    run: |
+      echo "merge rejected by the operator for issue $ISSUE" >&2
+      exit 1
 
   - id: close
     depends: integrate
