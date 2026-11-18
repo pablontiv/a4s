@@ -1,0 +1,43 @@
+# Test double for self-testing the acceptance harness; never selected by E2E.
+name: pi-triage-slice
+type: graph
+shell: sh
+dotenv: []
+params:
+  - name: ISSUE
+    required: true
+  - name: WORKER_ENTRY
+    required: true
+  - name: STATE_ROOT
+    required: true
+env:
+  - RUN_ID: ${context.run.id}
+steps:
+  - id: triage
+    run: |
+      set -eu
+      run_dir="$STATE_ROOT/$RUN_ID"
+      mkdir -p "$run_dir"
+      node "$WORKER_ENTRY" --issue "$ISSUE" --run-id "$RUN_ID" \
+        > "$run_dir/triage.json"
+  - id: decide
+    depends: triage
+    action: human.task
+    with:
+      prompt: "Approve or reject fixture triage."
+      form:
+        type: object
+        properties:
+          DECISION:
+            type: string
+            enum: [APPROVE, REJECT]
+        required: [DECISION]
+  - id: record
+    depends: decide
+    env:
+      - DECISION: ${steps.decide.outputs.DECISION}
+    run: |
+      set -eu
+      case "$DECISION" in APPROVE|REJECT) ;; *) exit 1 ;; esac
+      printf '{"schemaVersion":1,"runId":"%s","decision":"%s"}\n' \
+        "$RUN_ID" "$DECISION" > "$STATE_ROOT/$RUN_ID/decision.json"
