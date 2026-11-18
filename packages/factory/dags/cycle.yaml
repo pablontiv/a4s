@@ -74,12 +74,12 @@ steps:
       - {name: commit}
       - {name: findings}
       - {name: worktree}
+    # an empty LINES makes the station use the lines.json next to it
     run: |
-      lines="$LINES"; [ -n "$lines" ] || lines="$FACTORY/lines.json"
       exec node "$FACTORY/src/station.mjs" --line impl \
         --issue "$ISSUE" --run "$DAG_RUN_ID" --project "$WT" \
         --brief "$ISSUE_STATE/brief.md" --t3-home "$T3_HOME" \
-        --state "$STATE" --lines "$lines"
+        --state "$STATE" --lines "$LINES"
 
   - id: require_pass
     depends: implement

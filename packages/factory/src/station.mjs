@@ -4,7 +4,8 @@
 //   0 pass or blocked (see output `result`) · 10 worker fail/timeout · 30 infra · 40 malformed verdict
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { EXIT, OUTPUT_KEYS, isUnreachable, killThread, parseVerdict, exitFor, resolveT3, threadPhase } from "./lib.mjs";
 
@@ -16,7 +17,7 @@ const { values: a } = parseArgs({ options: {
   continue: { type: "string" }, cancel: { type: "string", default: "kill" },
   "reattach-sec": { type: "string", default: "300" }, "stable-sec": { type: "string", default: "12" },
 } });
-for (const k of ["line", "issue", "project", "t3-home", "state", "lines"]) {
+for (const k of ["line", "issue", "project", "t3-home", "state"]) {
   if (!a[k]) { console.error(`missing --${k}`); process.exit(EXIT.MALFORMED); }
 }
 
@@ -37,7 +38,8 @@ const stFile = join(stDir, `${a.line}.json`);
 const st = existsSync(stFile) ? JSON.parse(readFileSync(stFile, "utf8")) : { attempts: [] };
 const save = () => writeFileSync(stFile, JSON.stringify(st, null, 1));
 
-const line = JSON.parse(readFileSync(a.lines, "utf8")).lines?.[a.line];
+const linesPath = a.lines || join(dirname(fileURLToPath(import.meta.url)), "..", "lines.json");
+const line = JSON.parse(readFileSync(linesPath, "utf8")).lines?.[a.line];
 if (!line) { log("unknown line"); process.exit(EXIT.MALFORMED); }
 
 const t3info = resolveT3(T3_HOME, process.env.T3_VERSIONS_DIR);

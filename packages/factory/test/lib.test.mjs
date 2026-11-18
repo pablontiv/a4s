@@ -66,3 +66,9 @@ test("an absolute prompt path is kept absolute", () => {
   writeFileSync(p, JSON.stringify({ lines: { impl: { provider: "pi-impl", instance: { prompt: "/abs/impl.md" } } } }));
   assert.ok(instancesFromLines(p, "/bin/pi")["pi-impl"].config.launchArgs.endsWith("--append-system-prompt /abs/impl.md"));
 });
+
+test("the cycle passes LINES straight through (no shell variables Dagu could expand)", () => {
+  const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
+  assert.ok(dag.includes('--lines "$LINES"'));
+  assert.ok(!dag.includes('lines="$LINES"'));
+});
