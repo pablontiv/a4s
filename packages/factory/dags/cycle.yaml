@@ -3,6 +3,8 @@
 # -> operator click -> integrate -> close. Control is deterministic here;
 # interpretation happens in the worker and arrives as a structured verdict.
 type: graph
+# bash features (${!var}) are used; Dagu's default shell may be sh
+shell: bash
 # PRIMARY/FACTORY/T3_HOME/STATE: when empty, each step falls back to A4S_* declared
 # in Dagu's base config `env:` (param defaults are not expanded by Dagu).
 params:

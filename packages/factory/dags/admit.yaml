@@ -3,6 +3,8 @@
 # become factory runs (run-id factory-issue-<n>) of cycle.yaml. Duplicates are
 # rejected by Dagu and are not errors. The label `factory` never admits.
 type: graph
+# bash features (${!var}) are used; Dagu's default shell may be sh
+shell: bash
 schedule: "*/5 * * * *"
 # PRIMARY/FACTORY/T3_HOME/STATE: when empty, resolved from A4S_* declared in
 # Dagu's base config `env:` (param defaults are not expanded by Dagu).

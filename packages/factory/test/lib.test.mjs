@@ -79,3 +79,10 @@ test("prepare rebases a reused worktree onto the trunk and a rejection fails the
   assert.ok(dag.includes('git -C "$WT" rebase -q "$BASE"'));
   assert.match(dag, /id: rejected[\s\S]*expected: REJECT[\s\S]*exit 1/);
 });
+
+test("factory DAGs run under bash (they use ${!var})", () => {
+  for (const f of ["cycle.yaml", "admit.yaml"]) {
+    const dag = readFileSync(join(FACTORY, "dags", f), "utf8");
+    assert.match(dag, /^shell: bash$/m, f);
+  }
+});

@@ -15,7 +15,9 @@ const FACTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEEP = process.env.SELFTEST_KEEP === "1";
 const MODEL = process.env.SELFTEST_MODEL ?? "anthropic/claude-haiku-5-5";
 const PI_BIN = process.env.PI_BIN ?? join(homedir(), "bin", "pi");
-const DAGU_BIN = process.env.DAGU_BIN ?? "dagu";
+// Same Dagu as the operator's service (on PATH), not the gate's DAGU_BIN: packaged builds
+// differ (e.g. the default shell), and the selftest must catch what production would hit.
+const DAGU_BIN = process.env.FACTORY_DAGU_BIN ?? "dagu";
 const VERSIONS = process.env.T3_VERSIONS_DIR ?? join(homedir(), ".t3", "runtime", "versions");
 const log = (...m) => console.error("[selftest]", ...m);
 const sh = (cmd, args, opts = {}) => {
