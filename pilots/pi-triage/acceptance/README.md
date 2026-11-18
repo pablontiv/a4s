@@ -8,9 +8,12 @@ node pilots/pi-triage/acceptance/run.mjs --fixture
 
 # Corte vertical real; el worker sigue usando el proveedor fixture.
 node pilots/pi-triage/acceptance/run.mjs --e2e
+
+# Misma estación aislada, usando el adaptador del supervisor en vez de la UI de T3.
+node --test pilots/pi-triage/acceptance/supervisor.integration.test.mjs
 ```
 
-`--e2e` es el modo por defecto. Solo usa `.workspace/dagu/pilot/pi-triage-slice.yaml` y `pilots/pi-triage/worker/triage.mjs`. Si alguno falta, devuelve `BLOCKED E2E` (código 2); un `PASS FIXTURE` no cubre los componentes reales. Si `dagu` en `PATH` es un wrapper que carga credenciales o apunta a una estación, el harness lo rechaza sin ejecutarlo: usa `DAGU_BIN=/ruta/al/binario/dagu`.
+`--e2e` es el modo por defecto. Usa `.workspace/dagu/pilot/pi-triage-slice.yaml`, su compañero `pi-triage-slice.mjs` y `pilots/pi-triage/worker/triage.mjs`. Si alguno falta, devuelve `BLOCKED E2E` (código 2); un `PASS FIXTURE` no cubre los componentes reales. Si `dagu` en `PATH` es un wrapper que carga credenciales o apunta a una estación, el harness lo rechaza sin ejecutarlo: usa `DAGU_BIN=/ruta/al/binario/dagu`.
 
 ## Qué comprueba la prueba automática
 
@@ -19,7 +22,9 @@ node pilots/pi-triage/acceptance/run.mjs --e2e
 - Duplicado: Dagu 2.26.0 devuelve `alreadyCompleted` al repetir la misma decisión sin encolar ni reanudar; cambiar el valor devuelve `409`. No cambian el estado persistido ni `decision.json`.
 - Independencia: un proceso cliente inicia un tercer run. Se cierra solo ese cliente durante `Waiting`; otro cliente observa el mismo run y lo completa. Esto prueba la persistencia en Dagu, no la integración de la interfaz T3.
 
-Cada invocación crea `DAGU_HOME` y `STATE_ROOT` privados, escribe `${DAGU_HOME}/.a4s-pi-triage-slice`, copia únicamente el DAG bajo prueba y arranca Dagu con config explícita en un puerto libre de `127.0.0.1`. Usa un prefijo HTTP aleatorio. El scheduler procesa la continuación de `human.task`; no se levanta un coordinador. Los procesos reciben un entorno reducido sin `DAGU_*` heredadas, credenciales ni configuración de usuario. La config base privada aporta la variable opt-in a los pasos de Dagu sin editar el DAG. Hay bloqueos en `PATH` para `omp`, `tern`, `gh` y `git`: invocarlos falla la prueba. No requiere OMP, Tern, T3, GitHub ni proveedor real.
+La prueba del adaptador usa los perfiles `supervise` y `observe` con Dagu real: inicio manual, consulta de la espera, rechazo de un token obsoleto, denegación del diálogo simulado, aprobación y veredicto. No prueba el diálogo del compositor ni el programador de T3.
+
+Cada invocación crea `DAGU_HOME` y `STATE_ROOT` privados, escribe `${DAGU_HOME}/.a4s-pi-triage-slice`, copia únicamente el DAG bajo prueba con su compañero, si corresponde, y arranca Dagu con config explícita en un puerto libre de `127.0.0.1`. El harness usa un prefijo HTTP aleatorio; la prueba del adaptador usa `/api/v1` sin prefijo, como el perfil del supervisor. El scheduler procesa la continuación de `human.task`; no se levanta un coordinador. Los procesos reciben un entorno reducido sin `DAGU_*` heredadas, credenciales ni configuración de usuario. La config base privada aporta la variable opt-in a los pasos de Dagu sin editar el DAG. Hay bloqueos en `PATH` para `omp`, `tern`, `gh` y `git`: invocarlos falla la prueba. No requiere OMP, Tern, T3, GitHub ni proveedor real.
 
 Al terminar o ante `SIGINT`/`SIGTERM`, el harness detiene los runs activos que inició, cierra su estación y elimina su directorio temporal. No usa ni limpia la estación del operador. Las aserciones leen los artefactos antes del teardown; ante un fallo se muestran los logs de la estación privada.
 

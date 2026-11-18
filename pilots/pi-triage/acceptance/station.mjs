@@ -3,13 +3,13 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import {
-  accessSync, closeSync, constants, copyFileSync, mkdirSync, mkdtempSync, openSync,
+  accessSync, chmodSync, closeSync, constants, copyFileSync, mkdirSync, mkdtempSync, openSync,
   readFileSync, readSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { basename, delimiter, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export const dagName = "pi-triage-slice";
@@ -117,14 +117,15 @@ export async function poll(description, read, accept, signal, timeout = 20_000) 
   assert.fail(`${description}: timeout; última observación ${JSON.stringify(observation)}`);
 }
 
-export async function withStation(definition, signal, run) {
+export async function withStation(definition, signal, run, { companions = [], prefixApi = true } = {}) {
   const binary = nativeDagu();
   const root = mkdtempSync(resolve(tmpdir(), "a4s-pi-triage-"));
   const home = join(root, "dagu"), state = join(root, "state"), bin = join(root, "bin");
   const dags = join(home, "dags"), config = join(home, "config.yaml"), baseConfig = join(home, "base.yaml");
   const marker = join(home, ".a4s-pi-triage-slice"), forbidden = join(root, "forbidden-command");
   const token = randomUUID();
-  const base = `/a4s-pi-triage-${token}`;
+  const base = prefixApi ? `/a4s-pi-triage-${token}` : "";
+  const dagFile = join(dags, `${dagName}.yaml`);
   const runs = new Set();
   let station, ready = false, origin, owned = false;
   try {
@@ -139,7 +140,11 @@ export async function withStation(definition, signal, run) {
     for (const command of ["omp", "tern", "gh", "git"]) {
       writeFileSync(join(bin, command), `#!/bin/sh\nprintf '%s\\n' ${command} >> "$A4S_PILOT_FORBIDDEN"\nexit 127\n`, { mode: 0o700 });
     }
-    copyFileSync(definition, join(dags, `${dagName}.yaml`));
+    for (const [source, destination] of [[definition, dagFile],
+      ...companions.map((companion) => [companion, join(dags, basename(companion))])]) {
+      copyFileSync(source, destination, constants.COPYFILE_EXCL);
+      chmodSync(destination, 0o600);
+    }
     const port = await loopbackPort();
     origin = `http://${loopback}:${port}${base}`;
     // Dagu 2.26's HTTP launcher does not forward arbitrary server env to steps.
@@ -148,7 +153,7 @@ export async function withStation(definition, signal, run) {
       `env:\n  - A4S_PI_TRIAGE_FIXTURE: "1"\n  - A4S_PILOT_FORBIDDEN: ${JSON.stringify(forbidden)}\n`,
       { mode: 0o600 });
     writeFileSync(config, [
-      `host: ${loopback}`, `port: ${port}`, `base_path: ${base}`, "paths:",
+      `host: ${loopback}`, `port: ${port}`, ...(base ? [`base_path: ${base}`] : []), "paths:",
       `  base_config: ${JSON.stringify(baseConfig)}`, "auth:", "  mode: none",
       "skip_examples: true", "coordinator:", "  enabled: false", "queues:", "  enabled: true",
       "scheduler:", "  port: 0", "",
@@ -183,7 +188,7 @@ export async function withStation(definition, signal, run) {
     }, (body) => body?.includes(dagName), signal, 10_000);
     ready = true;
     await run({
-      opts, request, origin, state, runs,
+      opts, request, origin, state, runs, sandbox: { binary, home, config, dagFile, port, bin },
       worker: (entry, runId) => checked(
         launch(process.execPath, [entry, "--issue", issue, "--run-id", runId], opts),
         "Worker fixture", 10_000, signal),

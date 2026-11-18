@@ -171,7 +171,8 @@ if (args.length > 1 || (args.length === 1 && !["--fixture", "--e2e"].includes(ar
 const fixture = args[0] === "--fixture";
 const definition = path(fixture ? "./fixtures/pi-triage-slice.yaml" : "../../../.workspace/dagu/pilot/pi-triage-slice.yaml");
 const worker = path(fixture ? "./fixtures/triage.mjs" : "../worker/triage.mjs");
-const missing = [definition, worker].filter((entry) => !existsSync(entry));
+const companions = fixture ? [] : [path("../../../.workspace/dagu/pilot/pi-triage-slice.mjs")];
+const missing = [definition, ...companions, worker].filter((entry) => !existsSync(entry));
 if (missing.length > 0) {
   const problem = fixture ? "FAIL FIXTURE: faltan fixtures" : "BLOCKED E2E: faltan componentes reales";
   console.error(`${problem}:\n${missing.join("\n")}`);
@@ -186,7 +187,7 @@ const handlers = new Map([["SIGINT", 130], ["SIGTERM", 143]].map(([signal, exitC
 for (const [signal, handler] of handlers) process.on(signal, handler);
 try {
   console.log(`Inicio ${mode}`);
-  await withStation(definition, abort.signal, (station) => acceptance(station, worker, abort.signal));
+  await withStation(definition, abort.signal, (station) => acceptance(station, worker, abort.signal), { companions });
   abort.signal.throwIfAborted();
   console.log(`PASS ${mode}`);
 } catch (error) {
