@@ -32,8 +32,9 @@ params:
   # close the GitHub issue after integrating
   - name: CLOSE_ISSUE
     default: "true"
-  # optional line table override (the selftest uses a cheap model)
-  - name: LINES
+  # optional line table override (the selftest uses a cheap model).
+  # Not named LINES: shells export LINES (terminal height), e.g. "0" under Dagu.
+  - name: LINE_TABLE
     default: ""
 env:
   - WT: ${PRIMARY}/.workspace/worktrees/issue-${ISSUE}
@@ -74,12 +75,12 @@ steps:
       - {name: commit}
       - {name: findings}
       - {name: worktree}
-    # an empty LINES makes the station use the lines.json next to it
+    # an empty LINE_TABLE makes the station use the lines.json next to it
     run: |
       exec node "$FACTORY/src/station.mjs" --line impl \
         --issue "$ISSUE" --run "$DAG_RUN_ID" --project "$WT" \
         --brief "$ISSUE_STATE/brief.md" --t3-home "$T3_HOME" \
-        --state "$STATE" --lines "$LINES"
+        --state "$STATE" --lines "$LINE_TABLE"
 
   - id: require_pass
     depends: implement

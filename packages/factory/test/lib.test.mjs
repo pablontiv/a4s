@@ -67,8 +67,8 @@ test("an absolute prompt path is kept absolute", () => {
   assert.ok(instancesFromLines(p, "/bin/pi")["pi-impl"].config.launchArgs.endsWith("--append-system-prompt /abs/impl.md"));
 });
 
-test("the cycle passes LINES straight through (no shell variables Dagu could expand)", () => {
+test("the cycle never uses LINES (shells export it as the terminal height)", () => {
   const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
-  assert.ok(dag.includes('--lines "$LINES"'));
-  assert.ok(!dag.includes('lines="$LINES"'));
+  assert.ok(dag.includes('--lines "$LINE_TABLE"'));
+  assert.ok(!/\$LINES\b|name: LINES\b/.test(dag));
 });

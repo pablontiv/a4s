@@ -81,7 +81,7 @@ try {
   // 4. run the cycle
   const runId = `selftest${Date.now()}`;
   const params = [`ISSUE=st1`, `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state")}`,
-    `BRIEF_FILE=${brief}`, `GATE=node test.mjs`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINES=${linesPath}`];
+    `BRIEF_FILE=${brief}`, `GATE=node test.mjs`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINE_TABLE=${linesPath}`];
   const cycle = spawn(DAGU_BIN, ["start", "--dagu-home", daguHome, "--config", join(daguHome, "config.yaml"), "--run-id", runId, join(FACTORY, "dags", "cycle.yaml"), "--", ...params], { stdio: ["ignore", openSync(join(root, "cycle.log"), "a"), openSync(join(root, "cycle.log"), "a")], env });
   procs.push(cycle);
   const status = async () => (await (await fetch(`${api}/dag-runs/cycle/${runId}`)).json()).dagRunDetails;
