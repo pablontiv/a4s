@@ -70,14 +70,29 @@ export function moveLabel(src, n, to, comment) {
   src.set(n, add.filter((l) => !current.includes(l)), STATE_LABELS.filter((l) => !add.includes(l) && current.includes(l)), comment);
 }
 
-// ---- run bookkeeping: $STATE/<n>/attempts.json = {last, streak, parked} ----
+// ---- run bookkeeping: $STATE/<n>/attempts.json = {last, streak, parked, lastAt, resetBy?, resetAt?, held?} ----
 const attemptsFile = (state, n) => join(state, String(n), "attempts.json");
 export const readAttempts = (state, n) => ({ last: 0, streak: 0, parked: false, ...readJson(attemptsFile(state, n), {}) });
 
-/** Next attempt number k and run count since the last human decision; persisted so a crash never reuses a run-id. */
-export function reserveAttempt(state, n) {
+/** Remember that the admit step saw `factory:hold` on the issue: the next admission is a fresh run budget. */
+export function markHeld(state, n) {
+  mkdirSync(join(state, String(n)), { recursive: true });
+  writeJson(attemptsFile(state, n), { ...readAttempts(state, n), held: true });
+}
+
+/**
+ * Next attempt number k and run count since the last human decision; persisted so a crash never reuses a run-id.
+ * A human decision is a park (needs-human, then ready) or a hold (`held`: the admit step saw it, or the caller found it
+ * in the label history); either resets `streak` to 1 and records `resetBy` / `resetAt`.
+ */
+export function reserveAttempt(state, n, { held = false } = {}) {
   const prev = readAttempts(state, n);
-  const next = { last: prev.last + 1, streak: prev.parked ? 1 : prev.streak + 1, parked: false };
+  const now = new Date().toISOString();
+  const resetBy = prev.parked ? "needs-human" : (held || prev.held) ? "hold" : null;
+  const { held: _h, ...keep } = prev;
+  const next = resetBy
+    ? { ...keep, last: prev.last + 1, streak: 1, parked: false, resetBy, resetAt: now, lastAt: now }
+    : { ...keep, last: prev.last + 1, streak: prev.streak + 1, parked: false, lastAt: now };
   writeJson(attemptsFile(state, n), next);
   return { k: next.last, prev };
 }
@@ -149,7 +164,7 @@ export function finishRun(src, { issue, state, run, steps }) {
     writeJson(attemptsFile(state, issue), { ...at, parked: true });
     moveLabel(src, issue, "needs-human", [
       `Factory: run ${run} needs a human.`,
-      `- Outcome: ${outcome}${outcome === "blocked" ? "" : ` (run ${at.streak} of ${MAX_RUNS})`}`,
+      `- Outcome: ${outcome}${outcome === "blocked" ? "" : ` (run ${at.streak} of ${MAX_RUNS} since ${at.resetAt ? `${at.resetBy} reset at ${at.resetAt}` : "the first run"})`}`,
       `- Failed step: ${failed}`,
       `- Question: ${question || (findings.length ? findings.join("; ") : "none; see the run log")}`,
       "",

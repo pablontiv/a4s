@@ -4,8 +4,8 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { admit, EXIT, repoSlug, shouldClearCarry } from "../src/admit.mjs";
-import { carrySection, finishRun, labelNames, moveLabel, readAttempts, source, writeCarry } from "../src/labels.mjs";
+import { admit, EXIT, heldSinceLastRun, repoSlug, shouldClearCarry } from "../src/admit.mjs";
+import { carrySection, finishRun, labelNames, markHeld, moveLabel, readAttempts, source, writeCarry } from "../src/labels.mjs";
 import { decideAfterFailure, isRetryable, OUTCOMES } from "../src/lib.mjs";
 
 const BODY = "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n";
@@ -246,4 +246,52 @@ test("carry-over: live admission reads factory:hold from the GitHub label histor
   assert.equal(shouldClearCarry(o, issue, { parked: false }, null, gh("")), false);
   assert.equal(repoSlug("git@github.com:acme/widgets.git"), "acme/widgets");
   assert.equal(repoSlug("acme/widgets"), "acme/widgets");
+});
+
+const failRun = (f, k) => { seedImpl(f, "fail"); assert.equal(run(f), EXIT.ADMITTED); return finishRun(f.src, { issue: 9, state: f.state, run: `factory-issue-9-${k}`, steps: "prepare=succeeded,implement=failed" }); };
+const setLabels = (f, labels, extra = {}) => writeFileSync(f.file, JSON.stringify([{ number: 9, labels: labels.map((name) => ({ name })), body: BODY, ...extra }]));
+
+test("run budget: fail, fail, hold -> ready -> fail stays retryable (streak 1, resetBy hold)", () => {
+  const f = fixture();
+  assert.equal(failRun(f, 1).to, "ready");
+  assert.equal(failRun(f, 2).to, "ready");
+  setLabels(f, ["factory:hold", "factory:ready"]); // held, then re-admitted with hold still seen by the admit step
+  const r = failRun(f, 3);
+  assert.equal(r.to, "ready");
+  const at = readAttempts(f.state, 9);
+  assert.equal(at.streak, 1);
+  assert.equal(at.resetBy, "hold");
+  assert.ok(at.resetAt);
+});
+
+test("run budget: hold seen by --clear-held (markHeld) or in the label history resets the streak", () => {
+  const f = fixture();
+  failRun(f, 1);
+  markHeld(f.state, 9);
+  failRun(f, 2);
+  assert.deepEqual([readAttempts(f.state, 9).streak, readAttempts(f.state, 9).resetBy], [1, "hold"]);
+  assert.equal(readAttempts(f.state, 9).held, undefined);
+  failRun(f, 3);
+  assert.equal(readAttempts(f.state, 9).streak, 2); // no human decision: keeps counting
+  // history: hold labelled after the last run
+  const o = { issue: "9", issuesFile: "/x" };
+  const issue = { number: 9, labels: ["factory:ready"], events: [{ event: "labeled", label: { name: "factory:hold" }, created_at: "2026-01-03T00:00:00Z" }] };
+  assert.equal(heldSinceLastRun(o, issue, { lastAt: "2026-01-02T00:00:00Z" }, null), true);
+  assert.equal(heldSinceLastRun(o, issue, { lastAt: "2026-01-04T00:00:00Z" }, null), false);
+});
+
+test("run budget: an admission without a human decision keeps counting; needs-human at run 3 says since", () => {
+  const f = fixture();
+  for (let k = 1; k <= 3; k++) {
+    const r = failRun(f, k);
+    assert.equal(r.to, k < 3 ? "ready" : "needs-human");
+    assert.equal(readAttempts(f.state, 9).streak, k);
+  }
+  const comment = JSON.parse(readFileSync(f.file, "utf8"))[0].comments.at(-1);
+  assert.match(comment, /run 3 of 3 since the first run/);
+  moveLabel(f.src, 9, "ready"); // park: needs-human path unchanged
+  failRun(f, 4);
+  const at = readAttempts(f.state, 9);
+  assert.deepEqual([at.streak, at.resetBy], [1, "needs-human"]);
+  assert.ok(at.resetAt);
 });

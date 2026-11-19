@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkIssue } from "./issue-contract.mjs";
-import { archiveStaleStations, clearCarry, moveLabel, readCarry, releaseAttempt, reserveAttempt, source } from "./labels.mjs";
+import { archiveStaleStations, clearCarry, markHeld, moveLabel, readAttempts, readCarry, releaseAttempt, reserveAttempt, source } from "./labels.mjs";
 
 export const ADMIT_LABEL = "factory:ready";
 export const EXIT = Object.freeze({ ADMITTED: 0, NOT_LABELLED: 20, DUPLICATE: 21, CONTRACT: 22, INFRA: 30 });
@@ -52,6 +52,15 @@ export function shouldClearCarry(o, issue, prev, carry, gh) {
   if (Number.isNaN(since)) return false;
   try { return holdEvents(o, issue, gh).some((t) => Date.parse(t) >= since); }
   catch (e) { console.error(`admit: ${e.message}; carried findings dropped`); return true; }
+}
+
+/** The issue is labelled factory:hold now, or was labelled after the last run (attempts.lastAt, else carry.at). An unreadable history counts as held. */
+export function heldSinceLastRun(o, issue, attempts, carry, gh) {
+  if (isHeld(issue)) return true;
+  const since = Date.parse(attempts?.lastAt ?? carry?.at ?? "");
+  if (Number.isNaN(since)) return false;
+  try { return holdEvents(o, issue, gh).some((t) => Date.parse(t) >= since); }
+  catch (e) { console.error(`admit: ${e.message}; run budget reset`); return true; }
 }
 
 /** True when Dagu's enqueue failure means the run-id already exists. */
@@ -102,7 +111,7 @@ export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
   let k = 1, prev = null, src;
   try {
     src = o.live ? source({ repo: o.repo }) : source({ issuesFile: o.issuesFile, repo: o.repo });
-    if (o.state) { archiveStaleStations(o.state, o.issue); ({ k, prev } = reserveAttempt(o.state, o.issue)); if (shouldClearCarry(o, issue, prev, readCarry(o.state, o.issue))) clearCarry(o.state, o.issue); }
+    if (o.state) { archiveStaleStations(o.state, o.issue); ({ k, prev } = reserveAttempt(o.state, o.issue, { held: heldSinceLastRun(o, issue, readAttempts(o.state, o.issue), readCarry(o.state, o.issue)) })); if (shouldClearCarry(o, issue, prev, readCarry(o.state, o.issue))) clearCarry(o.state, o.issue); }
     moveLabel(src, o.issue, "running");
   } catch (e) {
     if (prev) releaseAttempt(o.state, o.issue, prev);
@@ -136,7 +145,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (o.clearHeld) {
     try {
       if (!o.state) throw new Error("--state is required");
-      for (const i of JSON.parse(readFileSync(o.clearHeld, "utf8"))) if (isHeld(i)) { clearCarry(o.state, i.number); console.log(`hold #${i.number}: carry cleared`); }
+      for (const i of JSON.parse(readFileSync(o.clearHeld, "utf8"))) if (isHeld(i)) { clearCarry(o.state, i.number); markHeld(o.state, i.number); console.log(`hold #${i.number}: carry cleared, run budget reset on next admission`); }
       process.exit(0);
     } catch (e) { console.error(`admit: ${e.message}`); process.exit(EXIT.INFRA); }
   }
