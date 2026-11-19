@@ -17,6 +17,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = 1;
 export const EXIT_OPEN = 40;
 export const UNREACHABLE_MIN = 30;
+export const CI_TIMEOUT_MIN = 30;
 export const SERVICES = Object.freeze(["dagu", "t3"]);
 const MIN = 60_000;
 const ms = (v) => (typeof v === "number" ? v : Date.parse(v));
@@ -44,7 +45,80 @@ export const CONDITIONS = {
     },
     clears: (snapshot) => SERVICES.every((n) => snapshot?.services?.[n]?.reachable === true),
   },
+  // CI of the current main commit. No `clears`: only `reset` closes it. Absent snapshot.ci = not collected.
+  ci: {
+    detect(snapshot, state, now) {
+      const ci = snapshot?.ci;
+      if (!ci) return [];
+      const limit = (Number(ci.timeoutMin) > 0 ? Number(ci.timeoutMin) : CI_TIMEOUT_MIN) * MIN;
+      if (ci.lookupFailed) {
+        const since = ci.failingSince ? ms(ci.failingSince) : now;
+        return now - since > limit ? [{ kind: "ci", detail: `CI lookup of main keeps failing for more than ${limit / MIN} min (${ci.error ?? "unknown"})`, since: iso(since) }] : [];
+      }
+      const short = String(ci.sha).slice(0, 12);
+      const at = ms(ci.commitTime);
+      if (ci.status === "failure") return [{ kind: "ci", detail: `CI of current main ${short} is failing`, since: iso(at) }];
+      if ((ci.status === "none" || ci.status === "pending") && now - at > limit) {
+        return [{ kind: "ci", detail: `no finished CI for current main ${short} ${limit / MIN} min after the commit (${ci.status})`, since: iso(at + limit) }];
+      }
+      return []; // success, or in progress / not yet started under the timeout
+    },
+  },
 };
+
+const GREEN = new Set(["success", "skipped", "neutral"]);
+
+/**
+ * CI of the CURRENT main commit. Sources are injected: `git(args[]) -> stdout` and `gh(args[]) -> stdout`, both
+ * throwing on failure. Returns the snapshot's `ci`:
+ *   {lookupFailed:true, error, timeoutMin}                         fetch/gh/parse failed: never a pass
+ *   {sha, commitTime, status: "success"|"failure"|"pending"|"none", timeoutMin}
+ * Only runs whose headSha equals the current SHA count; CI of any other commit is ignored.
+ * A failed `git fetch` is a lookup failure: a stale origin/main is not proof of health.
+ */
+export function collectCi({ git, gh, branch = "main", remote = "origin", env = {} }) {
+  const timeoutMin = Number(env.CI_TIMEOUT_MIN) > 0 ? Number(env.CI_TIMEOUT_MIN) : CI_TIMEOUT_MIN;
+  const fail = (what, e) => ({ lookupFailed: true, error: `${what}: ${String(e?.message ?? e).split("\n")[0]}`, timeoutMin });
+  let sha, commitTime;
+  try { git(["fetch", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`]); } catch (e) { return fail("git fetch failed", e); }
+  try {
+    sha = String(git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
+    commitTime = String(git(["show", "-s", "--format=%cI", sha])).trim();
+    if (!/^[0-9a-f]{7,64}$/i.test(sha) || Number.isNaN(Date.parse(commitTime))) throw new Error("unexpected git output");
+  } catch (e) { return fail("cannot resolve main commit", e); }
+  let runs;
+  try {
+    runs = JSON.parse(String(gh(["run", "list", "--commit", sha, "--limit", "100", "--json", "headSha,status,conclusion"])));
+    if (!Array.isArray(runs)) throw new Error("unexpected gh output");
+  } catch (e) { return fail("GitHub lookup failed", e); }
+  runs = runs.filter((r) => r && String(r.headSha).toLowerCase() === sha.toLowerCase());
+  let status = "success";
+  if (runs.length === 0) status = "none";
+  else if (runs.some((r) => r.status === "completed" && !GREEN.has(r.conclusion))) status = "failure";
+  else if (runs.some((r) => r.status !== "completed")) status = "pending";
+  return { sha, commitTime, status, timeoutMin };
+}
+
+/** Live sources: git and gh run in `cwd` (the primary checkout). */
+export function liveSources(cwd) {
+  const run = (cmd) => (args) => {
+    const r = spawnSync(cmd, args, { cwd, encoding: "utf8", timeout: 60_000 });
+    if (r.error || r.status !== 0) throw new Error(r.error?.message ?? (r.stderr || `${cmd} exit ${r.status}`));
+    return r.stdout;
+  };
+  return { git: run("git"), gh: run("gh") };
+}
+
+/** Remembers since when lookups fail ($STATE/ci-tracking.json); cleared by a successful lookup. */
+export function trackCi(stateDir, ci, now) {
+  if (!ci) return ci;
+  const f = join(stateDir, "ci-tracking.json");
+  const mem = readJson(f, {});
+  if (!ci.lookupFailed) { writeJson(f, {}); return ci; }
+  const failingSince = ci.failingSince ?? mem.failingSince ?? iso(now);
+  writeJson(f, { failingSince });
+  return { ...ci, failingSince };
+}
 
 /**
  * Pure. `state` is the stored breaker state (or {invalid:true} when the file was corrupt/unknown version).
@@ -178,7 +252,8 @@ export async function check(o, env = process.env) {
   const prev = readState(o.state);
   const now = o.now ?? Date.now();
   const raw = o.snapshot ? readJson(o.snapshot, {}) : { services: await probeServices({ t3Home: o.t3Home, env, daguHome: o.daguHome, daguConfig: o.daguConfig }) };
-  const snap = trackServices(o.state, raw, now);
+  if (!o.snapshot) raw.ci = collectCi({ ...liveSources(o.primary || process.cwd()), env });
+  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now) };
   const { open, reasons } = evaluate(snap, prev, now);
   const wasOpen = prev.invalid ? false : prev.open;
   const keep = prev.invalid ? { resetBy: null, resetAt: null } : prev;

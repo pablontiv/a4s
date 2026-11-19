@@ -186,3 +186,109 @@ test("state missing resetBy/resetAt is invalid and rebuilt complete", async () =
   assert.equal(f.reasons[0].kind, "state-invalid");
   assert.ok("resetBy" in f && "resetAt" in f);
 });
+
+// ---- ci condition ----
+import { collectCi, trackCi, CI_TIMEOUT_MIN } from "../src/breaker.mjs";
+const SHA = "a".repeat(40), OLD = "b".repeat(40);
+const src = ({ fetchFails, ghFails, runs = [], commitTime = ago(5) } = {}) => ({
+  git: (a) => {
+    if (a[0] === "fetch") { if (fetchFails) throw new Error("network"); return ""; }
+    if (a[0] === "rev-parse") { assert.ok(a.includes("FETCH_HEAD^{commit}")); return SHA + "\n"; }
+    return commitTime + "\n";
+  },
+  gh: (a) => { if (ghFails) throw new Error("gh down"); assert.ok(a.includes(SHA)); return JSON.stringify(runs); },
+});
+const run = (headSha, status, conclusion) => ({ headSha, status, conclusion });
+const ciEval = (ci, state = closed) => evaluate({ services: { dagu: up, t3: up }, ci }, state, NOW);
+
+test("ci: failing CI on current SHA opens", () => {
+  const ci = collectCi({ ...src({ runs: [run(SHA, "completed", "failure")] }) });
+  assert.equal(ci.status, "failure");
+  const r = ciEval(ci);
+  assert.equal(r.open, true);
+  assert.equal(r.reasons[0].kind, "ci");
+});
+test("ci: failing commit reverted by a later green commit closes", () => {
+  const ci = collectCi({ ...src({ runs: [run(SHA, "completed", "success"), run(OLD, "completed", "failure")] }) });
+  assert.equal(ci.status, "success");
+  assert.equal(ciEval(ci).open, false);
+});
+test("ci: none for current SHA past the timeout opens; older green does not mask it", () => {
+  const ci = collectCi({ ...src({ commitTime: ago(31), runs: [run(OLD, "completed", "success")] }) });
+  assert.equal(ci.status, "none");
+  assert.equal(ciEval(ci).open, true);
+  assert.equal(ciEval(collectCi({ ...src({ commitTime: ago(29), runs: [run(OLD, "completed", "success")] }) })).open, false);
+});
+test("ci: CI_TIMEOUT_MIN is configurable, default 30", () => {
+  assert.equal(CI_TIMEOUT_MIN, 30);
+  const ci = collectCi({ ...src({ commitTime: ago(11) }), env: { CI_TIMEOUT_MIN: "10" } });
+  assert.equal(ci.timeoutMin, 10);
+  assert.equal(ciEval(ci).open, true);
+});
+test("ci: failed fetch / gh lookup is a lookup failure, never a pass; counts toward the timeout", () => {
+  for (const o of [{ fetchFails: true }, { ghFails: true }]) {
+    const ci = collectCi({ ...src(o) });
+    assert.equal(ci.lookupFailed, true);
+    assert.equal(ciEval({ ...ci, failingSince: ago(29) }).open, false);
+    const r = ciEval({ ...ci, failingSince: ago(31) });
+    assert.equal(r.open, true);
+    assert.equal(r.reasons[0].since, ago(31));
+  }
+});
+test("ci: stale origin/main after failed fetch is not proof of health (green stale data is not returned)", () => {
+  const ci = collectCi({ git: src({ fetchFails: true }).git, gh: () => JSON.stringify([run(SHA, "completed", "success")]) });
+  assert.equal(ci.lookupFailed, true);
+  assert.equal(ci.status, undefined);
+});
+test("ci: malformed gh output is a lookup failure", () => {
+  assert.equal(collectCi({ git: src().git, gh: () => "not json" }).lookupFailed, true);
+});
+test("ci: in progress under the timeout closes", () => {
+  const ci = collectCi({ ...src({ runs: [run(SHA, "in_progress", null)] }) });
+  assert.equal(ci.status, "pending");
+  assert.equal(ciEval(ci).open, false);
+});
+test("ci: pending past the timeout opens", () => {
+  assert.equal(ciEval(collectCi({ ...src({ commitTime: ago(40), runs: [run(SHA, "queued", null)] }) })).open, true);
+});
+test("ci: trackCi keeps failingSince across failures and clears on success", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ci-"));
+  const a = trackCi(dir, { lookupFailed: true }, NOW - 40 * 60_000);
+  const b = trackCi(dir, { lookupFailed: true }, NOW);
+  assert.equal(b.failingSince, a.failingSince);
+  assert.equal(ciEval(b).open, true);
+  trackCi(dir, { sha: SHA, status: "success" }, NOW);
+  assert.equal(trackCi(dir, { lookupFailed: true }, NOW).failingSince, new Date(NOW).toISOString());
+});
+test("ci: open reason never clears by itself, only reset", () => {
+  const open = ciEval({ sha: SHA, commitTime: ago(5), status: "failure", timeoutMin: 30 });
+  const state = { ...closed, open: true, reasons: open.reasons };
+  assert.equal(ciEval({ sha: SHA, commitTime: ago(5), status: "success", timeoutMin: 30 }, state).open, true);
+});
+test("ci: check with a snapshot whose current main has failing CI opens", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "cib-"));
+  const snap = join(dir, "s.json");
+  writeFileSync(snap, JSON.stringify({ services: { dagu: up, t3: up }, ci: { sha: SHA, commitTime: ago(5), status: "failure", timeoutMin: 30 } }));
+  const b = await check({ state: dir, snapshot: snap, factory: dir });
+  assert.equal(b.open, true);
+  assert.equal(b.reasons[0].kind, "ci");
+});
+
+test("ci: real git with a narrow remote.origin.fetch mapping still resolves the fetched main", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cig-"));
+  const g = (cwd, ...a) => { const r = spawnSync("git", a, { cwd, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  const origin = join(dir, "origin"), clone = join(dir, "clone");
+  g(dir, "init", "-q", "-b", "main", origin);
+  for (const c of ["user.email=a@b", "user.name=t"]) g(origin, "config", ...c.split("="));
+  g(origin, "commit", "-q", "--allow-empty", "-m", "one");
+  g(dir, "clone", "-q", origin, clone);
+  g(clone, "config", "remote.origin.fetch", "+refs/heads/other:refs/remotes/origin/other");
+  const stale = g(clone, "rev-parse", "origin/main");
+  g(origin, "commit", "-q", "--allow-empty", "-m", "two");
+  const fresh = g(origin, "rev-parse", "HEAD");
+  const seen = [];
+  const ci = collectCi({ git: (a) => g(clone, ...a), gh: (a) => { seen.push(a); return JSON.stringify([run(stale, "completed", "success")]); } });
+  assert.ok(seen[0].includes(fresh));
+  assert.equal(ci.sha, fresh);
+  assert.equal(ci.status, "none");
+});

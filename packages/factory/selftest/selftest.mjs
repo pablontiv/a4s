@@ -238,6 +238,12 @@ try {
   checks.breaker_open_enqueues_nothing = brAdm1.status === 0 && !queued(7201) && labelsOf(7201).includes("factory:ready") && brState().open === true;
   const rs = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
   checks.breaker_reset_records_who = rs.status === 0 && brState().open === false && brState().resetBy === "selftest" && !!brState().resetAt;
+  // ci condition: current main with failing CI opens the breaker (and admits nothing); reset closes it
+  const ciSnap = join(root, "breaker-ci-snapshot.json");
+  writeFileSync(ciSnap, JSON.stringify({ services: { dagu: { reachable: true }, t3: { reachable: true } }, ci: { sha: "c".repeat(40), commitTime: new Date().toISOString(), status: "failure", timeoutMin: 30 } }));
+  const ckCi = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", stateAd, "--snapshot", ciSnap, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: adEnv });
+  checks.breaker_ci_failing_main_opens = ckCi.status === 40 && brState().open === true && brState().reasons.some((r) => r.kind === "ci");
+  spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
   const brAdm2 = admitWithBreaker();
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
   log(JSON.stringify(checks));

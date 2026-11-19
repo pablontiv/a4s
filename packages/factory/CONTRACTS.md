@@ -100,6 +100,14 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 
 **Conditions.** `unreachable`: Dagu or T3 not reachable for more than 30 minutes (since the last time it was seen reachable). It clears by itself only when **both** `services.dagu.reachable === true` and `services.t3.reachable === true`; a missing service entry counts as unreachable.
 
+`ci`: CI of the **current** main commit (`collectCi` fetches `origin/main`, resolves its SHA and lists runs for exactly that headSha; CI of any other commit is never evidence; sources git/gh are injected). It never clears by itself (reset only). Snapshot `ci`: `{sha, commitTime, status: success|failure|pending|none, timeoutMin}` or `{lookupFailed, error, failingSince}`. `CI_TIMEOUT_MIN` (default 30). Edge cases:
+1. failing CI on the current SHA, not reverted → open.
+2. the failing commit was reverted by a later commit whose CI is green → the current SHA is green → closed.
+3. no finished CI for the current SHA more than `CI_TIMEOUT_MIN` after the commit time → open; an older green run does not mask it.
+4. a failed `git fetch` or GitHub lookup is a lookup failure, never a pass: `failingSince` is kept (`$STATE/ci-tracking.json`, cleared by a successful lookup) and counts toward `CI_TIMEOUT_MIN`.
+5. stale `origin/main` after a failed fetch is not proof of health (same as 4).
+6. CI in progress (or not started) under the timeout → closed.
+
 **Notification.** On opening, one inbox notification (`notify.mjs --event breaker`) carries the reasons and the reset command; it is not repeated while the breaker stays open.
 
 **Reset rule.** `node packages/factory/src/breaker.mjs reset [--state S] [--by NAME]` closes it explicitly and records `resetBy`/`resetAt`. Any reason whose kind does not define a self-clearing rule never clears by itself.
