@@ -3,14 +3,16 @@
 //   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F | --repo R] [--dagu-home D] [--config C] [--param K=V ...]
 // Admits only when the issue carries the label `factory:ready` (never plain `factory`, the classification label).
 // Run-id is deterministic (`factory-issue-<n>`); Dagu rejects a duplicate run-id, reported as "duplicate".
-// Exit codes: 0 admitted, 20 not labelled, 21 duplicate, 30 infra.
+// The issue body must satisfy the issue contract (issue-contract.mjs); otherwise it is not enqueued.
+// Exit codes: 0 admitted, 20 not labelled, 21 duplicate, 22 contract, 30 infra.
 //   admit.mjs --list F   prints the numbers of the issues in F that carry the label (one per line).
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { checkIssue } from "./issue-contract.mjs";
 
 export const ADMIT_LABEL = "factory:ready";
-export const EXIT = Object.freeze({ ADMITTED: 0, NOT_LABELLED: 20, DUPLICATE: 21, INFRA: 30 });
+export const EXIT = Object.freeze({ ADMITTED: 0, NOT_LABELLED: 20, DUPLICATE: 21, CONTRACT: 22, INFRA: 30 });
 
 export const runIdFor = (n) => `factory-issue-${n}`;
 
@@ -45,7 +47,7 @@ function loadIssue(o) {
     return all.find((i) => String(i.number) === String(o.issue)) ?? { number: o.issue, labels: [] };
   }
   if (!o.repo) throw new Error("--repo is required without --issues-file");
-  const r = spawnSync("gh", ["issue", "view", String(o.issue), "-R", o.repo, "--json", "number,labels"], { encoding: "utf8" });
+  const r = spawnSync("gh", ["issue", "view", String(o.issue), "-R", o.repo, "--json", "number,labels,body"], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`gh issue view failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }
@@ -54,6 +56,12 @@ export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
   let issue;
   try { issue = loadIssue(o); } catch (e) { console.error(`admit: ${e.message}`); return EXIT.INFRA; }
   if (!isAdmissible(issue)) { console.log(`not-labelled #${o.issue} (needs ${ADMIT_LABEL})`); return EXIT.NOT_LABELLED; }
+  const contract = checkIssue(issue.body);
+  if (!contract.ok) {
+    console.log(`contract #${o.issue} violates the issue contract:`);
+    for (const p of contract.problems) console.log(`- ${p}`);
+    return EXIT.CONTRACT;
+  }
   const runId = runIdFor(o.issue);
   const args = ["enqueue", "--run-id", runId];
   if (o.daguHome) args.push("--dagu-home", o.daguHome);

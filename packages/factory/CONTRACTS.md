@@ -20,3 +20,17 @@ Validation runs in the same environment as production and CI.
 - The repository gate (`scripts/factory-gate.sh`) runs on the Node major pinned in `.github/workflows/ci.yml` (`node-version`), not the host's.
 - The selftest uses the Dagu on PATH (the service's build); only `FACTORY_DAGU_BIN` overrides it.
 - The selftest gives Dagu only `PATH`, `HOME`, `DAGU_HOME` and `DAGU_SKIP_EXAMPLES`; nothing else from the caller's environment.
+
+## Issue contract
+
+Enforced at admission by `src/issue-contract.mjs` (`checkIssue(body)`), tested in `test/issue-contract.test.mjs`. The GitHub issue form `.github/ISSUE_TEMPLATE/factory.yml` produces these headings.
+
+An admitted issue body must contain, in this order:
+
+1. `## Goal`: non-empty.
+2. `## Acceptance criteria`: non-empty, with at least one checklist item `- [ ] ...`.
+3. `## Out of scope`: non-empty.
+
+`## Activation` and `## Notes` are optional. Only structure is checked, never content quality.
+
+An issue labelled `factory:ready` that breaks the contract is not enqueued: `admit.mjs` prints the problems and exits `22` (contract). `admit.yaml` treats 22 as non-fatal and, when the issues come from GitHub, comments the problems on the issue.

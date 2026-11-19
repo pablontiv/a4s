@@ -125,7 +125,7 @@ try {
   writeFileSync(join(adHome, "base.yaml"), `env:\n  - A4S_PRIMARY: ${repo}\n  - A4S_FACTORY: ${FACTORY}\n  - A4S_T3_HOME: ${t3Home}\n  - A4S_STATE: ${stateAd}\n`);
   const adEnv = { PATH: process.env.PATH, HOME: process.env.HOME, DAGU_HOME: adHome, DAGU_SKIP_EXAMPLES: "true" };
   const issuesFile = join(root, "issues.json");
-  writeFileSync(issuesFile, JSON.stringify([{ number: 7001, labels: [{ name: "factory:ready" }, { name: "factory" }] }, { number: 7002, labels: [{ name: "factory" }] }]));
+  writeFileSync(issuesFile, JSON.stringify([{ number: 7001, labels: [{ name: "factory:ready" }, { name: "factory" }], body: "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n" }, { number: 7002, labels: [{ name: "factory" }] }, { number: 7003, labels: [{ name: "factory:ready" }], body: "## Goal\nx\n\n## Out of scope\nz\n" }]));
   const admitDag = join(FACTORY, "dags", "admit.yaml"), cycleDag = join(FACTORY, "dags", "cycle.yaml");
   const daguAd = (sub, ...a) => spawnSync(DAGU_BIN, [sub, "--dagu-home", adHome, "--config", adCfg, ...a], { encoding: "utf8", env: adEnv });
   const queued = (n) => daguAd("status", "--run-id", `factory-issue-${n}`, cycleDag).status === 0;
@@ -136,6 +136,7 @@ try {
   checks.admit_dag_succeeded = adm.status === 0;
   checks.admit_ready_enqueued = queued(7001);
   checks.admit_again_is_duplicate = admitCli(7001) === 21;
+  checks.admit_contract_violation_not_admitted = !queued(7003) && admitCli(7003) === 22;
   checks.admit_factory_only_not_admitted = !queued(7002) && admitCli(7002) === 20;
   // an admitted-style run without those params resolves STATE from the base config (BASE=nosuch stops it right after)
   daguAd("start", "--run-id", `cfg${Date.now()}`, cycleDag, "--", "ISSUE=7003", "BASE=nosuch");

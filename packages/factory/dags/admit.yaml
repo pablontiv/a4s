@@ -17,7 +17,7 @@ params:
     default: ""
   - name: STATE
     default: ""
-  # injectable issue source: same JSON as `gh issue list --json number,labels`;
+  # injectable issue source: same JSON as `gh issue list --json number,labels,body`;
   # empty = ask GitHub
   - name: ISSUES_FILE
     default: ""
@@ -48,7 +48,7 @@ steps:
         [ -n "$origin" ] || { echo "admit: PRIMARY has no origin remote" >&2; exit 30; }
         src=$(mktemp)
         gh issue list -R "$origin" --label factory:ready --state open \
-          --limit 200 --json number,labels > "$src" || exit 30
+          --limit 200 --json number,labels,body > "$src" || exit 30
       fi
       opts=()
       [ -n "$TARGET_DAGU_HOME" ] && opts+=(--dagu-home "$TARGET_DAGU_HOME")
@@ -61,9 +61,14 @@ steps:
       numbers=$(node "$FACTORY/src/admit.mjs" --list "$src") || exit 30
       rc_all=0
       for n in $numbers; do
-        node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" \
-          ${origin:+--repo "$origin"} --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}"
-        rc=$?
-        case "$rc" in 0|20|21) ;; *) rc_all=30 ;; esac
+        out=$(node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" \
+          ${origin:+--repo "$origin"} --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}") && rc=0 || rc=$?
+        printf '%s\n' "$out"
+        # 22 = issue contract violated: not enqueued, non-fatal; from GitHub, tell the issue
+        if [ "$rc" = 22 ] && [ -z "$ISSUES_FILE" ] && [ -n "$origin" ]; then
+          gh issue comment "$n" -R "$origin" --body "$out" \
+            || echo "admit: could not comment on #$n" >&2
+        fi
+        case "$rc" in 0|20|21|22) ;; *) rc_all=30 ;; esac
       done
       exit $rc_all
