@@ -60,6 +60,16 @@ steps:
       for p in GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
         v="${!p}"; [ -n "$v" ] && opts+=(--param "$p=$v")
       done
+      # an issue that was on factory:hold loses its carried findings (re-admission is a fresh start)
+      if [ -z "$ISSUES_FILE" ] && [ -n "$origin" ]; then
+        held=$(mktemp)
+        if gh issue list -R "$origin" --label factory:hold --state open \
+          --limit 200 --json number,labels > "$held"; then
+          node "$FACTORY/src/admit.mjs" --clear-held "$held" --state "$STATE" || true
+        fi
+      else
+        node "$FACTORY/src/admit.mjs" --clear-held "$src" --state "$STATE" || true
+      fi
       numbers=$(node "$FACTORY/src/admit.mjs" --list "$src") || exit 30
       rc_all=0
       for n in $numbers; do

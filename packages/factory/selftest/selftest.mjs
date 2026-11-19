@@ -198,15 +198,21 @@ try {
   checks.cycle_resolves_base_config = existsSync(join(stateAd, "7003"));
   // 5c. issue state and retries (fixtures, no worker): fail once -> -2; blocked -> needs-human; 3 failures -> needs-human + comment
   const labelsCli = (...a) => spawnSync("node", [join(FACTORY, "src", "labels.mjs"), ...a, "--issues-file", issuesFile], { encoding: "utf8", env: adEnv });
-  const seedStation = (n, outcome, question = "") => { mkdirSync(join(stateAd, String(n)), { recursive: true }); writeFileSync(join(stateAd, String(n), "impl.json"), JSON.stringify({ attempts: [{ threadId: "t", outcome, question }] })); };
+  const seedStation = (n, outcome, question = "", findings = []) => { mkdirSync(join(stateAd, String(n)), { recursive: true }); writeFileSync(join(stateAd, String(n), "impl.json"), JSON.stringify({ attempts: [{ threadId: "t", outcome, question, findings }] })); };
   const commentsOf = (n) => JSON.parse(readFileSync(issuesFile, "utf8")).find((i) => i.number === n)?.comments ?? [];
   const body = "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n";
   const fixtures = JSON.parse(readFileSync(issuesFile, "utf8"));
   for (const n of [7101, 7102]) fixtures.push({ number: n, labels: [{ name: "factory:ready" }], body });
   writeFileSync(issuesFile, JSON.stringify(fixtures));
   const failRun = (n, k, steps, seed) => { admitCli(n); if (seed) seed(); return labelsCli("finish", "--issue", String(n), "--state", stateAd, "--run", `factory-issue-${n}-${k}`, "--steps", steps); };
-  seedStation(7101, "fail");
+  seedStation(7101, "fail", "", ["SELFTEST-CARRY-FINDING"]);
   failRun(7101, 1, "prepare=succeeded,implement=failed");
+  // retry preparation: run the real prepare brief-writing script and read the generated brief.md
+  const retryBriefSrc = join(root, "brief-7101.md");
+  writeFileSync(retryBriefSrc, "# Retried issue\n\n## Goal\nx\n");
+  const prep = spawnSync("bash", [join(FACTORY, "src", "prepare-brief.sh")], { encoding: "utf8", env: { ...adEnv, ISSUE: "7101", PRIMARY: repo, FACTORY, T3_HOME: t3Home, STATE: stateAd, BRIEF_FILE: retryBriefSrc } });
+  const carried = (() => { try { return readFileSync(join(stateAd, "7101", "brief.md"), "utf8"); } catch { return ""; } })();
+  checks.retry_brief_carries_first_run_findings = prep.status === 0 && carried.startsWith("# Retried issue") && /## Previous run findings/.test(carried) && carried.includes("SELFTEST-CARRY-FINDING") && carried.includes("factory-issue-7101-1") && /Failed step: implement/.test(carried);
   checks.retry_back_to_ready = labelsOf(7101).includes("factory:ready");
   admitCli(7101);
   checks.retry_runs_as_attempt_2 = queued(7101, 2);

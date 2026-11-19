@@ -9,7 +9,7 @@
 // `finish` and `success` only act on issues labelled factory:running (never on hand-started runs).
 // Run bookkeeping (`$STATE/<n>/attempts.json`) is kept by `reserveAttempt` / `releaseAttempt` (used by admit.mjs).
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -117,6 +117,22 @@ const findingsText = (state, n, failed) => {
   return { question: last?.question ?? "", findings: last?.findings ?? [] };
 };
 
+// ---- carry-over: $STATE/<n>/carry.json = {run, step, findings} of the failed run that went back to ready ----
+const carryFile = (state, n) => join(state, String(n), "carry.json");
+export const readCarry = (state, n) => readJson(carryFile(state, n), null);
+export const clearCarry = (state, n) => rmSync(carryFile(state, n), { force: true });
+export function writeCarry(state, n, carry) { mkdirSync(join(state, String(n)), { recursive: true }); writeJson(carryFile(state, n), carry); }
+
+/** The `## Previous run findings` section appended to brief.md ("" when there is no carry-over). */
+export function carrySection(state, n) {
+  const c = readCarry(state, n);
+  if (!c) return "";
+  const list = (c.findings ?? []).map((f) => `- ${typeof f === "string" ? f : JSON.stringify(f)}`);
+  return ["", "## Previous run findings", "",
+    `- Run: ${c.run}`, `- Failed step: ${c.step}`, "- Findings (fix every one, each with a regression test):",
+    ...(list.length ? list : ["- (none recorded; see the run log)"]), ""].join("\n");
+}
+
 /** After a failed run: ready again or needs-human with a comment. Returns {to, outcome, failed}. */
 export function finishRun(src, { issue, state, run, steps }) {
   if (!src.labels(issue).includes(LABEL.RUNNING)) return { to: null };
@@ -124,10 +140,12 @@ export function finishRun(src, { issue, state, run, steps }) {
   const outcome = runOutcome(state, issue, failed);
   const at = readAttempts(state, issue);
   const to = decideAfterFailure(outcome, at.streak);
+  const { question, findings } = findingsText(state, issue, failed);
   if (to === "ready") {
     moveLabel(src, issue, "ready");
+    writeCarry(state, issue, { run, step: failed, at: new Date().toISOString(), findings: question && !findings.length ? [question] : findings });
   } else {
-    const { question, findings } = findingsText(state, issue, failed);
+    clearCarry(state, issue);
     writeJson(attemptsFile(state, issue), { ...at, parked: true });
     moveLabel(src, issue, "needs-human", [
       `Factory: run ${run} needs a human.`,
@@ -146,14 +164,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const [cmd, ...rest] = process.argv.slice(2);
     const { values: a } = parseArgs({ args: rest, options: { issue: { type: "string" }, to: { type: "string" }, comment: { type: "string" }, state: { type: "string" }, run: { type: "string", default: "unknown" }, steps: { type: "string", default: "" }, repo: { type: "string" }, "issues-file": { type: "string" } } });
     if (!a.issue) throw new Error("--issue is required");
+    if (cmd === "carry") { if (!a.state) throw new Error("--state is required"); process.stdout.write(carrySection(a.state, a.issue)); process.exit(0); }
     const src = source({ issuesFile: a["issues-file"], repo: a.repo });
-    if (cmd === "move") { moveLabel(src, a.issue, a.to, a.comment); console.log(`#${a.issue} -> ${a.to}`); }
+    if (cmd === "move") { moveLabel(src, a.issue, a.to, a.comment); if (a.state && a.to !== "ready") clearCarry(a.state, a.issue); console.log(`#${a.issue} -> ${a.to}`); }
     else if (cmd === "finish") {
       if (!a.state) throw new Error("--state is required");
       const r = finishRun(src, { issue: a.issue, state: a.state, run: a.run, steps: a.steps });
       console.log(r.to ? `#${a.issue} -> ${r.to} (outcome ${r.outcome}, failed step ${r.failed})` : `#${a.issue} not ${LABEL.RUNNING}: untouched`);
     } else if (cmd === "success") {
       if (src.labels(a.issue).includes(LABEL.RUNNING)) moveLabel(src, a.issue, "done");
+      if (a.state) clearCarry(a.state, a.issue);
       console.log(`#${a.issue} done`);
     } else throw new Error(`unknown command ${cmd}`);
   } catch (e) { console.error(`labels: ${e.message}`); process.exit(30); }

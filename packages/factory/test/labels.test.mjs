@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { admit, EXIT } from "../src/admit.mjs";
-import { finishRun, labelNames, moveLabel, readAttempts, source } from "../src/labels.mjs";
+import { admit, EXIT, repoSlug, shouldClearCarry } from "../src/admit.mjs";
+import { carrySection, finishRun, labelNames, moveLabel, readAttempts, source, writeCarry } from "../src/labels.mjs";
 import { decideAfterFailure, isRetryable, OUTCOMES } from "../src/lib.mjs";
 
 const BODY = "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n";
@@ -129,4 +130,120 @@ test("a qa failure after a passing repair keeps the qa outcome", () => {
   writeFileSync(join(f.state, "9", "qa.json"), JSON.stringify({ attempts: [{ outcome: "timeout", startedAt: 300 }] }));
   writeFileSync(join(f.state, "9", "impl.json"), JSON.stringify({ attempts: [{ outcome: "pass", startedAt: 200 }] }));
   assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "r", steps: "qa=failed" }).outcome, "timeout");
+});
+
+test("carry-over: fail writes carry.json, the brief section lists it, success/needs-human/parked admission clear it", () => {
+  const f = fixture();
+  const carry = join(f.state, "9", "carry.json");
+  const exists = () => { try { readFileSync(carry); return true; } catch { return false; } };
+  assert.equal(carrySection(f.state, 9), "");
+  seedImpl(f, "fail", { findings: ["collectCi drops the failed job", "second defect"] });
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "factory-issue-9-1", steps: "prepare=succeeded,implement=failed" }).to, "ready");
+  assert.deepEqual((({ at, ...c }) => c)(JSON.parse(readFileSync(carry, "utf8"))), { run: "factory-issue-9-1", step: "implement", findings: ["collectCi drops the failed job", "second defect"] });
+  const sec = carrySection(f.state, 9);
+  assert.match(sec, /^\n## Previous run findings\n/);
+  assert.match(sec, /factory-issue-9-1/);
+  assert.match(sec, /Failed step: implement/);
+  assert.match(sec, /- collectCi drops the failed job\n- second defect/);
+  assert.equal(run(f), EXIT.ADMITTED);  // plain retry keeps it
+  assert.ok(exists());
+  // success clears it
+  silent(() => spawnSync("node", [join(import.meta.dirname, "..", "src", "labels.mjs"), "success", "--issue", "9", "--state", f.state, "--issues-file", f.file]));
+  assert.ok(!exists());
+  // needs-human clears it
+  writeCarry(f.state, 9, { run: "r", step: "implement", findings: ["x"] });
+  moveLabel(f.src, 9, "running");
+  seedImpl(f, "blocked", { question: "q?" });
+  assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "r", steps: "implement=failed" }).to, "needs-human");
+  assert.ok(!exists());
+  // admission after a park (human put ready back) clears a stale carry
+  writeCarry(f.state, 9, { run: "r", step: "implement", findings: ["x"] });
+  moveLabel(f.src, 9, "ready");
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.ok(!exists());
+});
+
+test("carry-over: factory:hold clears it (hold -> ready -> admission starts fresh)", () => {
+  const f = fixture();
+  const carry = join(f.state, "9", "carry.json");
+  const exists = () => { try { readFileSync(carry); return true; } catch { return false; } };
+  seedImpl(f, "fail", { findings: ["old defect"] });
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "factory-issue-9-1", steps: "implement=failed" }).to, "ready");
+  assert.ok(exists());
+  // operator puts factory:hold: the admit step sees it and clears the carry
+  const held = join(f.dir, "held.json");
+  writeFileSync(held, JSON.stringify([{ number: 9, labels: [{ name: "factory:hold" }] }]));
+  const r = spawnSync("node", [join(import.meta.dirname, "..", "src", "admit.mjs"), "--clear-held", held, "--state", f.state], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!exists());
+  assert.equal(carrySection(f.state, 9), "");
+  // later hold removed, ready added: admission stays clean
+  moveLabel(f.src, 9, "ready");
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.ok(!exists());
+});
+
+test("prepare writes brief.md with the previous run's findings (executes src/prepare-brief.sh)", () => {
+  const f = fixture();
+  const src = join(f.dir, "brief-src.md");
+  writeFileSync(src, "# Add mul\n\n## Goal\nx\n");
+  const prepare = () => {
+    const r = spawnSync("bash", [join(import.meta.dirname, "..", "src", "prepare-brief.sh")], { encoding: "utf8",
+      env: { ...process.env, ISSUE: "9", PRIMARY: f.dir, FACTORY: join(import.meta.dirname, ".."), T3_HOME: f.dir, STATE: f.state, BRIEF_FILE: src } });
+    assert.equal(r.status, 0, r.stderr);
+    return readFileSync(join(f.state, "9", "brief.md"), "utf8");
+  };
+  assert.doesNotMatch(prepare(), /Previous run findings/);
+  seedImpl(f, "fail", { findings: ["FIRST-RUN-DEFECT"] });
+  assert.equal(run(f), EXIT.ADMITTED);
+  finishRun(f.src, { issue: 9, state: f.state, run: "factory-issue-9-1", steps: "implement=failed" });
+  const brief = prepare();
+  assert.match(brief, /^# Add mul/);
+  assert.match(brief, /## Previous run findings[\s\S]*factory-issue-9-1[\s\S]*Failed step: implement[\s\S]*- FIRST-RUN-DEFECT/);
+  assert.equal(prepare(), brief);  // idempotent: rewritten from the source, not appended twice
+});
+
+test("carry-over: hold placed and removed between cycles (label history) clears it at admission", () => {
+  const f = fixture();
+  const carry = join(f.state, "9", "carry.json");
+  const exists = () => { try { readFileSync(carry); return true; } catch { return false; } };
+  seedImpl(f, "fail", { findings: ["old defect"] });
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "factory-issue-9-1", steps: "implement=failed" }).to, "ready");
+  const at = JSON.parse(readFileSync(carry, "utf8")).at;
+  assert.ok(!Number.isNaN(Date.parse(at)));
+  // a hold older than the carry does not count: the automatic retry keeps the findings
+  const list = JSON.parse(readFileSync(f.file, "utf8"));
+  list[0].events = [{ event: "labeled", label: { name: "factory:hold" }, created_at: "2000-01-01T00:00:00Z" }];
+  writeFileSync(f.file, JSON.stringify(list));
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.ok(exists());
+  // second failure, then the operator holds and releases (never seen by an admit step): fresh start
+  seedImpl(f, "fail", { findings: ["old defect"] });
+  assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "factory-issue-9-2", steps: "implement=failed" }).to, "ready");
+  const l2 = JSON.parse(readFileSync(f.file, "utf8"));
+  l2[0].events.push({ event: "labeled", label: { name: "factory:hold" }, created_at: new Date(Date.now() + 1000).toISOString() }, { event: "unlabeled", label: { name: "factory:hold" }, created_at: new Date(Date.now() + 2000).toISOString() });
+  writeFileSync(f.file, JSON.stringify(l2));
+  assert.equal(run(f), EXIT.ADMITTED);
+  assert.ok(!exists());
+  assert.equal(carrySection(f.state, 9), "");
+});
+
+test("carry-over: live admission reads factory:hold from the GitHub label history", () => {
+  const carry = { run: "r", step: "implement", at: "2026-01-02T00:00:00Z", findings: ["x"] };
+  const issue = { number: 9, labels: [{ name: "factory:ready" }] };
+  const o = { issue: "9", repo: "https://github.com/acme/widgets.git", issuesFile: "/x", live: true };
+  let called;
+  const gh = (out, status = 0) => (args) => { called = args; return { status, stdout: out, stderr: "boom" }; };
+  assert.equal(shouldClearCarry(o, issue, { parked: false }, carry, gh("2026-01-01T00:00:00Z\n")), false);
+  assert.deepEqual(called.slice(0, 3), ["api", "--paginate", "repos/acme/widgets/issues/9/events"]);
+  assert.equal(shouldClearCarry(o, issue, { parked: false }, carry, gh("2026-01-03T00:00:00Z\n")), true);
+  assert.equal(silent(() => shouldClearCarry(o, issue, { parked: false }, carry, gh("", 1))), true); // unknown history: fresh start
+  assert.equal(shouldClearCarry(o, issue, { parked: true }, carry, gh("")), true);
+  assert.equal(shouldClearCarry(o, { labels: ["factory:hold", "factory:ready"] }, { parked: false }, carry, gh("")), true);
+  assert.equal(shouldClearCarry(o, issue, { parked: false }, null, gh("")), false);
+  assert.equal(repoSlug("git@github.com:acme/widgets.git"), "acme/widgets");
+  assert.equal(repoSlug("acme/widgets"), "acme/widgets");
 });

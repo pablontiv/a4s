@@ -76,16 +76,7 @@ steps:
       fi
       node "$FACTORY/src/t3cli.mjs" project add \
         --title "issue-$ISSUE" "$WT" || echo "project already registered"
-      if [ -n "$BRIEF_FILE" ]; then
-        cp "$BRIEF_FILE" "$ISSUE_STATE/brief.md"
-        sed -n '1s/^#* *//p' "$BRIEF_FILE" > "$ISSUE_STATE/title"
-      else
-        origin=$(git -C "$PRIMARY" remote get-url origin)
-        gh issue view "$ISSUE" -R "$origin" --json title,body \
-          --jq '"# " + .title + "\n\n" + .body' > "$ISSUE_STATE/brief.md"
-        gh issue view "$ISSUE" -R "$origin" --json title --jq .title \
-          > "$ISSUE_STATE/title"
-      fi
+      bash "$FACTORY/src/prepare-brief.sh"
 
   - id: implement
     depends: prepare
@@ -298,7 +289,7 @@ handler_on:
         if [ -n "$ISSUES_FILE" ]; then where=(--issues-file "$ISSUES_FILE")
         elif [ -n "$origin" ]; then where=(--repo "$origin")
         else exit 0; fi
-        node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" "${where[@]}"
+        node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" --state "$STATE" "${where[@]}"
       ) || echo "label update failed (ignored)" >&2
       exit 0
   failure:
