@@ -159,6 +159,26 @@ try {
       cont3.length === 1 && cont3[0].threadId === impl3.filter((x) => !x.continued).at(-1)?.threadId && cont3[0].outcome === "pass" && findings3.includes("SELFTEST-QA-STUB") &&
       log3.length === log2.length && existsSync(wt3) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt3 }) === "0",
   });
+  // 5b. receipt check of the real `validate` step: a factory change without receipt fails with the finding and the gate never runs
+  {
+    const cyc = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
+    const m = /^  - id: validate\n[\s\S]*?^    run: \|\n([\s\S]*?)(?=^\S|^  # |^  - id:)/m.exec(cyc);
+    const validateBody = (m?.[1] ?? "").split("\n").map((l) => l.replace(/^ {6}/, "")).join("\n");
+    const prim = join(root, "receipt-primary"); mkdirSync(join(prim, "packages", "factory"), { recursive: true });
+    writeFileSync(join(prim, "README.md"), "x\n"); writeFileSync(join(prim, ".gitignore"), ".workspace/\n");
+    sh("git", ["init", "-q", "-b", "main"], { cwd: prim }); sh("git", ["add", "-A"], { cwd: prim });
+    sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", "commit", "-qm", "init"], { cwd: prim });
+    const wtR = join(prim, ".workspace", "worktrees", "issue-rcpt");
+    sh("git", ["worktree", "add", "-q", "-b", "factory/issue-rcpt", wtR, "main"], { cwd: prim });
+    mkdirSync(join(wtR, "packages", "factory"), { recursive: true });
+    writeFileSync(join(wtR, "packages", "factory", "x.mjs"), "1\n");
+    mkdirSync(join(root, "state", "rcpt"), { recursive: true });
+    const marker = join(root, "receipt-gate-ran");
+    const rr = spawnSync("bash", ["-c", validateBody], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME,
+      PRIMARY: prim, FACTORY, T3_HOME: join(root, "t3"), STATE: join(root, "state"), ISSUE: "rcpt", BASE: "main", DAG_RUN_ID: "selftest-rcpt", GATE: `touch ${marker}` } });
+    const finding = (() => { try { return JSON.parse(readFileSync(join(root, "state", "rcpt", "step-failure.json"), "utf8")).findings[0]; } catch { return ""; } })();
+    Object.assign(checks, { validate_requires_receipt_for_factory_changes: validateBody.length > 0 && rr.status !== 0 && !existsSync(marker) && /^selftest not run on this code: receipt missing/.test(finding) });
+  }
   // 5a. notifications (VS2): no thread configured, so the first notification created the inbox and later ones reused it
   const t3cli = (...a) => spawnSync("node", [join(FACTORY, "src", "t3cli.mjs"), ...a], { encoding: "utf8", env: { ...process.env, T3_HOME: t3Home } });
   const inboxId = (() => { try { return JSON.parse(readFileSync(join(root, "state", "inbox.json"), "utf8")).threadId; } catch { return ""; } })();

@@ -218,6 +218,8 @@ steps:
       fi
       test -n "$(git status --porcelain)" || { echo "no changes to validate" >&2; exit 1; }
       git add -A -n > "$ISSUE_STATE/changes"
+      # factory changes need a selftest receipt for exactly this code (checked once, after every edit of the run)
+      node "$FACTORY/src/receipt.mjs" check "$WT" "$ISSUE_STATE/step-failure.json" "$DAG_RUN_ID"
       bash -euo pipefail -c "$GATE"
 
   # One commit per issue, made only now, from the validated worktree.

@@ -128,9 +128,9 @@ export function runOutcome(state, n, failed) {
 }
 
 const findingsText = (state, n, failed, run) => {
-  if (failed === "integrate") {
+  if (failed === "integrate" || failed === "validate") {
     const f = readJson(join(state, String(n), "step-failure.json"), null);
-    if (f && f.step === "integrate" && f.run === run) return { question: "", findings: f.findings ?? [] };
+    if (f && f.step === failed && f.run === run) return { question: "", findings: f.findings ?? [] };
   }
   const last = failingAttempt(state, n, failed);
   return { question: last?.question ?? "", findings: last?.findings ?? [] };

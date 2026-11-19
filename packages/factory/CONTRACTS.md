@@ -124,10 +124,12 @@ The only output of a research thread into the factory is template issues (`## Go
 
 ## Selftest receipt
 
-`npm run selftest` leaves a receipt proving it passed on exactly the current code of the worktree (`src/receipt.mjs`; tested in `test/receipt.test.mjs`). Nothing checks it yet (follow-up: check at `validate`).
+`npm run selftest` leaves a receipt proving it passed on exactly the current code of the worktree (`src/receipt.mjs`; tested in `test/receipt.test.mjs`). It is checked once, at the start of `validate`.
 
 - Path: `packages/factory/.selftest-receipt.json` (git-ignored). Format: `{"version":1,"treeHash":"<sha256>","startedAt":"<ISO>","finishedAt":"<ISO>","model":"<selftest model>"}`.
 - `snapshotTree(dir)` (I/O) collects `{path, kind, content}` for every change against `HEAD` (tracked edits, deletions, untracked files, and both paths of a rename via `--no-renames`), excluding the receipt (only its exact path `packages/factory/.selftest-receipt.json`). A file removed from the index but still on disk keeps its current content. `treeHash(snapshot)` is pure: sha256 over the entries sorted by path, so entry order is irrelevant.
 - At start the selftest removes any existing receipt FIRST (before `mkdtemp` or any other initialization, so an early failure leaves none) and records the tree hash.
 - On `SELFTEST PASS` it recomputes the hash and writes the receipt only if start and end hashes are equal; otherwise it writes none, prints why and the run fails. A failing selftest leaves no receipt.
 - `SELFTEST_NO_RECEIPT=1` runs the selftest without touching the receipt (read-only callers such as QA). `SELFTEST_RECEIPT_FILE` overrides the path (tests only).
+- **Check (verdict and validation contracts).** The first thing `validate` does (after folding a worker's commit back and before the gate; hence after the implementation and every QA repair) is `node src/receipt.mjs check <worktree> $ISSUE_STATE/step-failure.json <run>`. `receiptDecision(snapshot, receipt)` (pure) requires a receipt whose `treeHash` equals the current `treeHash(snapshot)` when any path of the snapshot (rename sources and destinations included) is under `packages/factory/`; changes elsewhere need none. Otherwise `validate` fails before running the gate with the finding `selftest not run on this code: receipt missing` or `...: receipt stale (...)`.
+- **Routing.** The finding is written to `step-failure.json` (`{run, step:"validate", findings}`), which `labels.mjs` reads like station findings: the issue returns to `factory:ready` and the retry's brief carries the finding (carry-over). `prompts/impl.md` makes the worker run `npm run selftest` after its final edit, QA repairs included, and list it in `criteria`.

@@ -197,6 +197,25 @@ function fixture() {
 }
 const ok = (r) => assert.equal(r.status, 0, r.stderr + r.stdout);
 
+test("validate: a factory change without a selftest receipt fails before the gate, with the finding", () => {
+  const f = fixture();
+  ok(f.step("prepare", 5));
+  mkdirSync(join(f.wt(5), "packages", "factory"), { recursive: true });
+  writeFileSync(join(f.wt(5), "packages", "factory", "x.mjs"), "1\n");
+  const marker = join(f.root, "gate-ran");
+  const r = f.step("validate", 5, { GATE: `touch ${marker}` });
+  assert.notEqual(r.status, 0);
+  assert.equal(existsSync(marker), false);
+  const sf = JSON.parse(readFileSync(join(f.root, "state", "5", "step-failure.json"), "utf8"));
+  assert.deepEqual([sf.run, sf.step], ["run-5", "validate"]);
+  assert.match(sf.findings[0], /^selftest not run on this code: receipt missing/);
+  // a change outside packages/factory/ needs no receipt
+  ok(f.step("prepare", 6));
+  writeFileSync(join(f.wt(6), "a.txt"), "Z\n");
+  ok(f.step("validate", 6, { GATE: `touch ${marker}` }));
+  assert.equal(existsSync(marker), true);
+});
+
 test("integrate: a rebase conflict aborts the rebase, keeps the changes and fails with rebase-conflict", () => {
   const f = fixture();
   ok(f.step("prepare", 1)); ok(f.step("prepare", 2));

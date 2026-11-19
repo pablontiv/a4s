@@ -1,7 +1,7 @@
 // Selftest receipt: proof that the full selftest passed on exactly the current code of a worktree.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { lstatSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -87,4 +87,42 @@ export function endReceipt({ dir, enabled = true, file = receiptPath(), passed, 
   if (end !== startHash) return { written: false, reason: "the tree changed during the selftest" };
   writeFileSync(file, JSON.stringify({ version: 1, treeHash: end, startedAt, finishedAt: now().toISOString(), model }) + "\n");
   return { written: true };
+}
+
+export const FINDING = "selftest not run on this code";
+const FACTORY_PREFIX = "packages/factory/";
+
+/**
+ * Pure: does this snapshot need a selftest receipt, and does `receipt` (parsed JSON or null) satisfy it?
+ * Required when any path of the snapshot (rename sources and destinations included) is under packages/factory/.
+ * Returns `{required, ok, reason: null|"missing"|"stale", finding?}`.
+ */
+export function receiptDecision(snapshot, receipt) {
+  if (!snapshot.some((e) => e.path.startsWith(FACTORY_PREFIX) && !isReceipt(e.path))) return { required: false, ok: true, reason: null };
+  if (!receipt || typeof receipt.treeHash !== "string") return { required: true, ok: false, reason: "missing", finding: `${FINDING}: receipt missing` };
+  if (receipt.treeHash !== treeHash(snapshot)) return { required: true, ok: false, reason: "stale", finding: `${FINDING}: receipt stale (the code changed after the selftest)` };
+  return { required: true, ok: true, reason: null };
+}
+
+/**
+ * I/O, used at the start of `validate`: decide on the worktree `dir`. On failure writes
+ * `{run, step:"validate", findings}` to `failureFile` (routed like station findings) and returns the decision.
+ */
+export function checkReceipt({ dir, failureFile, run, file }) {
+  const top = git(dir, ["rev-parse", "--show-toplevel"]).toString().trim();
+  const path = file ?? join(top, RECEIPT_REL);
+  let receipt = null;
+  if (existsSync(path)) { try { receipt = JSON.parse(readFileSync(path, "utf8")); } catch { receipt = null; } }
+  const d = receiptDecision(snapshotTree(dir), receipt);
+  if (!d.ok && failureFile) {
+    mkdirSync(dirname(failureFile), { recursive: true });
+    writeFileSync(failureFile, JSON.stringify({ run, step: "validate", findings: [d.finding] }) + "\n");
+  }
+  return d;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === "check") {
+  const [dir, failureFile, run] = process.argv.slice(3);
+  const d = checkReceipt({ dir, failureFile, run });
+  if (!d.ok) { console.error(d.finding); process.exit(1); }
 }

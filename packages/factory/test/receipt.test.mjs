@@ -119,3 +119,41 @@ test("only the exact receipt path is excluded, not same-named files elsewhere", 
   writeFileSync(join(d, RECEIPT_REL), "{}");
   assert.equal(treeHash(snapshotTree(d)), h2);
 });
+
+import { receiptDecision, checkReceipt, FINDING } from "../src/receipt.mjs";
+describe_decision();
+function describe_decision() {
+  const snap = [E("packages/factory/src/x.mjs", "modified", "x")];
+  const good = { treeHash: treeHash(snap) };
+  test("receiptDecision: matching receipt passes", () => {
+    assert.deepEqual(receiptDecision(snap, good), { required: true, ok: true, reason: null });
+  });
+  test("receiptDecision: stale receipt fails", () => {
+    const d = receiptDecision(snap, { treeHash: "0".repeat(64) });
+    assert.equal(d.ok, false); assert.equal(d.reason, "stale"); assert.ok(d.finding.startsWith(FINDING)); assert.match(d.finding, /stale/);
+  });
+  test("receiptDecision: missing receipt fails", () => {
+    const d = receiptDecision(snap, null);
+    assert.equal(d.ok, false); assert.equal(d.reason, "missing"); assert.match(d.finding, /^selftest not run on this code: receipt missing/);
+  });
+  test("receiptDecision: a change outside packages/factory/ needs no receipt", () => {
+    assert.deepEqual(receiptDecision([E("README.md", "modified", "x")], null), { required: false, ok: true, reason: null });
+  });
+  test("receiptDecision: a rename out of packages/factory/ still requires it", () => {
+    const rn = [E("packages/factory/src/old.mjs", "deleted", null), E("docs/old.mjs", "added", "x")];
+    assert.equal(receiptDecision(rn, null).reason, "missing");
+    assert.equal(receiptDecision(rn, { treeHash: treeHash(rn) }).ok, true);
+  });
+  test("checkReceipt writes the finding for the retry on failure", () => {
+    const { d } = repo();
+    mkdirSync(join(d, "packages/factory"), { recursive: true });
+    writeFileSync(join(d, "packages/factory/x.mjs"), "1");
+    const ff = join(d, "sf.json");
+    assert.equal(checkReceipt({ dir: d, failureFile: ff, run: "r1" }).ok, false);
+    const sf = JSON.parse(readFileSync(ff, "utf8"));
+    assert.deepEqual([sf.run, sf.step], ["r1", "validate"]);
+    assert.match(sf.findings[0], /^selftest not run on this code/);
+    writeFileSync(join(d, RECEIPT_REL), JSON.stringify({ treeHash: treeHash(snapshotTree(d)) }));
+    assert.equal(checkReceipt({ dir: d, failureFile: ff, run: "r1" }).ok, true);
+  });
+}
