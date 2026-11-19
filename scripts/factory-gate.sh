@@ -13,4 +13,5 @@ if [[ -n "$ci_node" ]] && command -v nix >/dev/null && [[ "$(node -p 'process.ve
 else
   bash scripts/gate.sh
 fi
+node packages/factory/src/check-models.mjs
 npm run selftest
