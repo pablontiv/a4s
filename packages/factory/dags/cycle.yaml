@@ -1,12 +1,14 @@
 ---
-# Factory cycle (seed, VS0): issue -> implementation thread in T3 -> gate
-# -> operator click -> integrate -> close. Control is deterministic here;
+# Factory cycle: issue -> implementation thread in T3 (no commit) -> validate the
+# worktree -> operator click -> one commit -> integrate -> CI on the trunk -> close.
+# Nothing reaches a commit before it is validated in the worktree; nothing stays on
+# the trunk if CI fails (it is reverted). Control is deterministic here;
 # interpretation happens in the worker and arrives as a structured verdict.
 type: graph
 # bash features (${!var}) are used; Dagu's default shell may be sh
 shell: bash
-# PRIMARY/FACTORY/T3_HOME/STATE: when empty, each step falls back to A4S_* declared
-# in Dagu's base config `env:` (param defaults are not expanded by Dagu).
+# PRIMARY/FACTORY/T3_HOME/STATE: empty params fall back to A4S_* declared in
+# Dagu's base config `env:` (resolved by src/cycle-env.sh in every step).
 params:
   # issue number (or fixture id in the selftest)
   - name: ISSUE
@@ -27,15 +29,18 @@ params:
   # optional; defaults to the GitHub issue title and body
   - name: BRIEF_FILE
     default: ""
-  # repository gate + selftest on the operator host
+  # validation in a CI-equivalent environment + selftest (operator host)
   - name: GATE
     default: "bash scripts/factory-gate.sh"
-  # push the trunk after integrating
+  # push the trunk after integrating, then wait for CI on the pushed commit
   - name: PUSH
     default: "true"
-  # close the GitHub issue after integrating
+  # close the GitHub issue after a green trunk
   - name: CLOSE_ISSUE
     default: "true"
+  # minutes to wait for CI on the pushed commit
+  - name: CI_TIMEOUT_MIN
+    default: "30"
   # optional line table override (the selftest uses a cheap model).
   # Not named LINES: shells export LINES (terminal height), e.g. "0" under Dagu.
   - name: LINE_TABLE
@@ -44,38 +49,33 @@ steps:
   - id: prepare
     run: |
       set -euo pipefail
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 1
-        fi
-      done
-      WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
-      BRANCH="factory/issue-$ISSUE"
-      ISSUE_STATE="$STATE/$ISSUE"
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       mkdir -p "$ISSUE_STATE"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
-      test -z "$(git -C "$PRIMARY" status --porcelain \
-        --untracked-files=no)"
+      test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=no)"
       if [ ! -d "$WT" ]; then
         git -C "$PRIMARY" worktree add -q -B "$BRANCH" "$WT" "$BASE"
-      elif [ "$(git -C "$WT" rev-list --count "$BASE..HEAD")" = 0 ]; then
-        # reused worktree without work: restart it from the current trunk
-        git -C "$WT" reset -q --hard "$BASE"
       else
-        # reused worktree with work: it must sit on the current trunk
-        git -C "$WT" rebase -q "$BASE" || { git -C "$WT" rebase --abort; exit 1; }
+        # reused worktree (earlier attempt): keep its work on the current trunk
+        git -C "$WT" reset -q --soft "$BASE" 2>/dev/null || true
+        stashed=no
+        if [ -n "$(git -C "$WT" status --porcelain)" ]; then
+          git -C "$WT" stash push -q -u -m "factory-rework" && stashed=yes
+        fi
+        git -C "$WT" reset -q --hard "$BASE"
+        if [ "$stashed" = yes ]; then git -C "$WT" stash pop -q; fi
       fi
       node "$FACTORY/src/t3cli.mjs" project add \
         --title "issue-$ISSUE" "$WT" || echo "project already registered"
       if [ -n "$BRIEF_FILE" ]; then
         cp "$BRIEF_FILE" "$ISSUE_STATE/brief.md"
+        sed -n '1s/^#* *//p' "$BRIEF_FILE" > "$ISSUE_STATE/title"
       else
         origin=$(git -C "$PRIMARY" remote get-url origin)
         gh issue view "$ISSUE" -R "$origin" --json title,body \
           --jq '"# " + .title + "\n\n" + .body' > "$ISSUE_STATE/brief.md"
+        gh issue view "$ISSUE" -R "$origin" --json title --jq .title \
+          > "$ISSUE_STATE/title"
       fi
 
   - id: implement
@@ -94,17 +94,7 @@ steps:
       - {name: worktree}
     # an empty LINE_TABLE makes the station use the lines.json next to it
     run: |
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 1
-        fi
-      done
-      WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
-      BRANCH="factory/issue-$ISSUE"
-      ISSUE_STATE="$STATE/$ISSUE"
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       exec node "$FACTORY/src/station.mjs" --line impl \
         --issue "$ISSUE" --run "$DAG_RUN_ID" --project "$WT" \
         --brief "$ISSUE_STATE/brief.md" --t3-home "$T3_HOME" \
@@ -117,37 +107,31 @@ steps:
       - QUESTION: ${steps.implement.outputs.question}
     run: |
       if [ "$RESULT" != "pass" ]; then
-        # seed: blocked is handled by hand until VS3/VS5
+        # blocked is handled by hand until VS3/VS5
         echo "worker result=$RESULT question=$QUESTION" >&2
         exit 1
       fi
 
-  - id: gate
+  # Validate the uncommitted work in the worktree before anything is committed.
+  - id: validate
     depends: require_pass
     run: |
       set -euo pipefail
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 1
-        fi
-      done
-      WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
-      BRANCH="factory/issue-$ISSUE"
-      ISSUE_STATE="$STATE/$ISSUE"
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       cd "$WT"
-      test -z "$(git status --porcelain)"
-      test "$(git rev-list --count "$BASE..HEAD")" -ge 1
+      # a worker that committed anyway: fold it back into the working tree
+      if [ "$(git rev-list --count "$BASE..HEAD")" != 0 ]; then
+        git reset -q --soft "$BASE"
+      fi
+      test -n "$(git status --porcelain)" || { echo "no changes to validate" >&2; exit 1; }
+      git add -A -n > "$ISSUE_STATE/changes"
       bash -euo pipefail -c "$GATE"
-      printf 'tested_sha=%s\n' "$(git rev-parse HEAD)"
 
   - id: approve_merge
-    depends: gate
+    depends: validate
     action: human.task
     with:
-      prompt: "Factory: approve integrating the issue branch (gate passed)."
+      prompt: "Factory: approve committing and integrating the validated changes."
       form:
         type: object
         required: [DECISION]
@@ -156,33 +140,6 @@ steps:
           DECISION:
             type: string
             enum: [APPROVE, REJECT]
-
-  - id: integrate
-    depends: approve_merge
-    preconditions:
-      - condition: "${steps.approve_merge.outputs.DECISION}"
-        expected: APPROVE
-    run: |
-      set -euo pipefail
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 1
-        fi
-      done
-      WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
-      BRANCH="factory/issue-$ISSUE"
-      ISSUE_STATE="$STATE/$ISSUE"
-      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
-      git -C "$WT" rebase -q "$BASE"
-      (cd "$WT" && bash -euo pipefail -c "$GATE") >/dev/null
-      git -C "$PRIMARY" merge -q --ff-only "$BRANCH"
-      if [ "$PUSH" = "true" ]; then
-        git -C "$PRIMARY" push -q origin "$BASE"
-      fi
-      printf 'merged_sha=%s\n' "$(git -C "$PRIMARY" rev-parse HEAD)"
 
   # a rejected merge must not look like a delivered issue
   - id: rejected
@@ -194,27 +151,71 @@ steps:
       echo "merge rejected by the operator for issue $ISSUE" >&2
       exit 1
 
-  - id: close
-    depends: integrate
+  # One commit per issue, made only now, from the validated worktree.
+  - id: integrate
+    depends: approve_merge
+    preconditions:
+      - condition: "${steps.approve_merge.outputs.DECISION}"
+        expected: APPROVE
+    outputs:
+      - {name: merged_sha}
     run: |
       set -euo pipefail
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "cycle: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 1
-        fi
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
+      cd "$WT"
+      git add -A
+      git commit -q -m "$(cat "$ISSUE_STATE/title") (#$ISSUE)" \
+        -m "Factory-Run: $DAG_RUN_ID"
+      if [ "$(git merge-base HEAD "$BASE")" != "$(git rev-parse "$BASE")" ]; then
+        # the trunk moved since validation: rebase and validate the final candidate
+        git rebase -q "$BASE"
+        bash -euo pipefail -c "$GATE"
+      fi
+      git -C "$PRIMARY" merge -q --ff-only "$BRANCH"
+      if [ "$PUSH" = "true" ]; then git -C "$PRIMARY" push -q origin "$BASE"; fi
+      printf 'merged_sha=%s\n' "$(git -C "$PRIMARY" rev-parse HEAD)" >> "$DAGU_OUTPUT_FILE"
+
+  # The trunk is the running system: a red CI on the pushed commit is reverted.
+  - id: ci
+    depends: integrate
+    env:
+      - SHA: ${steps.integrate.outputs.merged_sha}
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      if [ "$PUSH" != "true" ]; then echo "not pushed: no CI to wait for"; exit 0; fi
+      origin=$(git -C "$PRIMARY" remote get-url origin)
+      deadline=$(( $(date +%s) + CI_TIMEOUT_MIN * 60 ))
+      result=""
+      while [ "$(date +%s)" -lt "$deadline" ]; do
+        result=$(gh run list -R "$origin" --commit "$SHA" --json status,conclusion \
+          --jq 'if length == 0 then "none" elif all(.status == "completed") then
+                (if all(.conclusion == "success") then "success" else "failure" end)
+                else "running" end' 2>/dev/null || echo "error")
+        case "$result" in success|failure) break ;; esac
+        sleep 20
       done
-      WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
-      BRANCH="factory/issue-$ISSUE"
-      ISSUE_STATE="$STATE/$ISSUE"
+      echo "ci on $SHA: $result"
+      [ "$result" = "success" ] && exit 0
+      # red, missing or timed out: the trunk must not keep an unverified change
+      git -C "$PRIMARY" revert --no-edit "$SHA"
+      git -C "$PRIMARY" push -q origin "$BASE"
+      gh issue comment "$ISSUE" -R "$origin" \
+        --body "Factory: CI was '$result' for $SHA; reverted on $BASE (run $DAG_RUN_ID)." || true
+      exit 1
+
+  - id: close
+    depends: ci
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       sha=$(git -C "$PRIMARY" rev-parse HEAD)
       if [ "$CLOSE_ISSUE" = "true" ]; then
         origin=$(git -C "$PRIMARY" remote get-url origin)
         gh issue close "$ISSUE" -R "$origin" \
-          --comment "Integrated by the factory in $sha."
+          --comment "Integrated by the factory in $sha (CI green)."
       fi
       git -C "$PRIMARY" worktree remove --force "$WT"
-      git -C "$PRIMARY" branch -q -d "$BRANCH"
+      git -C "$PRIMARY" branch -q -D "$BRANCH"
       echo "closed issue=$ISSUE sha=$sha"

@@ -52,7 +52,9 @@ try {
   sh("git", ["add", "-A"], { cwd: repo });
   sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", "commit", "-qm", "init"], { cwd: repo });
   const brief = join(root, "brief.md");
-  writeFileSync(brief, "# Add mul\n\nAdd an exported `mul(a, b)` to calc.mjs and a check `mul(2, 3) === 6` to test.mjs. Run `node test.mjs` (must print PASS) and make one local commit \"feat: mul\".\n");
+  writeFileSync(brief, "# Add mul\n\nAdd an exported `mul(a, b)` to calc.mjs and a check `mul(2, 3) === 6` to test.mjs. Run `node test.mjs` (must print PASS). Do not commit.\n");
+  const brief2 = join(root, "brief2.md");
+  writeFileSync(brief2, "# Add sub\n\nAdd an exported `sub(a, b)` to calc.mjs. Do not commit.\n");
 
   // 2. isolated T3 with the candidate's line profiles (cheap model for the selftest)
   const t3Home = join(root, "t3"); mkdirSync(join(t3Home, "userdata"), { recursive: true });
@@ -80,31 +82,43 @@ try {
   for (let i = 0; i < 30; i++) { try { if ((await fetch(`${api}/dags`)).ok) break; } catch {} await sleep(1000); }
   log("dagu up on", daguPort);
 
-  // 4. run the cycle
-  const runId = `selftest${Date.now()}`;
-  const params = [`ISSUE=st1`, `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state")}`,
-    `BRIEF_FILE=${brief}`, `GATE=node test.mjs`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINE_TABLE=${linesPath}`];
-  const cycle = spawn(DAGU_BIN, ["start", "--dagu-home", daguHome, "--config", join(daguHome, "config.yaml"), "--run-id", runId, join(FACTORY, "dags", "cycle.yaml"), "--", ...params], { stdio: ["ignore", openSync(join(root, "cycle.log"), "a"), openSync(join(root, "cycle.log"), "a")], env });
-  procs.push(cycle);
-  const status = async () => (await (await fetch(`${api}/dag-runs/cycle/${runId}`)).json()).dagRunDetails;
-  let approved = false, final;
-  for (let i = 0; i < 300; i++) {
-    let d; try { d = await status(); } catch { await sleep(2000); continue; }
-    const label = d?.statusLabel;
-    if (label === "waiting" && !approved) {
-      const r = await fetch(`${api}/dag-runs/cycle/${runId}/human-tasks/approve_merge/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ DECISION: "APPROVE" }) });
-      approved = r.ok; log("approve_merge ->", r.status);
+  // 4. run the cycle: st1 must close; st2's validation fails, so nothing may be committed
+  const runCycle = async (issue, briefPath, gate) => {
+    const runId = `selftest-${issue}-${Date.now()}`;
+    const params = [`ISSUE=${issue}`, `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state")}`,
+      `BRIEF_FILE=${briefPath}`, `GATE=${gate}`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINE_TABLE=${linesPath}`];
+    const logFd = openSync(join(root, `cycle-${issue}.log`), "a");
+    const cycle = spawn(DAGU_BIN, ["start", "--dagu-home", daguHome, "--config", join(daguHome, "config.yaml"), "--run-id", runId, join(FACTORY, "dags", "cycle.yaml"), "--", ...params], { stdio: ["ignore", logFd, logFd], env });
+    procs.push(cycle);
+    let approved = false, final;
+    for (let i = 0; i < 300; i++) {
+      let d; try { d = (await (await fetch(`${api}/dag-runs/cycle/${runId}`)).json()).dagRunDetails; } catch { await sleep(2000); continue; }
+      const label = d?.statusLabel;
+      if (label === "waiting" && !approved) {
+        const r = await fetch(`${api}/dag-runs/cycle/${runId}/human-tasks/approve_merge/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ DECISION: "APPROVE" }) });
+        approved = r.ok; log(issue, "approve_merge ->", r.status);
+      }
+      if (["succeeded", "failed", "aborted"].includes(label)) { final = d; break; }
+      await sleep(3000);
     }
-    if (["succeeded", "failed", "aborted"].includes(label)) { final = d; break; }
-    await sleep(3000);
-  }
+    if (final) for (const n of final.nodes ?? []) log(" ", issue, n.step.id, n.statusLabel);
+    return { final, approved, step: (id) => final?.nodes?.find((n) => n.step.id === id)?.statusLabel };
+  };
+  const trunkLog = () => sh("git", ["log", "--format=%s%n%b%x00", "main"], { cwd: repo }).split("\0").map((x) => x.trim()).filter(Boolean);
+  const r1 = await runCycle("st1", brief, "node test.mjs");
+  const log1 = trunkLog();
+  const r2 = await runCycle("st2", brief2, "node test.mjs && false");
+  const log2 = trunkLog();
+  const wt2 = join(repo, ".workspace", "worktrees", "issue-st2");
   // 5. binary checks
   const checks = {
-    run_succeeded: final?.statusLabel === "succeeded",
-    approved,
-    trunk_has_commit: sh("git", ["log", "--format=%s", "main"], { cwd: repo }).split("\n").some((s) => /mul/i.test(s)),
+    run_succeeded: r1.final?.statusLabel === "succeeded",
+    approved: r1.approved,
+    one_commit_per_issue: log1.length === 2 && /^Add mul \(#st1\)/.test(log1[0]) && /Factory-Run: /.test(log1[0]),
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
+    failed_validation_blocks_commit: r2.step("validate") === "failed" && !r2.approved && log2.length === log1.length &&
+      existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
   };
   // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
   const adHome = join(root, "dagu-admit"); mkdirSync(adHome, { recursive: true });
@@ -131,7 +145,6 @@ try {
   daguAd("start", "--run-id", `cfg${Date.now()}`, cycleDag, "--", "ISSUE=7003", "BASE=nosuch");
   checks.cycle_resolves_base_config = existsSync(join(stateAd, "7003"));
   log(JSON.stringify(checks));
-  if (final) for (const n of final.nodes ?? []) log(" step", n.step.id, n.statusLabel);
   ok = Object.values(checks).every(Boolean);
 } catch (e) {
   log("error:", e.message);

@@ -6,15 +6,18 @@ This package is the seed (VS0, #1010): the minimum that closes the delivery cycl
 
 ## The cycle
 
-`dags/cycle.yaml`, one run per issue:
+`dags/cycle.yaml`, one run per issue. **Nothing is committed before it is validated, and nothing stays on the trunk if CI fails.**
 
-1. **prepare** — worktree `.workspace/worktrees/issue-<n>` on branch `factory/issue-<n>` from `main`, registered as a T3 project. The brief comes from the GitHub issue (or `BRIEF_FILE`).
-2. **implement** — `src/station.mjs` runs the worker as a T3 thread on the isolated `impl` line. It polls the thread with `t3 thread show --json`, reattaches after T3 restarts, and returns a structured verdict. Exit codes: `0` pass/blocked, `10` worker fail or timeout (retried once on the escalation model), `30` infrastructure, `40` malformed verdict (retried once).
+1. **prepare** — worktree `.workspace/worktrees/issue-<n>` on branch `factory/issue-<n>` from `main`, registered as a T3 project; a reused worktree keeps an earlier attempt's uncommitted work on the current trunk. The brief and title come from the GitHub issue (or `BRIEF_FILE`).
+2. **implement** — `src/station.mjs` runs the worker as a T3 thread on the isolated `impl` line. The worker **does not commit**. Exit codes: `0` pass/blocked, `10` worker fail or timeout (retried once on the escalation model), `30` infrastructure, `40` malformed verdict (retried once).
 3. **require_pass** — anything but `pass` stops the run (blocked is manual until VS3/VS5).
-4. **gate** — `scripts/factory-gate.sh`: the repository gate plus the selftest.
-5. **approve_merge** — operator click (Dagu human task; one-click card from VS3).
-6. **integrate** — rebase on `main`, re-run the gate, fast-forward `main`, push.
-7. **close** — close the issue, remove the worktree and branch.
+4. **validate** — the uncommitted worktree is validated with `scripts/factory-gate.sh`: the repository gate on CI's Node major plus the selftest with the service's Dagu.
+5. **approve_merge** — operator click (Dagu human task; one-click card from VS3). `REJECT` fails the run.
+6. **integrate** — the single commit for the issue (`<title> (#n)` + `Factory-Run:` trailer); if the trunk moved, rebase and validate again; fast-forward `main`, push.
+7. **ci** — wait for CI on the pushed commit; red, missing or timed out ⇒ revert on `main`, comment the issue, fail the run.
+8. **close** — close the issue, remove the worktree and branch.
+
+Every step resolves `PRIMARY`, `FACTORY`, `T3_HOME` and `STATE` through `src/cycle-env.sh` (explicit params, else the `A4S_*` values in Dagu's base config).
 
 Interpretation stays with LLMs (the worker's verdict; later the QA line, the verdict/text checker, support and jev). Dagu only acts on structured results.
 

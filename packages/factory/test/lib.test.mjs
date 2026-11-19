@@ -73,11 +73,25 @@ test("the cycle never uses LINES (shells export it as the terminal height)", () 
   assert.ok(!/\$LINES\b|name: LINES\b/.test(dag));
 });
 
-test("prepare rebases a reused worktree onto the trunk and a rejection fails the run", () => {
+test("validate-first: nothing is committed before validation, one commit per issue, red CI is reverted", () => {
   const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
-  assert.ok(dag.includes('git -C "$WT" reset -q --hard "$BASE"'));
-  assert.ok(dag.includes('git -C "$WT" rebase -q "$BASE"'));
+  const order = ["id: implement", "id: validate", "id: approve_merge", "id: integrate", "id: ci", "id: close"].map((k) => dag.indexOf(k));
+  assert.deepEqual([...order].sort((x, y) => x - y), order, "step order");
+  const before = dag.slice(0, dag.indexOf("id: integrate"));
+  assert.ok(!/git commit/.test(before), "no commit before integrate");
+  assert.match(dag, /id: integrate[\s\S]*git commit -q -m "\$\(cat "\$ISSUE_STATE\/title"\) \(#\$ISSUE\)"/);
+  assert.match(dag, /id: ci[\s\S]*git -C "\$PRIMARY" revert --no-edit "\$SHA"/);
   assert.match(dag, /id: rejected[\s\S]*expected: REJECT[\s\S]*exit 1/);
+  const impl = readFileSync(join(FACTORY, "prompts", "impl.md"), "utf8");
+  assert.match(impl, /Do not commit/);
+});
+
+test("every factory DAG step resolves params through cycle-env.sh (no repeated blocks)", () => {
+  for (const f of ["cycle.yaml", "admit.yaml"]) {
+    const dag = readFileSync(join(FACTORY, "dags", f), "utf8");
+    assert.ok(!dag.includes('PRIMARY="${PRIMARY:-${A4S_PRIMARY'), f);
+    assert.ok(dag.includes("src/cycle-env.sh"), f);
+  }
 });
 
 test("factory DAGs run under bash (they use ${!var})", () => {

@@ -41,14 +41,7 @@ steps:
   - id: admit
     run: |
       set -uo pipefail
-      PRIMARY="${PRIMARY:-${A4S_PRIMARY:-}}"; FACTORY="${FACTORY:-${A4S_FACTORY:-}}"
-      T3_HOME="${T3_HOME:-${A4S_T3_HOME:-}}"; STATE="${STATE:-${A4S_STATE:-}}"
-      for p in PRIMARY FACTORY T3_HOME STATE; do
-        if [ -z "${!p}" ]; then
-          echo "admit: $p is empty; set A4S_$p in Dagu's base config or pass $p" >&2
-          exit 30
-        fi
-      done
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh" || exit 30
       origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
       src="$ISSUES_FILE"
       if [ -z "$src" ]; then
