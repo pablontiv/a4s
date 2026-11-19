@@ -60,23 +60,45 @@ steps:
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       mkdir -p "$ISSUE_STATE"
+      rm -f "$ISSUE_STATE/stale-patch"
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
       test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=no)"
       if [ ! -d "$WT" ]; then
         git -C "$PRIMARY" worktree add -q -B "$BRANCH" "$WT" "$BASE"
       else
-        # reused worktree (earlier attempt): keep its work on the current trunk
-        git -C "$WT" reset -q --soft "$BASE" 2>/dev/null || true
-        stashed=no
-        if [ -n "$(git -C "$WT" status --porcelain)" ]; then
-          git -C "$WT" stash push -q -u -m "factory-rework" && stashed=yes
+        # reused worktree (earlier attempt): first abort whatever operation was left in progress
+        gp() { git -C "$WT" rev-parse --git-path "$1"; }
+        if [ -e "$(gp rebase-merge)" ] || [ -e "$(gp rebase-apply)" ]; then
+          git -C "$WT" rebase --abort || rm -rf "$(gp rebase-merge)" "$(gp rebase-apply)"
         fi
+        if [ -e "$(gp MERGE_HEAD)" ]; then git -C "$WT" merge --abort || git -C "$WT" reset -q --merge; fi
+        if [ -e "$(gp CHERRY_PICK_HEAD)" ]; then git -C "$WT" cherry-pick --abort || git -C "$WT" reset -q --merge; fi
+        # carry over only the issue's own changes (committed or not): the diff from the fork point
+        # with the trunk to the working tree, never the reverse of what landed on $BASE since
+        fork=$(git -C "$WT" merge-base HEAD "$BASE" 2>/dev/null || git -C "$WT" rev-parse "$BASE")
+        patch="$ISSUE_STATE/carry-$(date +%s).patch"
+        git -C "$WT" add -A
+        git -C "$WT" diff --cached --binary "$fork" > "$patch"
+        git -C "$WT" reset -q
         git -C "$WT" reset -q --hard "$BASE"
-        if [ "$stashed" = yes ]; then git -C "$WT" stash pop -q; fi
+        git -C "$WT" clean -fdq
+        if [ ! -s "$patch" ]; then
+          rm -f "$patch"
+        elif git -C "$WT" apply --check --binary "$patch" 2>/dev/null; then
+          git -C "$WT" apply --binary "$patch"
+          rm -f "$patch"
+        else
+          echo "prepare: earlier changes do not apply on $BASE; worktree reset to $BASE, changes saved in $patch"
+          printf '%s\n' "$patch" > "$ISSUE_STATE/stale-patch"
+        fi
       fi
       node "$FACTORY/src/t3cli.mjs" project add \
         --title "issue-$ISSUE" "$WT" || echo "project already registered"
       bash "$FACTORY/src/prepare-brief.sh"
+      if [ -s "$ISSUE_STATE/stale-patch" ]; then
+        printf '\n## Earlier changes not applied\n\nYour earlier changes did not apply on the current %s. The worktree was reset to %s; the earlier changes are saved as the patch `%s` (read it, and redo what is still needed).\n' \
+          "$BASE" "$BASE" "$(cat "$ISSUE_STATE/stale-patch")" >> "$ISSUE_STATE/brief.md"
+      fi
 
   - id: implement
     depends: prepare
@@ -213,7 +235,15 @@ steps:
         -m "Factory-Run: $DAG_RUN_ID"
       if [ "$(git merge-base HEAD "$BASE")" != "$(git rev-parse "$BASE")" ]; then
         # the trunk moved since validation: rebase and validate the final candidate
-        git rebase -q "$BASE"
+        if ! git rebase -q "$BASE"; then
+          files=$(git diff --name-only --diff-filter=U | paste -sd, - | sed 's/,/, /g')
+          git rebase --abort || true
+          # keep the issue's changes as working-tree changes on its old fork point
+          git reset -q "$(git merge-base HEAD "$BASE")" || true
+          printf '{"run":"%s","step":"integrate","findings":["rebase-conflict: %s"]}\n' "$DAG_RUN_ID" "$files" > "$ISSUE_STATE/step-failure.json"
+          echo "rebase-conflict: $files" >&2
+          exit 1
+        fi
         bash -euo pipefail -c "$GATE"
       fi
       git -C "$PRIMARY" merge -q --ff-only "$BRANCH"

@@ -34,7 +34,7 @@ export function issueUrl(remote, issue) {
 }
 
 /** The message sent to the thread. */
-export function formatMessage({ event, run, issue, steps, url }) {
+export function formatMessage({ event, run, issue, steps, url, findings = [] }) {
   const failed = failedStep(steps);
   const lines = [
     `[Fábrica] Run ${run} · issue #${issue} · evento: ${event}`,
@@ -42,6 +42,7 @@ export function formatMessage({ event, run, issue, steps, url }) {
     `Issue: ${url ?? "(sin URL)"}`,
     `Pasos: ${steps.length ? steps.map((s) => `${s.id}=${s.status}`).join(", ") : "(sin datos)"}`,
   ];
+  if (findings.length) lines.push(`Hallazgos: ${findings.join("; ")}`);
   return lines.join("\n");
 }
 
@@ -97,7 +98,9 @@ async function deliver(a, env, log, t3, notifiedFile) {
 
   const remote = spawnSync("git", ["-C", a.primary, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout;
   const steps = parseSteps(a.steps);
-  const text = a.text || formatMessage({ event: a.event, run: a.run, issue: a.issue, steps, url: issueUrl(remote, a.issue) });
+  const sf = readJson(join(a.state, String(a.issue), "step-failure.json"), null);
+  const findings = a.event === "failure" && sf?.run === a.run ? sf.findings ?? [] : [];
+  const text = a.text || formatMessage({ event: a.event, run: a.run, issue: a.issue, steps, url: issueUrl(remote, a.issue), findings });
 
   const inboxFile = join(a.state, "inbox.json");
   let threadId = a.inbox.trim();

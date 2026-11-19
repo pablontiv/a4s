@@ -127,7 +127,11 @@ export function runOutcome(state, n, failed) {
   return o;
 }
 
-const findingsText = (state, n, failed) => {
+const findingsText = (state, n, failed, run) => {
+  if (failed === "integrate") {
+    const f = readJson(join(state, String(n), "step-failure.json"), null);
+    if (f && f.step === "integrate" && f.run === run) return { question: "", findings: f.findings ?? [] };
+  }
   const last = failingAttempt(state, n, failed);
   return { question: last?.question ?? "", findings: last?.findings ?? [] };
 };
@@ -155,7 +159,7 @@ export function finishRun(src, { issue, state, run, steps }) {
   const outcome = runOutcome(state, issue, failed);
   const at = readAttempts(state, issue);
   const to = decideAfterFailure(outcome, at.streak);
-  const { question, findings } = findingsText(state, issue, failed);
+  const { question, findings } = findingsText(state, issue, failed, run);
   if (to === "ready") {
     moveLabel(src, issue, "ready");
     writeCarry(state, issue, { run, step: failed, at: new Date().toISOString(), findings: question && !findings.length ? [question] : findings });
