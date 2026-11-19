@@ -1,0 +1,160 @@
+#!/usr/bin/env node
+// The one helper that moves an issue's factory state, which lives in its GitHub labels:
+//   factory:ready (to admit) -> factory:running (admission) -> closed by the cycle | factory:needs-human (+ comment)
+// Works on GitHub (`--repo R`, via gh) or on an ISSUES_FILE fixture (`--issues-file F`, same JSON as `gh issue list`).
+//   labels.mjs move   --issue N --to ready|running|needs-human|done [--comment T] (--repo R | --issues-file F)
+//   labels.mjs finish --issue N --state S --run ID --steps "a=succeeded,b=failed" (--repo R | --issues-file F)
+//       decides after a failed run: back to ready (retryable, < MAX_RUNS runs) or needs-human with a comment.
+//   labels.mjs success --issue N (--repo R | --issues-file F)   drops the state labels of a delivered issue.
+// `finish` and `success` only act on issues labelled factory:running (never on hand-started runs).
+// Run bookkeeping (`$STATE/<n>/attempts.json`) is kept by `reserveAttempt` / `releaseAttempt` (used by admit.mjs).
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { MAX_RUNS, decideAfterFailure } from "./lib.mjs";
+import { failedStep, parseSteps } from "./notify.mjs";
+
+export const LABEL = Object.freeze({ READY: "factory:ready", RUNNING: "factory:running", NEEDS_HUMAN: "factory:needs-human" });
+const STATE_LABELS = Object.values(LABEL);
+const TARGET = { ready: [LABEL.READY], running: [LABEL.RUNNING], "needs-human": [LABEL.NEEDS_HUMAN], done: [] };
+
+export const labelNames = (issue) => (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, "utf8")); } catch { return d; } };
+const writeJson = (f, v) => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify(v, null, 1)); };
+
+/** Source of an issue: a fixture file or GitHub. */
+export function source({ issuesFile, repo }) {
+  if (issuesFile) {
+    const all = () => readJson(issuesFile, []);
+    const edit = (n, fn) => {
+      const list = all();
+      let i = list.find((x) => String(x.number) === String(n));
+      if (!i) list.push(i = { number: Number(n), labels: [] });
+      fn(i); writeJson(issuesFile, list);
+    };
+    return {
+      labels: (n) => labelNames(all().find((x) => String(x.number) === String(n))),
+      set(n, add, remove, comment) {
+        edit(n, (i) => {
+          const objs = (i.labels ?? []).some((l) => typeof l !== "string");
+          const names = labelNames(i).filter((l) => !remove.includes(l));
+          for (const a of add) if (!names.includes(a)) names.push(a);
+          i.labels = names.map((name) => (objs ? { name } : name));
+          if (comment) (i.comments ??= []).push(comment);
+        });
+      },
+    };
+  }
+  if (!repo) throw new Error("--repo or --issues-file is required");
+  const gh = (args) => { const r = spawnSync("gh", args, { encoding: "utf8" }); if (r.status !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${r.stderr}`); return r.stdout; };
+  return {
+    labels: (n) => labelNames({ labels: JSON.parse(gh(["issue", "view", String(n), "-R", repo, "--json", "labels"])).labels }),
+    set(n, add, remove, comment) {
+      for (const l of add) spawnSync("gh", ["label", "create", l, "-R", repo], { encoding: "utf8" }); // exists already: ignored
+      const args = ["issue", "edit", String(n), "-R", repo];
+      for (const l of add) args.push("--add-label", l);
+      for (const l of remove) args.push("--remove-label", l);
+      if (add.length || remove.length) gh(args);
+      if (comment) gh(["issue", "comment", String(n), "-R", repo, "--body", comment]);
+    },
+  };
+}
+
+/** Move the issue to `to` (ready|running|needs-human|done): exactly one state label, or none for done. */
+export function moveLabel(src, n, to, comment) {
+  const add = TARGET[to];
+  if (!add) throw new Error(`unknown state ${to}`);
+  const current = src.labels(n);
+  src.set(n, add.filter((l) => !current.includes(l)), STATE_LABELS.filter((l) => !add.includes(l) && current.includes(l)), comment);
+}
+
+// ---- run bookkeeping: $STATE/<n>/attempts.json = {last, streak, parked} ----
+const attemptsFile = (state, n) => join(state, String(n), "attempts.json");
+export const readAttempts = (state, n) => ({ last: 0, streak: 0, parked: false, ...readJson(attemptsFile(state, n), {}) });
+
+/** Next attempt number k and run count since the last human decision; persisted so a crash never reuses a run-id. */
+export function reserveAttempt(state, n) {
+  const prev = readAttempts(state, n);
+  const next = { last: prev.last + 1, streak: prev.parked ? 1 : prev.streak + 1, parked: false };
+  writeJson(attemptsFile(state, n), next);
+  return { k: next.last, prev };
+}
+export const releaseAttempt = (state, n, prev) => writeJson(attemptsFile(state, n), prev);
+
+/** A new attempt must not replay the stored pass/blocked of an earlier one: archive such station states. */
+export function archiveStaleStations(state, n) {
+  for (const line of ["impl", "qa"]) {
+    const f = join(state, String(n), `${line}.json`);
+    const last = readJson(f, { attempts: [] }).attempts?.at?.(-1);
+    if (last && (last.outcome === "pass" || last.outcome === "blocked")) renameSync(f, `${f}.${Date.now()}`);
+  }
+}
+
+const lastAttempt = (state, n, line) => readJson(join(state, String(n), `${line}.json`), { attempts: [] }).attempts?.at?.(-1);
+
+/** The station attempt that failed the step. The `qa` step also runs the implementation repair (qafix): the later attempt wins, impl on a tie when it did not pass. */
+function failingAttempt(state, n, failed) {
+  if (failed === "implement" || failed === "require_pass") return lastAttempt(state, n, "impl");
+  if (failed !== "qa") return undefined;
+  const qa = lastAttempt(state, n, "qa"), impl = lastAttempt(state, n, "impl");
+  if (impl && impl.outcome !== "pass" && (impl.startedAt ?? 0) >= (qa?.startedAt ?? 0)) return impl;
+  return qa;
+}
+
+/** Outcome of a failed run: that of the station that failed; any other failing step is a `fail`. */
+export function runOutcome(state, n, failed) {
+  if (!["implement", "require_pass", "qa"].includes(failed)) return "fail";
+  const o = failingAttempt(state, n, failed)?.outcome;
+  if (failed === "require_pass") return o === "blocked" ? "blocked" : "fail";
+  if (o === undefined || o === "pass") return "fail";
+  return o;
+}
+
+const findingsText = (state, n, failed) => {
+  const last = failingAttempt(state, n, failed);
+  return { question: last?.question ?? "", findings: last?.findings ?? [] };
+};
+
+/** After a failed run: ready again or needs-human with a comment. Returns {to, outcome, failed}. */
+export function finishRun(src, { issue, state, run, steps }) {
+  if (!src.labels(issue).includes(LABEL.RUNNING)) return { to: null };
+  const failed = failedStep(parseSteps(steps)) ?? "unknown";
+  const outcome = runOutcome(state, issue, failed);
+  const at = readAttempts(state, issue);
+  const to = decideAfterFailure(outcome, at.streak);
+  if (to === "ready") {
+    moveLabel(src, issue, "ready");
+  } else {
+    const { question, findings } = findingsText(state, issue, failed);
+    writeJson(attemptsFile(state, issue), { ...at, parked: true });
+    moveLabel(src, issue, "needs-human", [
+      `Factory: run ${run} needs a human.`,
+      `- Outcome: ${outcome}${outcome === "blocked" ? "" : ` (run ${at.streak} of ${MAX_RUNS})`}`,
+      `- Failed step: ${failed}`,
+      `- Question: ${question || (findings.length ? findings.join("; ") : "none; see the run log")}`,
+      "",
+      `Put \`${LABEL.READY}\` back on this issue to admit a new attempt.`,
+    ].join("\n"));
+  }
+  return { to, outcome, failed };
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  try {
+    const [cmd, ...rest] = process.argv.slice(2);
+    const { values: a } = parseArgs({ args: rest, options: { issue: { type: "string" }, to: { type: "string" }, comment: { type: "string" }, state: { type: "string" }, run: { type: "string", default: "unknown" }, steps: { type: "string", default: "" }, repo: { type: "string" }, "issues-file": { type: "string" } } });
+    if (!a.issue) throw new Error("--issue is required");
+    const src = source({ issuesFile: a["issues-file"], repo: a.repo });
+    if (cmd === "move") { moveLabel(src, a.issue, a.to, a.comment); console.log(`#${a.issue} -> ${a.to}`); }
+    else if (cmd === "finish") {
+      if (!a.state) throw new Error("--state is required");
+      const r = finishRun(src, { issue: a.issue, state: a.state, run: a.run, steps: a.steps });
+      console.log(r.to ? `#${a.issue} -> ${r.to} (outcome ${r.outcome}, failed step ${r.failed})` : `#${a.issue} not ${LABEL.RUNNING}: untouched`);
+    } else if (cmd === "success") {
+      if (src.labels(a.issue).includes(LABEL.RUNNING)) moveLabel(src, a.issue, "done");
+      console.log(`#${a.issue} done`);
+    } else throw new Error(`unknown command ${cmd}`);
+  } catch (e) { console.error(`labels: ${e.message}`); process.exit(30); }
+}

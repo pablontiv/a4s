@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Admission: admit ONE issue as a factory run.
-//   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F | --repo R] [--dagu-home D] [--config C] [--param K=V ...]
+//   admit.mjs --issue <n> --dag <cycle.yaml> [--issues-file F [--live] | --repo R] [--state S] [--dagu-home D] [--config C] [--param K=V ...]
 // Admits only when the issue carries the label `factory:ready` (never plain `factory`, the classification label).
-// Run-id is deterministic (`factory-issue-<n>`); Dagu rejects a duplicate run-id, reported as "duplicate".
+// Run-id is `factory-issue-<n>-<k>`, k = attempt number from 1 (kept in `$STATE/<n>/attempts.json`, --state), so a new
+// attempt is never a duplicate; without --state k is 1. Admission moves the label factory:ready -> factory:running
+// (src/labels.mjs) before enqueueing; an enqueue failure puts it back. Dagu rejects a duplicate run-id: "duplicate".
 // The issue body must satisfy the issue contract (issue-contract.mjs); otherwise it is not enqueued.
 // Exit codes: 0 admitted, 20 not labelled, 21 duplicate, 22 contract, 30 infra.
 //   admit.mjs --list F   prints the numbers of the issues in F that carry the label (one per line).
@@ -11,11 +13,12 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkIssue } from "./issue-contract.mjs";
+import { archiveStaleStations, moveLabel, releaseAttempt, reserveAttempt, source } from "./labels.mjs";
 
 export const ADMIT_LABEL = "factory:ready";
 export const EXIT = Object.freeze({ ADMITTED: 0, NOT_LABELLED: 20, DUPLICATE: 21, CONTRACT: 22, INFRA: 30 });
 
-export const runIdFor = (n) => `factory-issue-${n}`;
+export const runIdFor = (n, k = 1) => `factory-issue-${n}-${k}`;
 
 /** Label names of an issue-like object; labels may be strings or {name}. */
 export const labelNames = (issue) => (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
@@ -31,6 +34,8 @@ function parseArgs(argv) {
     const v = () => argv[++i];
     if (a === "--issue") o.issue = v();
     else if (a === "--repo") o.repo = v();
+    else if (a === "--live") o.live = true; // --issues-file is a snapshot of GitHub: labels move on --repo
+    else if (a === "--state") o.state = v();
     else if (a === "--dag") o.dag = v();
     else if (a === "--issues-file") o.issuesFile = v();
     else if (a === "--dagu-home") o.daguHome = v();
@@ -63,7 +68,20 @@ export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
     for (const p of contract.problems) console.log(`- ${p}`);
     return EXIT.CONTRACT;
   }
-  const runId = runIdFor(o.issue);
+  let k = 1, prev = null, src;
+  try {
+    src = o.live ? source({ repo: o.repo }) : source({ issuesFile: o.issuesFile, repo: o.repo });
+    if (o.state) { archiveStaleStations(o.state, o.issue); ({ k, prev } = reserveAttempt(o.state, o.issue)); }
+    moveLabel(src, o.issue, "running");
+  } catch (e) {
+    if (prev) releaseAttempt(o.state, o.issue, prev);
+    console.error(`admit: ${e.message}`); return EXIT.INFRA;
+  }
+  const rollback = () => {
+    if (prev) releaseAttempt(o.state, o.issue, prev);
+    try { moveLabel(src, o.issue, "ready"); } catch (e) { console.error(`admit: could not restore ${ADMIT_LABEL}: ${e.message}`); }
+  };
+  const runId = runIdFor(o.issue, k);
   // explicit name: inside an admit step Dagu would register the run under the parent DAG's name
   const args = ["enqueue", "--run-id", runId, "--name", basename(o.dag).replace(/\.ya?ml$/, "")];
   if (o.daguHome) args.push("--dagu-home", o.daguHome);
@@ -73,10 +91,11 @@ export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DAG_")));
   const r = spawnSync(daguBin, args, { encoding: "utf8", env });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
-  if (r.error) { console.error(`admit: ${r.error.message}`); return EXIT.INFRA; }
+  if (r.error) { console.error(`admit: ${r.error.message}`); rollback(); return EXIT.INFRA; }
   if (r.status === 0) { console.log(`admitted #${o.issue} run-id=${runId}`); return EXIT.ADMITTED; }
   if (isDuplicate(out)) { console.log(`duplicate #${o.issue} run-id=${runId}`); return EXIT.DUPLICATE; }
   console.error(`admit: dagu enqueue -> ${r.status}\n${out}`);
+  rollback();
   return EXIT.INFRA;
 }
 

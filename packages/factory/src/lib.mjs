@@ -161,3 +161,14 @@ export function planNext(line, st, { answer } = {}) {
 export function outcomeForStatus(status) {
   return status === "cancelled" ? "cancelled" : "fail";
 }
+
+/** Runs an issue gets (admissions since the last human decision) before it goes to `factory:needs-human`. */
+export const MAX_RUNS = 3;
+
+/** An outcome is retryable by a new run unless the policy table needs a human answer (`resume`) or it is a pass. */
+export const isRetryable = (outcome) => OUTCOMES.includes(outcome) && !["stop", "resume"].includes(POLICY[outcome]);
+
+/** What the issue becomes after a failed run: "ready" (new attempt) or "needs-human". */
+export function decideAfterFailure(outcome, runs) {
+  return isRetryable(outcome) && runs < MAX_RUNS ? "ready" : "needs-human";
+}

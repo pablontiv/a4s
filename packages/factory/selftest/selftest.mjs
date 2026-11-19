@@ -177,22 +177,48 @@ try {
   writeFileSync(issuesFile, JSON.stringify([{ number: 7001, labels: [{ name: "factory:ready" }, { name: "factory" }], body: "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n" }, { number: 7002, labels: [{ name: "factory" }] }, { number: 7003, labels: [{ name: "factory:ready" }], body: "## Goal\nx\n\n## Out of scope\nz\n" }]));
   const admitDag = join(FACTORY, "dags", "admit.yaml"), cycleDag = join(FACTORY, "dags", "cycle.yaml");
   const daguAd = (sub, ...a) => spawnSync(DAGU_BIN, [sub, "--dagu-home", adHome, "--config", adCfg, ...a], { encoding: "utf8", env: adEnv });
-  const queued = (n) => daguAd("status", "--run-id", `factory-issue-${n}`, cycleDag).status === 0;
-  const admitCli = (n) => spawnSync("node", [join(FACTORY, "src", "admit.mjs"), "--issue", String(n), "--issues-file", issuesFile, "--dagu-home", adHome, "--config", adCfg, "--dag", cycleDag], { encoding: "utf8", env: adEnv }).status;
+  const queued = (n, k = 1) => daguAd("status", "--run-id", `factory-issue-${n}-${k}`, cycleDag).status === 0;
+  const admitCli = (n) => spawnSync("node", [join(FACTORY, "src", "admit.mjs"), "--issue", String(n), "--issues-file", issuesFile, "--state", stateAd, "--dagu-home", adHome, "--config", adCfg, "--dag", cycleDag], { encoding: "utf8", env: adEnv }).status;
   // no PRIMARY/FACTORY/T3_HOME/STATE params: admit.yaml must resolve them from the base config
   const adm = daguAd("start", "--run-id", `admit${Date.now()}`, admitDag, "--", `ISSUES_FILE=${issuesFile}`, `TARGET_DAGU_HOME=${adHome}`, `TARGET_DAGU_CONFIG=${adCfg}`);
   log("admit dag ->", adm.status);
   checks.admit_dag_succeeded = adm.status === 0;
   checks.admit_ready_enqueued = queued(7001);
   // the admitted run must be registered under the cycle DAG name, never the parent's `admit`
-  const byName = (name, n) => spawnSync(DAGU_BIN, ["status", "--dagu-home", adHome, "--config", adCfg, "--run-id", `factory-issue-${n}`, name], { encoding: "utf8", env: adEnv }).status === 0;
+  const byName = (name, n) => spawnSync(DAGU_BIN, ["status", "--dagu-home", adHome, "--config", adCfg, "--run-id", `factory-issue-${n}-1`, name], { encoding: "utf8", env: adEnv }).status === 0;
   checks.admit_registered_as_cycle = byName("cycle", 7001) && !byName("admit", 7001);
-  checks.admit_again_is_duplicate = admitCli(7001) === 21;
+  // admission moved the label ready -> running, so a second admission finds nothing to admit
+  const labelsOf = (n) => (JSON.parse(readFileSync(issuesFile, "utf8")).find((i) => i.number === n)?.labels ?? []).map((l) => l.name ?? l);
+  checks.admit_moves_label_to_running = labelsOf(7001).includes("factory:running") && !labelsOf(7001).includes("factory:ready");
+  checks.admit_again_not_admitted = admitCli(7001) === 20;
   checks.admit_contract_violation_not_admitted = !queued(7003) && admitCli(7003) === 22;
   checks.admit_factory_only_not_admitted = !queued(7002) && admitCli(7002) === 20;
   // an admitted-style run without those params resolves STATE from the base config (BASE=nosuch stops it right after)
   daguAd("start", "--run-id", `cfg${Date.now()}`, cycleDag, "--", "ISSUE=7003", "BASE=nosuch");
   checks.cycle_resolves_base_config = existsSync(join(stateAd, "7003"));
+  // 5c. issue state and retries (fixtures, no worker): fail once -> -2; blocked -> needs-human; 3 failures -> needs-human + comment
+  const labelsCli = (...a) => spawnSync("node", [join(FACTORY, "src", "labels.mjs"), ...a, "--issues-file", issuesFile], { encoding: "utf8", env: adEnv });
+  const seedStation = (n, outcome, question = "") => { mkdirSync(join(stateAd, String(n)), { recursive: true }); writeFileSync(join(stateAd, String(n), "impl.json"), JSON.stringify({ attempts: [{ threadId: "t", outcome, question }] })); };
+  const commentsOf = (n) => JSON.parse(readFileSync(issuesFile, "utf8")).find((i) => i.number === n)?.comments ?? [];
+  const body = "## Goal\nx\n\n## Acceptance criteria\n- [ ] y\n\n## Out of scope\nz\n";
+  const fixtures = JSON.parse(readFileSync(issuesFile, "utf8"));
+  for (const n of [7101, 7102]) fixtures.push({ number: n, labels: [{ name: "factory:ready" }], body });
+  writeFileSync(issuesFile, JSON.stringify(fixtures));
+  const failRun = (n, k, steps, seed) => { admitCli(n); if (seed) seed(); return labelsCli("finish", "--issue", String(n), "--state", stateAd, "--run", `factory-issue-${n}-${k}`, "--steps", steps); };
+  seedStation(7101, "fail");
+  failRun(7101, 1, "prepare=succeeded,implement=failed");
+  checks.retry_back_to_ready = labelsOf(7101).includes("factory:ready");
+  admitCli(7101);
+  checks.retry_runs_as_attempt_2 = queued(7101, 2);
+  labelsCli("finish", "--issue", "7101", "--state", stateAd, "--run", "factory-issue-7101-2", "--steps", "implement=failed");
+  admitCli(7101);
+  labelsCli("finish", "--issue", "7101", "--state", stateAd, "--run", "factory-issue-7101-3", "--steps", "implement=failed");
+  checks.three_failures_needs_human = labelsOf(7101).includes("factory:needs-human") && queued(7101, 3) && /Outcome: fail/.test(commentsOf(7101).at(-1) ?? "") && /Failed step: implement/.test(commentsOf(7101).at(-1) ?? "");
+  labelsCli("move", "--issue", "7101", "--to", "ready");
+  checks.human_ready_admits_new_attempt = admitCli(7101) === 0 && queued(7101, 4);
+  // seed after admission: admission archives a stale pass/blocked station state
+  failRun(7102, 1, "implement=succeeded,require_pass=failed", () => seedStation(7102, "blocked", "which db?"));
+  checks.blocked_needs_human = labelsOf(7102).includes("factory:needs-human") && /which db\?/.test(commentsOf(7102).at(-1) ?? "");
   log(JSON.stringify(checks));
   ok = Object.values(checks).every(Boolean);
 } catch (e) {

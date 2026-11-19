@@ -56,7 +56,13 @@ Selftest knobs: `SELFTEST_MODEL` (default `anthropic/claude-haiku-5-5`), `SELFTE
 
 ## Admission (VS1)
 
-`dags/admit.yaml` runs every 5 minutes, lists open issues labelled **`factory:ready`** (`gh issue list`, or the `ISSUES_FILE` fixture) and calls `src/admit.mjs` for each. It enqueues `cycle.yaml` with run-id `factory-issue-<n>`. Exit codes: 0 admitted, 20 not labelled, 21 duplicate (Dagu rejects the run-id), 30 infra. The classification label `factory` never admits.
+`dags/admit.yaml` runs every 5 minutes, lists open issues labelled **`factory:ready`** (`gh issue list`, or the `ISSUES_FILE` fixture) and calls `src/admit.mjs` for each. It enqueues `cycle.yaml` with run-id `factory-issue-<n>-<k>` (k = attempt number from 1, kept in `$STATE/<n>/attempts.json`, so a new attempt is never a duplicate). Exit codes: 0 admitted, 20 not labelled, 21 duplicate (Dagu rejects the run-id), 22 contract, 30 infra. The classification label `factory` never admits.
+
+## Issue state in labels (VS5)
+
+The labels are the state: `factory:ready` (to admit) → `factory:running` (admission moves it) → closed by the cycle, or `factory:needs-human` with a comment (outcome, failed step, question). `src/labels.mjs` is the only helper that moves them (GitHub via `--repo`, or an `ISSUES_FILE` fixture via `--issues-file`).
+
+When a run fails, the `failure` handler of `cycle.yaml` runs `labels.mjs finish`: the attempt outcome (policy table, `CONTRACTS.md`) decides. Retryable outcomes (`fail`, `malformed`, `timeout`, `cancelled`, `infra`) put the issue back to `factory:ready` (next admission runs `-<k+1>`), up to 3 runs; `blocked`, the 3rd failure or a non-retryable outcome put it on `factory:needs-human`. Putting `factory:ready` back on a `needs-human` issue admits a new attempt with a fresh budget of 3 runs. A failed step that is not a station (validate, ci…) counts as `fail`. Runs not labelled `factory:running` (started by hand) are never relabelled.
 
 ## Notifications (VS2)
 

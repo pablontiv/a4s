@@ -50,6 +50,10 @@ params:
   # Not named LINES: shells export LINES (terminal height), e.g. "0" under Dagu.
   - name: LINE_TABLE
     default: ""
+  # issue-state fixture (same JSON as `gh issue list`); empty = the labels live on GitHub.
+  # Set by admission when it was fed from ISSUES_FILE (selftest).
+  - name: ISSUES_FILE
+    default: ""
 steps:
   - id: prepare
     run: |
@@ -287,6 +291,15 @@ handler_on:
           --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
           --t3-home "$T3_HOME" --state "$STATE"
       ) || echo "notify failed (ignored)" >&2
+      # delivered: the issue is closed by the cycle; drop its factory:running label
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
+        if [ -n "$ISSUES_FILE" ]; then where=(--issues-file "$ISSUES_FILE")
+        elif [ -n "$origin" ]; then where=(--repo "$origin")
+        else exit 0; fi
+        node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" "${where[@]}"
+      ) || echo "label update failed (ignored)" >&2
       exit 0
   failure:
     run: |
@@ -298,6 +311,18 @@ handler_on:
           --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
           --t3-home "$T3_HOME" --state "$STATE"
       ) || echo "notify failed (ignored)" >&2
+      # issue state (src/labels.mjs): back to factory:ready (retryable, < 3 runs) or factory:needs-human + comment
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
+          | sed -nE 's/^(├|└)─([^ ]+)( \([^)]*\))? \[([a-z_]+)\]$/\2=\4/p' | paste -sd, - || true)
+        origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
+        if [ -n "$ISSUES_FILE" ]; then where=(--issues-file "$ISSUES_FILE")
+        elif [ -n "$origin" ]; then where=(--repo "$origin")
+        else echo "no issue source: labels untouched"; exit 0; fi
+        node "$FACTORY/src/labels.mjs" finish --issue "$ISSUE" --state "$STATE" \
+          --run "$DAG_RUN_ID" --steps "$steps" "${where[@]}"
+      ) || echo "label update failed (ignored)" >&2
       exit 0
   wait:
     run: |

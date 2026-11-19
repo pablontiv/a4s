@@ -1,6 +1,6 @@
 ---
 # Admission (VS1): every 5 minutes, open issues labelled `factory:ready`
-# become factory runs (run-id factory-issue-<n>) of cycle.yaml. Duplicates are
+# become factory runs (run-id factory-issue-<n>-<k>, k = attempt) of cycle.yaml. Duplicates are
 # rejected by Dagu and are not errors. The label `factory` never admits.
 type: graph
 # bash features (${!var}) are used; Dagu's default shell may be sh
@@ -44,6 +44,7 @@ steps:
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh" || exit 30
       origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
       src="$ISSUES_FILE"
+      live=""; [ -z "$src" ] && live=1
       if [ -z "$src" ]; then
         [ -n "$origin" ] || { echo "admit: PRIMARY has no origin remote" >&2; exit 30; }
         src=$(mktemp)
@@ -55,14 +56,15 @@ steps:
       [ -n "$TARGET_DAGU_CONFIG" ] && opts+=(--config "$TARGET_DAGU_CONFIG")
       # PRIMARY/FACTORY/T3_HOME/STATE are forwarded only when passed explicitly;
       # otherwise the admitted run resolves them from the base config itself.
+      [ -n "$ISSUES_FILE" ] && opts+=(--param "ISSUES_FILE=$ISSUES_FILE")
       for p in GATE PUSH CLOSE_ISSUE LINE_TABLE BRIEF_FILE; do
         v="${!p}"; [ -n "$v" ] && opts+=(--param "$p=$v")
       done
       numbers=$(node "$FACTORY/src/admit.mjs" --list "$src") || exit 30
       rc_all=0
       for n in $numbers; do
-        out=$(node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" \
-          ${origin:+--repo "$origin"} --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}") && rc=0 || rc=$?
+        out=$(node "$FACTORY/src/admit.mjs" --issue "$n" --issues-file "$src" --state "$STATE" \
+          ${origin:+--repo "$origin"} ${live:+--live} --dag "$FACTORY/dags/cycle.yaml" "${opts[@]}") && rc=0 || rc=$?
         printf '%s\n' "$out"
         # 22 = issue contract violated: not enqueued, non-fatal; from GitHub, tell the issue
         if [ "$rc" = 22 ] && [ -z "$ISSUES_FILE" ] && [ -n "$origin" ]; then

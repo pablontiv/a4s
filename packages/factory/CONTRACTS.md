@@ -83,3 +83,7 @@ The next attempt is chosen from the previous outcome only (`POLICY`), never from
 - A stored `pass` (stop) or `blocked` without `--answer` (await) is replayed before any T3 access, so it needs no server.
 - Unreachable T3 (preflight or while polling), a failed `thread start`, or malformed JSON from the `t3` CLI is `infra`; a preflight failure finalizes the in-flight attempt as `infra`, terminal outcomes are never overwritten.
 - `retry_policy.exit_code` of every station step in `cycle.yaml` equals the exit codes of the `escalate` outcomes (`retryExitCodes()`).
+
+## Issue state contract
+
+Labels are the source of truth (`src/labels.mjs`, tested in `test/labels.test.mjs` and the selftest): `factory:ready` → `factory:running` (admission) → closed, or `factory:needs-human` (+ comment: outcome, failed step, question). Run-ids are `factory-issue-<n>-<k>`. After a failed run, `isRetryable(outcome)` (every outcome whose POLICY is not `stop`/`resume`) with fewer than `MAX_RUNS` (3) runs since the last human decision puts the issue back to `factory:ready`; anything else goes to `factory:needs-human`.
