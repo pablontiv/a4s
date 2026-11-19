@@ -12,3 +12,11 @@ Enforced by `test/dags.test.mjs` for every `dags/*.yaml`.
 4. Every step that runs `src/station.mjs` declares all station outputs (`OUTPUT_KEYS` in `src/lib.mjs`: result, thread_id, model, question, commit, findings, worktree).
 5. Every `${steps.<id>.outputs.<name>}` reference points to an existing step that declares that output.
 6. `cycle.yaml` has no `human.task` step: validation is the only gate before the trunk.
+
+## Validation contract
+
+Validation runs in the same environment as production and CI.
+
+- The repository gate (`scripts/factory-gate.sh`) runs on the Node major pinned in `.github/workflows/ci.yml` (`node-version`), not the host's.
+- The selftest uses the Dagu on PATH (the service's build); only `FACTORY_DAGU_BIN` overrides it.
+- The selftest gives Dagu only `PATH`, `HOME`, `DAGU_HOME` and `DAGU_SKIP_EXAMPLES`; nothing else from the caller's environment.
