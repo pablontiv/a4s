@@ -113,9 +113,80 @@ steps:
         exit 1
       fi
 
+  # Independent QA on the uncommitted worktree (a different model family than impl).
+  # QA must not change anything (status + diff + untracked content are hashed before and
+  # after). On `fail` the findings go once to the implementation thread, the new verdict
+  # must pass, and QA runs once more; a second `fail` fails the run.
+  - id: qa
+    depends: require_pass
+    env:
+      - IMPL_THREAD: ${steps.implement.outputs.thread_id}
+    outputs:
+      - {name: result}
+      - {name: thread_id}
+      - {name: model}
+      - {name: question}
+      - {name: commit}
+      - {name: findings}
+      - {name: worktree}
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      snap() {
+        ( cd "$WT"
+          git status --porcelain
+          git diff | sha256sum
+          git ls-files -o --exclude-standard -z | xargs -0 -r sha256sum ) | sha256sum | cut -d' ' -f1
+      }
+      field() { grep "^$2=" "$1" | tail -n 1 | cut -d= -f2- || true; }
+      run_qa() {
+        local n=$1 brief="$ISSUE_STATE/qa-brief-$1.md" outf="$ISSUE_STATE/qa-out-$1" before after rc=0
+        { cat "$ISSUE_STATE/brief.md"
+          printf '\n\n## Worktree status (git status --short)\n\n```\n'
+          git -C "$WT" status --short
+          printf '```\n\n## Worktree diff (git diff)\n\n```diff\n'
+          git -C "$WT" diff
+          printf '```\n'; } > "$brief"
+        : > "$outf"
+        before=$(snap)
+        DAGU_OUTPUT_FILE="$outf" node "$FACTORY/src/station.mjs" --line qa \
+          --issue "$ISSUE" --run "$DAG_RUN_ID-qa$n" --project "$WT" \
+          --brief "$brief" --t3-home "$T3_HOME" \
+          --state "$STATE" --lines "$LINE_TABLE" >&2 || rc=$?
+        after=$(snap)
+        if [ "$before" != "$after" ]; then echo "qa changed the worktree" >&2; exit 1; fi
+        case "$rc" in 0|10) ;; *) echo "qa station exit $rc" >&2; exit 1 ;; esac
+        QA_OUT="$outf"
+        QA_RESULT=$(field "$outf" result)
+      }
+      run_qa 1
+      if [ "$QA_RESULT" != "pass" ]; then
+        echo "qa result=$QA_RESULT; sending findings to the implementation thread" >&2
+        { printf 'QA rejected your work. Fix every finding below (uncommitted, same rules) and answer with the verdict JSON line.\n\nFindings:\n%s\n' \
+            "$(field "$QA_OUT" findings)"
+          if [ -n "$(field "$QA_OUT" question)" ]; then printf 'Question: %s\n' "$(field "$QA_OUT" question)"; fi
+        } > "$ISSUE_STATE/qa-findings.md"
+        fixrc=0
+        DAGU_OUTPUT_FILE="$ISSUE_STATE/qa-fix-out" node "$FACTORY/src/station.mjs" --line impl \
+          --issue "$ISSUE" --run "$DAG_RUN_ID-qafix" --project "$WT" \
+          --continue "$IMPL_THREAD" --brief "$ISSUE_STATE/qa-findings.md" \
+          --t3-home "$T3_HOME" --state "$STATE" --lines "$LINE_TABLE" >&2 || fixrc=$?
+        fixres=$(field "$ISSUE_STATE/qa-fix-out" result)
+        if [ "$fixrc" != 0 ] || [ "$fixres" != "pass" ]; then
+          echo "implementation after QA findings: result=$fixres exit=$fixrc" >&2
+          exit 1
+        fi
+        run_qa 2
+        if [ "$QA_RESULT" != "pass" ]; then
+          echo "second QA result=$QA_RESULT: failing the run" >&2
+          exit 1
+        fi
+      fi
+      grep -E '^(result|thread_id|model|question|commit|findings|worktree)=' "$QA_OUT" >> "$DAGU_OUTPUT_FILE"
+
   # Validate the uncommitted work in the worktree before anything is committed.
   - id: validate
-    depends: require_pass
+    depends: qa
     run: |
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"

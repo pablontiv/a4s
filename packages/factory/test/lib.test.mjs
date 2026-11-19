@@ -55,6 +55,32 @@ test("line instances are isolated and restricted to their allowlist", () => {
   assert.deepEqual(inst.environment, [{ name: "A4S_LINE", value: "impl" }]);
 });
 
+test("the qa line gets an isolated, read+bash-only instance of another model family", () => {
+  const doc = JSON.parse(readFileSync(join(FACTORY, "lines.json"), "utf8"));
+  assert.equal(doc.lines.qa.provider, "pi-qa");
+  assert.notEqual(doc.lines.qa.model.split("/")[0], doc.lines.impl.model.split("/")[0]);
+  const inst = instancesFromLines(join(FACTORY, "lines.json"), "/bin/pi")["pi-qa"];
+  const args = inst.config.launchArgs;
+  for (const flag of ["--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes"]) assert.ok(args.includes(flag), flag);
+  assert.ok(args.includes("--tools read,bash"));
+  assert.ok(!/edit|write/.test(args.split("--tools ")[1].split(" ")[0]));
+  assert.ok(args.endsWith(`--append-system-prompt ${join(FACTORY, "prompts", "qa.md")}`));
+  assert.deepEqual(inst.environment, [{ name: "A4S_LINE", value: "qa" }]);
+});
+
+test("the cycle runs QA between require_pass and validate, checks the worktree is untouched, and retries once via the impl thread", () => {
+  const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
+  const at = (k) => dag.indexOf(k);
+  assert.ok(at("id: require_pass") < at("id: qa") && at("id: qa") < at("id: validate"));
+  const qa = dag.slice(at("id: qa"), at("id: validate"));
+  assert.match(qa, /depends: require_pass/);
+  assert.match(qa, /station\.mjs" --line qa/);
+  assert.match(qa, /git status --porcelain/);
+  assert.match(qa, /git diff/);
+  assert.match(qa, /--continue "\$IMPL_THREAD"/);
+  assert.match(dag.slice(at("id: validate"), at("id: integrate")), /depends: qa/);
+});
+
 test("the cycle DAG declares every station output", () => {
   const dag = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
   for (const k of ["result", "thread_id", "model", "question", "commit", "findings", "worktree"]) assert.ok(dag.includes(`{name: ${k}}`), k);

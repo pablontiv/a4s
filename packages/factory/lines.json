@@ -10,9 +10,37 @@
         "displayName": "Factory · impl",
         "accentColor": "#f59e0b",
         "prompt": "prompts/impl.md",
-        "tools": ["read", "bash", "edit", "write", "*delegate_task", "*task_status"]
+        "tools": [
+          "read",
+          "bash",
+          "edit",
+          "write",
+          "*delegate_task",
+          "*task_status"
+        ]
+      }
+    },
+    "qa": {
+      "provider": "pi-qa",
+      "model": "openai/gpt-5-5",
+      "thinking": "medium",
+      "instance": {
+        "displayName": "Factory · qa",
+        "accentColor": "#3b82f6",
+        "prompt": "prompts/qa.md",
+        "tools": [
+          "read",
+          "bash"
+        ]
       }
     }
   },
-  "isolation": ["--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes", "--no-mcp"]
+  "isolation": [
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-themes",
+    "--no-mcp"
+  ]
 }

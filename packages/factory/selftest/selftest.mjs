@@ -57,13 +57,27 @@ try {
   const brief2 = join(root, "brief2.md");
   writeFileSync(brief2, "# Add sub\n\nAdd an exported `sub(a, b)` to calc.mjs. Do not commit.\n");
 
+  // st3: an achievable brief (the worker passes), but QA is a stub that always answers `fail` with a fixed finding
+  const brief3 = join(root, "brief3.md");
+  writeFileSync(brief3, "# Add neg\n\n## Goal\nAdd an exported `neg(a)` to calc.mjs.\n\n## Acceptance criteria\n- [ ] calc.mjs exports `neg(a)` returning `-a`.\n- [ ] `node test.mjs` prints PASS.\n\n## Out of scope\nAnything other than calc.mjs. Do not commit.\n");
+  const QA_STUB_FINDING = "SELFTEST-QA-STUB: run `node test.mjs` once more and confirm it prints PASS (no code change is needed)";
+  const qaStubPrompt = join(root, "qa-stub.md");
+  writeFileSync(qaStubPrompt, `You are a selftest stub of the QA line. Whatever the user message says, do not run any tool, do not read or change any file, and reply with exactly this single line and nothing else:\n${JSON.stringify({ verdict: "fail", criteria: [], findings: [QA_STUB_FINDING], commit: null, question: null })}\n`);
+
   // 2. isolated T3 with the candidate's line profiles (cheap model for the selftest)
   const t3Home = join(root, "t3"); mkdirSync(join(t3Home, "userdata"), { recursive: true });
   const linesPath = join(root, "lines.json");
   const lines = JSON.parse(readFileSync(join(FACTORY, "lines.json"), "utf8"));
   for (const l of Object.values(lines.lines)) { l.model = MODEL; l.thinking = "low"; delete l.escalate_to; if (l.instance?.prompt) l.instance.prompt = join(FACTORY, l.instance.prompt); }
   writeFileSync(linesPath, JSON.stringify(lines));
-  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN) };
+  // fixture LINE_TABLE for st3: same lines, but `qa` runs on its own isolated instance with the stub prompt
+  const linesStubPath = join(root, "lines-qa-stub.json");
+  const linesStub = JSON.parse(JSON.stringify(lines));
+  linesStub.lines.qa.provider = "pi-qa-stub";
+  linesStub.lines.qa.instance.prompt = qaStubPrompt;
+  linesStub.lines.qa.instance.displayName = "Factory · qa (selftest stub)";
+  writeFileSync(linesStubPath, JSON.stringify(linesStub));
+  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN), ...instancesFromLines(linesStubPath, PI_BIN) };
   writeFileSync(join(t3Home, "userdata", "settings.json"), JSON.stringify({ providerInstances: instances }));
   const t3Port = await port();
   const t3 = spawn(latestT3(), ["serve", "--base-dir", t3Home, "--port", String(t3Port), "--host", "127.0.0.1", "--no-browser"], { detached: true, stdio: "ignore" });
@@ -83,16 +97,16 @@ try {
   for (let i = 0; i < 30; i++) { try { if ((await fetch(`${api}/dags`)).ok) break; } catch {} await sleep(1000); }
   log("dagu up on", daguPort);
 
-  // 4. run the cycle: st1 must close; st2's validation fails, so nothing may be committed
-  const runCycle = async (issue, briefPath, gate) => {
+  // 4. run the cycle: st1 must close (QA passes); st2's validation fails and st3's QA fails twice, so nothing may be committed
+  const runCycle = async (issue, briefPath, gate, lineTable = linesPath) => {
     const runId = `selftest-${issue}-${Date.now()}`;
     const params = [`ISSUE=${issue}`, `PRIMARY=${repo}`, `FACTORY=${FACTORY}`, `T3_HOME=${t3Home}`, `STATE=${join(root, "state")}`,
-      `BRIEF_FILE=${briefPath}`, `GATE=${gate}`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINE_TABLE=${linesPath}`];
+      `BRIEF_FILE=${briefPath}`, `GATE=${gate}`, `PUSH=false`, `CLOSE_ISSUE=false`, `LINE_TABLE=${lineTable}`];
     const logFd = openSync(join(root, `cycle-${issue}.log`), "a");
     const cycle = spawn(DAGU_BIN, ["start", "--dagu-home", daguHome, "--config", join(daguHome, "config.yaml"), "--run-id", runId, join(FACTORY, "dags", "cycle.yaml"), "--", ...params], { stdio: ["ignore", logFd, logFd], env });
     procs.push(cycle);
     let final;
-    for (let i = 0; i < 300; i++) {
+    for (let i = 0; i < 600; i++) {
       let d; try { d = (await (await fetch(`${api}/dag-runs/cycle/${runId}`)).json()).dagRunDetails; } catch { await sleep(2000); continue; }
       const label = d?.statusLabel;
       if (["succeeded", "failed", "aborted"].includes(label)) { final = d; break; }
@@ -118,6 +132,23 @@ try {
     failed_validation_blocks_commit: r2.step("validate") === "failed" && r2.step("integrate") !== "succeeded" && log2.length === log1.length &&
       existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
   };
+  // st3: the worker passes, the stub QA fails twice; the findings go once to the impl thread and nothing is committed
+  const r3 = await runCycle("st3", brief3, "node test.mjs", linesStubPath);
+  const log3 = trunkLog();
+  const wt3 = join(repo, ".workspace", "worktrees", "issue-st3");
+  const stLine = (issue, l) => { try { return JSON.parse(readFileSync(join(root, "state", issue, `${l}.json`), "utf8")).attempts; } catch { return []; } };
+  const qa1 = stLine("st1", "qa"), qa3 = stLine("st3", "qa"), impl3 = stLine("st3", "impl");
+  const cont3 = impl3.filter((x) => x.continued);
+  const findings3 = (() => { try { return readFileSync(join(root, "state", "st3", "qa-findings.md"), "utf8"); } catch { return ""; } })();
+  log("st3 qa attempts", JSON.stringify(qa3), "impl attempts", JSON.stringify(impl3));
+  Object.assign(checks, {
+    qa_passes_on_st1: r1.step("qa") === "succeeded" && qa1.length === 1 && qa1[0].outcome === "pass",
+    qa_fails_twice_nothing_committed: r3.final?.statusLabel === "failed" && r3.step("require_pass") === "succeeded" &&
+      r3.step("qa") === "failed" && r3.step("validate") !== "succeeded" && r3.step("integrate") !== "succeeded" &&
+      qa3.length === 2 && qa3.every((x) => x.outcome === "fail") &&
+      cont3.length === 1 && cont3[0].threadId === impl3.filter((x) => !x.continued).at(-1)?.threadId && cont3[0].outcome === "pass" && findings3.includes("SELFTEST-QA-STUB") &&
+      log3.length === log2.length && existsSync(wt3) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt3 }) === "0",
+  });
   // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
   const adHome = join(root, "dagu-admit"); mkdirSync(adHome, { recursive: true });
   const adCfg = join(adHome, "config.yaml");

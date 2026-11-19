@@ -11,10 +11,11 @@ This package is the seed (VS0, #1010): the minimum that closes the delivery cycl
 1. **prepare** — worktree `.workspace/worktrees/issue-<n>` on branch `factory/issue-<n>` from `main`, registered as a T3 project; a reused worktree keeps an earlier attempt's uncommitted work on the current trunk. The brief and title come from the GitHub issue (or `BRIEF_FILE`).
 2. **implement** — `src/station.mjs` runs the worker as a T3 thread on the isolated `impl` line. The worker **does not commit**. Exit codes: `0` pass/blocked, `10` worker fail or timeout (retried once on the escalation model), `30` infrastructure, `40` malformed verdict (retried once).
 3. **require_pass** — anything but `pass` stops the run (blocked is manual until VS3/VS5).
-4. **validate** — the uncommitted worktree is validated with `scripts/factory-gate.sh`: the repository gate on CI's Node major plus the selftest with the service's Dagu.
-5. **integrate** — the single commit for the issue (`<title> (#n)` + `Factory-Run:` trailer); if the trunk moved, rebase and validate again; fast-forward `main`, push.
-6. **ci** — wait for CI on the pushed commit; red, missing or timed out ⇒ revert on `main`, comment the issue, fail the run.
-7. **close** — close the issue, remove the worktree and branch.
+4. **qa** — an independent QA line (`qa`, provider `pi-qa`, another model family, tools `read` and `bash` only, `prompts/qa.md`) checks every acceptance criterion against the uncommitted worktree; its brief is the issue brief plus `git status --short` and `git diff`. The worktree must be byte-identical before and after QA (status, diff and untracked contents are hashed), else the step fails. On a QA `fail` the findings are sent once to the implementation thread (`station.mjs --continue`), its new verdict must be `pass`, and QA runs once more; a second `fail` fails the run.
+5. **validate** — the uncommitted worktree is validated with `scripts/factory-gate.sh`: the repository gate on CI's Node major plus the selftest with the service's Dagu.
+6. **integrate** — the single commit for the issue (`<title> (#n)` + `Factory-Run:` trailer); if the trunk moved, rebase and validate again; fast-forward `main`, push.
+7. **ci** — wait for CI on the pushed commit; red, missing or timed out ⇒ revert on `main`, comment the issue, fail the run.
+8. **close** — close the issue, remove the worktree and branch.
 
 Every step resolves `PRIMARY`, `FACTORY`, `T3_HOME` and `STATE` through `src/cycle-env.sh` (explicit params, else the `A4S_*` values in Dagu's base config).
 
@@ -34,13 +35,12 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ## Line profiles
 
-`lines.json` holds model, thinking, escalation model and the isolated Pi instance per line. Instances start with `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-themes --no-mcp` and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries.
+`lines.json` holds model, thinking, escalation model and the isolated Pi instance per line. Instances start with `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-themes --no-mcp` and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries. The `qa` line (VS4) needs the `pi-qa` instance in the operator's T3; until VS7 it is added by hand from `src/instances.mjs`'s output.
 
 ## Manual steps (this list may only shrink)
 
 1. Watch Dagu for waits and failures — VS2.
 2. Decide in the Dagu UI/API (merge approval, blocked answers) — VS3.
-3. Review quality by hand — VS4.
 4. Diagnose failures and blocked verdicts — VS5.
 5. Cancel or clean stuck runs; archive T3 projects of closed issues — VS6.
 6. Sync `lines.json` into the operator's T3 settings — VS7.
