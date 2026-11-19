@@ -1,6 +1,7 @@
 ---
 # Factory cycle: issue -> implementation thread in T3 (no commit) -> validate the
-# worktree -> operator click -> one commit -> integrate -> CI on the trunk -> close.
+# worktree -> one commit -> integrate -> CI on the trunk -> close. No human step:
+# validation is the only gate before the trunk.
 # Nothing reaches a commit before it is validated in the worktree; nothing stays on
 # the trunk if CI fails (it is reverted). Control is deterministic here;
 # interpretation happens in the worker and arrives as a structured verdict.
@@ -127,36 +128,9 @@ steps:
       git add -A -n > "$ISSUE_STATE/changes"
       bash -euo pipefail -c "$GATE"
 
-  - id: approve_merge
-    depends: validate
-    action: human.task
-    with:
-      prompt: "Factory: approve committing and integrating the validated changes."
-      form:
-        type: object
-        required: [DECISION]
-        additionalProperties: false
-        properties:
-          DECISION:
-            type: string
-            enum: [APPROVE, REJECT]
-
-  # a rejected merge must not look like a delivered issue
-  - id: rejected
-    depends: approve_merge
-    preconditions:
-      - condition: "${steps.approve_merge.outputs.DECISION}"
-        expected: REJECT
-    run: |
-      echo "merge rejected by the operator for issue $ISSUE" >&2
-      exit 1
-
   # One commit per issue, made only now, from the validated worktree.
   - id: integrate
-    depends: approve_merge
-    preconditions:
-      - condition: "${steps.approve_merge.outputs.DECISION}"
-        expected: APPROVE
+    depends: validate
     outputs:
       - {name: merged_sha}
     run: |

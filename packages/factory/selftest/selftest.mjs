@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Binary proof: the candidate factory still closes one full cycle.
 // Starts an isolated T3 server and an isolated Dagu, runs dags/cycle.yaml from THIS checkout on a fixture
-// repository, approves the merge through the Dagu API (as the operator's click would) and checks the result.
+// repository with no human step and checks the result.
 // Exit 0 = the cycle closed; anything else = it did not. Uses real model calls (cheap model).
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -90,19 +90,15 @@ try {
     const logFd = openSync(join(root, `cycle-${issue}.log`), "a");
     const cycle = spawn(DAGU_BIN, ["start", "--dagu-home", daguHome, "--config", join(daguHome, "config.yaml"), "--run-id", runId, join(FACTORY, "dags", "cycle.yaml"), "--", ...params], { stdio: ["ignore", logFd, logFd], env });
     procs.push(cycle);
-    let approved = false, final;
+    let final;
     for (let i = 0; i < 300; i++) {
       let d; try { d = (await (await fetch(`${api}/dag-runs/cycle/${runId}`)).json()).dagRunDetails; } catch { await sleep(2000); continue; }
       const label = d?.statusLabel;
-      if (label === "waiting" && !approved) {
-        const r = await fetch(`${api}/dag-runs/cycle/${runId}/human-tasks/approve_merge/complete`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ DECISION: "APPROVE" }) });
-        approved = r.ok; log(issue, "approve_merge ->", r.status);
-      }
       if (["succeeded", "failed", "aborted"].includes(label)) { final = d; break; }
       await sleep(3000);
     }
     if (final) for (const n of final.nodes ?? []) log(" ", issue, n.step.id, n.statusLabel);
-    return { final, approved, step: (id) => final?.nodes?.find((n) => n.step.id === id)?.statusLabel };
+    return { final, step: (id) => final?.nodes?.find((n) => n.step.id === id)?.statusLabel };
   };
   const trunkLog = () => sh("git", ["log", "--format=%s%n%b%x00", "main"], { cwd: repo }).split("\0").map((x) => x.trim()).filter(Boolean);
   const r1 = await runCycle("st1", brief, "node test.mjs");
@@ -113,11 +109,11 @@ try {
   // 5. binary checks
   const checks = {
     run_succeeded: r1.final?.statusLabel === "succeeded",
-    approved: r1.approved,
+    no_human_step: !(r1.final?.nodes ?? []).some((n) => n.step.id === "approve_merge"),
     one_commit_per_issue: log1.length === 2 && /^Add mul \(#st1\)/.test(log1[0]) && /Factory-Run: /.test(log1[0]),
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
-    failed_validation_blocks_commit: r2.step("validate") === "failed" && !r2.approved && log2.length === log1.length &&
+    failed_validation_blocks_commit: r2.step("validate") === "failed" && r2.step("integrate") !== "succeeded" && log2.length === log1.length &&
       existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
   };
   // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
