@@ -6,7 +6,7 @@
   "type": "module",
   "description": "A4S factory on T3/Dagu/Pi: the self-constructing delivery cycle (seed VS0).",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/*.test.mjs",
     "typecheck": "node --check src/lib.mjs && node --check src/station.mjs && node --check src/t3cli.mjs && node --check src/instances.mjs && node --check src/admit.mjs && node --check selftest/selftest.mjs",
     "selftest": "node selftest/selftest.mjs"
   },

@@ -86,3 +86,8 @@ test("factory DAGs run under bash (they use ${!var})", () => {
     assert.match(dag, /^shell: bash$/m, f);
   }
 });
+
+test("the factory test script works on the CI Node major (no bare directory arg)", () => {
+  const pkg = JSON.parse(readFileSync(join(FACTORY, "package.json"), "utf8"));
+  assert.ok(!/node --test test\/?(\s|$)/.test(pkg.scripts.test), pkg.scripts.test);
+});

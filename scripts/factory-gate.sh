@@ -6,5 +6,11 @@ cd "$(git rev-parse --show-toplevel)"
 # The native Dagu tests match the official 2.26.0 release (also used by CI); prefer it when present.
 official="$HOME/.local/opt/dagu-2.26.0/dagu"
 if [[ -z "${DAGU_BIN:-}" && -x "$official" ]]; then export DAGU_BIN="$official"; fi
-bash scripts/gate.sh
+# Run the repository gate on the same Node major as CI (.github/workflows/ci.yml), not the host's.
+ci_node=$(sed -n 's/^ *node-version: *\([0-9][0-9]*\).*/\1/p' .github/workflows/ci.yml | head -1)
+if [[ -n "$ci_node" ]] && command -v nix >/dev/null && [[ "$(node -p 'process.versions.node.split(".")[0]')" != "$ci_node" ]]; then
+  nix shell "nixpkgs#nodejs_${ci_node}" -c bash scripts/gate.sh
+else
+  bash scripts/gate.sh
+fi
 npm run selftest
