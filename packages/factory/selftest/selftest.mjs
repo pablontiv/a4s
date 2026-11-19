@@ -225,6 +225,21 @@ try {
   // seed after admission: admission archives a stale pass/blocked station state
   failRun(7102, 1, "implement=succeeded,require_pass=failed", () => seedStation(7102, "blocked", "which db?"));
   checks.blocked_needs_human = labelsOf(7102).includes("factory:needs-human") && /which db\?/.test(commentsOf(7102).at(-1) ?? "");
+  // 5d. circuit breaker: a fixture state with an open breaker makes the next admission enqueue nothing; after `reset` it admits again
+  const iss = JSON.parse(readFileSync(issuesFile, "utf8"));
+  iss.push({ number: 7201, labels: [{ name: "factory:ready" }], body });
+  writeFileSync(issuesFile, JSON.stringify(iss));
+  const snapFile = join(root, "breaker-snapshot.json");
+  writeFileSync(snapFile, JSON.stringify({ services: { dagu: { reachable: true }, t3: { reachable: true } } }));
+  writeFileSync(join(stateAd, "breaker.json"), JSON.stringify({ version: 1, open: true, since: "2020-01-01T00:00:00.000Z", notifiedAt: "2020-01-01T00:00:00.000Z", reasons: [{ kind: "fixture", detail: "open breaker fixture", since: "2020-01-01T00:00:00.000Z" }], resetBy: null, resetAt: null }));
+  const admitWithBreaker = () => daguAd("start", "--run-id", `admit-br${Date.now()}`, admitDag, "--", `ISSUES_FILE=${issuesFile}`, `TARGET_DAGU_HOME=${adHome}`, `TARGET_DAGU_CONFIG=${adCfg}`, `BREAKER_SNAPSHOT=${snapFile}`);
+  const brState = () => { try { return JSON.parse(readFileSync(join(stateAd, "breaker.json"), "utf8")); } catch { return {}; } };
+  const brAdm1 = admitWithBreaker();
+  checks.breaker_open_enqueues_nothing = brAdm1.status === 0 && !queued(7201) && labelsOf(7201).includes("factory:ready") && brState().open === true;
+  const rs = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
+  checks.breaker_reset_records_who = rs.status === 0 && brState().open === false && brState().resetBy === "selftest" && !!brState().resetAt;
+  const brAdm2 = admitWithBreaker();
+  checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
   log(JSON.stringify(checks));
   ok = Object.values(checks).every(Boolean);
 } catch (e) {

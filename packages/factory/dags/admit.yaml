@@ -37,11 +37,23 @@ params:
     default: ""
   - name: BRIEF_FILE
     default: ""
+  # circuit breaker (src/breaker.mjs): injectable snapshot (fixtures); empty = live data
+  - name: BREAKER_SNAPSHOT
+    default: ""
+  - name: INBOX_THREAD
+    default: ""
 steps:
   - id: admit
     run: |
       set -uo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh" || exit 30
+      # circuit breaker: while open nothing is admitted; opening notifies the inbox once
+      rc=0
+      node "$FACTORY/src/breaker.mjs" check --state "$STATE" --primary "$PRIMARY" --t3-home "$T3_HOME" \
+        --factory "$FACTORY/src" --inbox "$INBOX_THREAD" \
+        ${TARGET_DAGU_HOME:+--dagu-home "$TARGET_DAGU_HOME"} ${TARGET_DAGU_CONFIG:+--dagu-config "$TARGET_DAGU_CONFIG"} ${BREAKER_SNAPSHOT:+--snapshot "$BREAKER_SNAPSHOT"} || rc=$?
+      if [ "$rc" = 40 ]; then echo "admit: circuit breaker open; nothing admitted"; exit 0; fi
+      [ "$rc" = 0 ] || { echo "admit: breaker check failed ($rc)" >&2; exit 30; }
       origin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
       src="$ISSUES_FILE"
       live=""; [ -z "$src" ] && live=1

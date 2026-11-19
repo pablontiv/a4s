@@ -73,6 +73,7 @@ export async function main(argv, env = process.env) {
     event: { type: "string" }, run: { type: "string" }, issue: { type: "string" }, steps: { type: "string", default: "" },
     inbox: { type: "string", default: "" }, primary: { type: "string" }, "t3-home": { type: "string" },
     state: { type: "string" }, factory: { type: "string", default: HERE },
+    text: { type: "string", default: "" }, // free-form message (event `breaker`); default: the run message
   } });
   const log = (...m) => console.error(`[notify ${a.event} #${a.issue}]`, ...m);
   for (const k of ["event", "run", "issue", "primary", "t3-home", "state"]) {
@@ -96,7 +97,7 @@ async function deliver(a, env, log, t3, notifiedFile) {
 
   const remote = spawnSync("git", ["-C", a.primary, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout;
   const steps = parseSteps(a.steps);
-  const text = formatMessage({ event: a.event, run: a.run, issue: a.issue, steps, url: issueUrl(remote, a.issue) });
+  const text = a.text || formatMessage({ event: a.event, run: a.run, issue: a.issue, steps, url: issueUrl(remote, a.issue) });
 
   const inboxFile = join(a.state, "inbox.json");
   let threadId = a.inbox.trim();

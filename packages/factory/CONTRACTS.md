@@ -89,3 +89,19 @@ The next attempt is chosen from the previous outcome only (`POLICY`), never from
 Labels are the source of truth (`src/labels.mjs`, tested in `test/labels.test.mjs` and the selftest): `factory:ready` → `factory:running` (admission) → closed, or `factory:needs-human` (+ comment: outcome, failed step, question). Run-ids are `factory-issue-<n>-<k>`. After a failed run, `isRetryable(outcome)` (every outcome whose POLICY is not `stop`/`resume`) with fewer than `MAX_RUNS` (3) runs since the last human decision puts the issue back to `factory:ready`; anything else goes to `factory:needs-human`.
 
 **Carry-over.** When `finish` returns the issue to `factory:ready`, it stores the failing station's findings and the failed step in `$STATE/<n>/carry.json` (`{run, step, at, findings}`). `prepare` (`src/prepare-brief.sh`) appends them to `brief.md` as a `## Previous run findings` section (run-id, failed step, findings; `labels.mjs carry`), and the impl prompt requires fixing every one with a regression test. The carry survives only an automatic retry: `carry.json` is cleared by a successful run, a `needs-human` transition, and any admission after a human decision — after a park (human put `factory:ready` back), or after `factory:hold` (the issue still carries it; the admit step saw it, `admit.mjs --clear-held`; or the label history shows `factory:hold` added after `at` — GitHub issue events when live, the fixture's `events` otherwise; an unreadable history also clears it). Findings are copied verbatim, never summarized.
+
+## Circuit breaker contract
+
+Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in `test/breaker.test.mjs` and the selftest). `dags/admit.yaml` runs `breaker.mjs check` before admitting anything: while open it admits nothing and logs the reasons (exit 40 of `check`).
+
+**Shape.** `evaluate` returns `{open, reasons}`; each reason is `{kind, detail, since}`. State lives in `$STATE/breaker.json`: `{version: 1, open, reasons, since, resetBy, resetAt}` (plus `notifiedAt`).
+
+**Fail closed.** A corrupt, unreadable or unknown-version `breaker.json` is treated as open with reason `state-invalid`; it only clears with `reset`. A missing file is a closed breaker.
+
+**Conditions.** `unreachable`: Dagu or T3 not reachable for more than 30 minutes (since the last time it was seen reachable). It clears by itself only when **both** `services.dagu.reachable === true` and `services.t3.reachable === true`; a missing service entry counts as unreachable.
+
+**Notification.** On opening, one inbox notification (`notify.mjs --event breaker`) carries the reasons and the reset command; it is not repeated while the breaker stays open.
+
+**Reset rule.** `node packages/factory/src/breaker.mjs reset [--state S] [--by NAME]` closes it explicitly and records `resetBy`/`resetAt`. Any reason whose kind does not define a self-clearing rule never clears by itself.
+
+**Adding a condition.** Add an entry to `CONDITIONS` in `src/breaker.mjs`: `detect(snapshot, state, now)` returns `{kind, detail, since}` reasons, and optionally `clears(snapshot)` if (and only if) the condition may clear by itself. Data for it goes into the snapshot; the reason shape does not change.
