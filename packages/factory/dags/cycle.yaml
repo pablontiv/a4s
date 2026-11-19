@@ -250,17 +250,22 @@ steps:
         --body "Factory: CI was '$result' for $SHA; reverted on $BASE (run $DAG_RUN_ID)." || true
       exit 1
 
+  # Idempotent: safe to re-run after a partial close (src/close.sh).
   - id: close
     depends: ci
+    env:
+      - SHA: ${steps.integrate.outputs.merged_sha}
     run: |
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
-      sha=$(git -C "$PRIMARY" rev-parse HEAD)
-      if [ "$CLOSE_ISSUE" = "true" ]; then
-        origin=$(git -C "$PRIMARY" remote get-url origin)
-        gh issue close "$ISSUE" -R "$origin" \
-          --comment "Integrated by the factory in $sha (CI green)."
-      fi
-      git -C "$PRIMARY" worktree remove --force "$WT"
-      git -C "$PRIMARY" branch -q -D "$BRANCH"
-      echo "closed issue=$ISSUE sha=$sha"
+      bash "$FACTORY/src/close.sh"
+
+  # Closing gate: the run only succeeds when the delivery is verifiably closed.
+  - id: verify_close
+    depends: close
+    env:
+      - SHA: ${steps.integrate.outputs.merged_sha}
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      bash "$FACTORY/src/verify-close.sh"

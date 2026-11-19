@@ -13,6 +13,22 @@ Enforced by `test/dags.test.mjs` for every `dags/*.yaml`.
 5. Every `${steps.<id>.outputs.<name>}` reference points to an existing step that declares that output.
 6. `cycle.yaml` has no `human.task` step: validation is the only gate before the trunk.
 
+## Closing contract
+
+`close` (`src/close.sh`) is idempotent: an already closed issue is not closed or commented again, and an already removed worktree or branch is skipped. It writes `$STATE/<issue>/done.json` (`run_id`, `commit`, `timestamp`).
+
+The step `verify_close` (`src/verify-close.sh`) runs after `close`, prints every check with its result and fails the run unless all hold:
+
+1. `origin/$BASE` contains the integrated commit (after `git fetch`), when `PUSH=true`; otherwise skipped.
+2. The issue is closed (`gh issue view --json state`), when `CLOSE_ISSUE=true`; otherwise skipped.
+3. The worktree directory and the branch `factory/issue-<n>` no longer exist.
+4. The primary checkout is on `$BASE`, has no tracked changes and, when `PUSH=true`, `HEAD` equals `origin/$BASE`.
+5. `$STATE/<issue>/done.json` exists with run-id, commit and timestamp.
+
+Whether the issue's T3 project still exists is printed as information only (archiving: VS6).
+
+Enforced by `test/close.test.mjs` (close twice on a fixture, each verify check) and the selftest (`st1`).
+
 ## Validation contract
 
 Validation runs in the same environment as production and CI.

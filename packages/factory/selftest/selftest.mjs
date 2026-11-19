@@ -128,6 +128,8 @@ try {
     one_commit_per_issue: log1.length === 2 && /^Add mul \(#st1\)/.test(log1[0]) && /Factory-Run: /.test(log1[0]),
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
+    verify_close_succeeded: r1.step("verify_close") === "succeeded",
+    done_json_present: (() => { try { const d = JSON.parse(readFileSync(join(root, "state", "st1", "done.json"), "utf8")); return !!(d.run_id && d.commit && d.timestamp); } catch { return false; } })(),
     pass_without_criteria_downgraded: checkVerdict({ verdict: "pass", findings: [] }).verdict.verdict === "fail",
     failed_validation_blocks_commit: r2.step("validate") === "failed" && r2.step("integrate") !== "succeeded" && log2.length === log1.length &&
       existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
