@@ -56,6 +56,27 @@ export function parseVerdict(text) {
   }
 }
 
+/**
+ * Enforce the verdict contract: a "pass" must carry evidence for every acceptance criterion.
+ * @returns {{verdict:object, reason:string|null}} the verdict (downgraded to "fail" when the proof is missing) and why
+ */
+export function checkVerdict(v) {
+  if (!v || v.verdict !== "pass") return { verdict: v, reason: null };
+  let reason = null;
+  const c = v.criteria;
+  if (!Array.isArray(c) || c.length === 0) reason = "verdict contract: pass without criteria";
+  else {
+    const bad = c.findIndex((x) => !x || typeof x.evidence !== "string" || !x.evidence.trim());
+    if (bad >= 0) reason = `verdict contract: criterion ${bad + 1} has empty evidence`;
+    else {
+      const nope = c.findIndex((x) => x.result !== "pass");
+      if (nope >= 0) reason = `verdict contract: criterion ${nope + 1} result is not pass`;
+    }
+  }
+  if (!reason) return { verdict: v, reason: null };
+  return { verdict: { ...v, verdict: "fail", findings: [...(Array.isArray(v.findings) ? v.findings : []), reason] }, reason };
+}
+
 /** Map a verdict to the station exit code. */
 export function exitFor(verdict) {
   if (!verdict) return EXIT.MALFORMED;

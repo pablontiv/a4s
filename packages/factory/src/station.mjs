@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { EXIT, OUTPUT_KEYS, isUnreachable, killThread, parseVerdict, exitFor, resolveT3, threadPhase } from "./lib.mjs";
+import { EXIT, OUTPUT_KEYS, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, threadPhase } from "./lib.mjs";
 
 const { values: a } = parseArgs({ options: {
   line: { type: "string" }, issue: { type: "string" }, run: { type: "string", default: "local" },
@@ -125,7 +125,9 @@ if (t.pendingRequestCount > 0) { cur.outcome = "waiting"; save(); out("result", 
 if (t.status !== "completed") { cur.outcome = t.status; save(); out("result", "fail"); process.exit(EXIT.WORKER_FAIL); }
 
 const text = snap.messages.filter((m) => m.role === "assistant").at(-1)?.text ?? "";
-const v = parseVerdict(text);
+const parsed = parseVerdict(text);
+const { verdict: v, reason } = checkVerdict(parsed);
+if (reason) log(reason);
 if (!v) { cur.outcome = "malformed"; save(); out("result", "malformed"); log("malformed:", text.slice(-300)); process.exit(EXIT.MALFORMED); }
 cur.outcome = v.verdict; save();
 out("result", v.verdict); out("commit", v.commit ?? ""); out("question", v.question ?? "");

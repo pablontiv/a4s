@@ -9,6 +9,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkVerdict } from "../src/lib.mjs";
 import { instancesFromLines } from "../src/instances.mjs";
 
 const FACTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,7 +53,7 @@ try {
   sh("git", ["add", "-A"], { cwd: repo });
   sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", "commit", "-qm", "init"], { cwd: repo });
   const brief = join(root, "brief.md");
-  writeFileSync(brief, "# Add mul\n\nAdd an exported `mul(a, b)` to calc.mjs and a check `mul(2, 3) === 6` to test.mjs. Run `node test.mjs` (must print PASS). Do not commit.\n");
+  writeFileSync(brief, "# Add mul\n\n## Goal\nAdd an exported `mul(a, b)` to calc.mjs.\n\n## Acceptance criteria\n- [ ] calc.mjs exports `mul(a, b)`, and test.mjs checks `mul(2, 3) === 6`.\n- [ ] `node test.mjs` prints PASS.\n\n## Out of scope\nAnything other than calc.mjs and test.mjs. Do not commit.\n");
   const brief2 = join(root, "brief2.md");
   writeFileSync(brief2, "# Add sub\n\nAdd an exported `sub(a, b)` to calc.mjs. Do not commit.\n");
 
@@ -113,6 +114,7 @@ try {
     one_commit_per_issue: log1.length === 2 && /^Add mul \(#st1\)/.test(log1[0]) && /Factory-Run: /.test(log1[0]),
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
+    pass_without_criteria_downgraded: checkVerdict({ verdict: "pass", findings: [] }).verdict.verdict === "fail",
     failed_validation_blocks_commit: r2.step("validate") === "failed" && r2.step("integrate") !== "succeeded" && log2.length === log1.length &&
       existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
   };

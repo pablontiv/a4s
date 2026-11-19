@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { EXIT, exitFor, isUnreachable, parseVerdict, resolveT3, threadPhase } from "../src/lib.mjs";
+import { EXIT, checkVerdict, exitFor, isUnreachable, parseVerdict, resolveT3, threadPhase } from "../src/lib.mjs";
 import { instancesFromLines } from "../src/instances.mjs";
 
 const FACTORY = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -104,4 +104,22 @@ test("factory DAGs run under bash (they use ${!var})", () => {
 test("the factory test script works on the CI Node major (no bare directory arg)", () => {
   const pkg = JSON.parse(readFileSync(join(FACTORY, "package.json"), "utf8"));
   assert.ok(!/node --test test\/?(\s|$)/.test(pkg.scripts.test), pkg.scripts.test);
+});
+
+const okC = { criterion: "c", evidence: "npm test", result: "pass" };
+test("checkVerdict keeps a valid pass and non-pass verdicts", () => {
+  const v = { verdict: "pass", criteria: [okC], findings: [], question: null };
+  assert.deepEqual(checkVerdict(v), { verdict: v, reason: null });
+  const b = { verdict: "blocked", question: "q" };
+  assert.equal(checkVerdict(b).verdict, b);
+});
+
+test("checkVerdict downgrades a pass without proof to fail with a reason", () => {
+  for (const criteria of [undefined, [], [{ ...okC, evidence: "  " }], [{ criterion: "c", result: "pass" }], [okC, { ...okC, result: "fail" }]]) {
+    const r = checkVerdict({ verdict: "pass", criteria, findings: ["x"] });
+    assert.equal(r.verdict.verdict, "fail");
+    assert.match(r.reason, /verdict contract/);
+    assert.deepEqual(r.verdict.findings, ["x", r.reason]);
+    assert.equal(exitFor(r.verdict), EXIT.WORKER_FAIL);
+  }
 });
