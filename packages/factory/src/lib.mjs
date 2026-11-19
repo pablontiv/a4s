@@ -105,3 +105,59 @@ export function killThread(threadId) {
   }
   return n;
 }
+
+/** Typed outcome every attempt ends in. */
+export const OUTCOMES = Object.freeze(["pass", "fail", "malformed", "timeout", "blocked", "cancelled", "infra"]);
+
+/** What happens after an attempt: the single retry policy table. */
+export const POLICY = Object.freeze({
+  pass: "stop",
+  blocked: "resume", // same thread, with the answer
+  fail: "escalate", // next attempt on `escalate_to`
+  malformed: "escalate",
+  timeout: "escalate",
+  cancelled: "same-model", // next attempt on `model`
+  infra: "reattach", // same thread, no new brief
+});
+
+/** Exit code the station returns for each outcome (see station.mjs header). */
+export const OUTCOME_EXIT = Object.freeze({
+  pass: EXIT.PASS, blocked: EXIT.PASS, fail: EXIT.WORKER_FAIL, timeout: EXIT.WORKER_FAIL,
+  malformed: EXIT.MALFORMED, infra: EXIT.INFRA, cancelled: 143,
+});
+
+/** Exit codes Dagu should retry on: those of outcomes whose policy is `escalate`. */
+export function retryExitCodes() {
+  return [...new Set(OUTCOMES.filter((o) => POLICY[o] === "escalate").map((o) => OUTCOME_EXIT[o]))].sort((x, y) => x - y);
+}
+
+/** Validate a station state file; an attempt without outcome is in flight, an unknown outcome is an error. */
+export function validateState(st) {
+  if (!st || typeof st !== "object" || !Array.isArray(st.attempts)) throw new Error("invalid state: attempts must be an array");
+  st.attempts.forEach((at, i) => {
+    if (at.outcome !== undefined && !OUTCOMES.includes(at.outcome)) throw new Error(`invalid state: attempt ${i + 1} has unknown outcome "${at.outcome}"`);
+  });
+  return st;
+}
+
+/**
+ * Decide the next attempt from the previous outcome only (never from the attempt count).
+ * Returns {kind:"stop"|"await", attempt} | {kind:"new", model} | {kind:"resume", threadId} (send the answer) | {kind:"reattach", threadId}.
+ */
+export function planNext(line, st, { answer } = {}) {
+  const prev = st.attempts.at(-1);
+  if (!prev) return { kind: "new", model: line.model };
+  if (prev.outcome === undefined) return { kind: "reattach", threadId: prev.threadId };
+  switch (POLICY[prev.outcome]) {
+    case "stop": return { kind: "stop", attempt: prev };
+    case "resume": return prev.threadId ? (answer ? { kind: "resume", threadId: prev.threadId } : { kind: "await", attempt: prev }) : { kind: "new", model: line.model };
+    case "reattach": return prev.threadId ? { kind: "reattach", threadId: prev.threadId, model: prev.model } : { kind: "new", model: line.model };
+    case "escalate": return { kind: "new", model: line.escalate_to || line.model };
+    default: return { kind: "new", model: line.model }; // same-model
+  }
+}
+
+/** Outcome of an attempt whose thread ended in a terminal status other than `completed`. */
+export function outcomeForStatus(status) {
+  return status === "cancelled" ? "cancelled" : "fail";
+}

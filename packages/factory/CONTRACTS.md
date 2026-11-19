@@ -62,3 +62,24 @@ The last line of the worker's answer is one JSON object:
 - Any open question means `blocked`, never `pass`.
 - A `pass` must list every acceptance criterion of the issue in `criteria`, each with the command run as `evidence` and `result` `pass`.
 - A `pass` with no `criteria`, an empty `evidence`, or any `result` other than `pass` is downgraded to `fail`; the reason is appended to `findings` and the station exits `10` (retried like any worker failure). No new DAG outputs.
+
+## Attempt outcome contract
+
+Enforced by `OUTCOMES`, `POLICY`, `validateState` and `planNext` in `src/lib.mjs`, applied by `src/station.mjs`; tested in `test/policy.test.mjs` and `test/station.test.mjs`.
+
+Every attempt of a line ends in exactly one outcome, stored in `$STATE/<issue>/<line>.json` (`attempts[].outcome`): `pass | fail | malformed | timeout | blocked | cancelled | infra`. An attempt without outcome is in flight; any other value makes the station exit `40` when it reads the file.
+
+The next attempt is chosen from the previous outcome only (`POLICY`), never from the attempt count:
+
+| outcome | policy | next attempt |
+|---|---|---|
+| `pass` | stop | none; the stored verdict is replayed |
+| `blocked` | resume | same thread (`threadId`, `question` stored); with `--answer` it is sent there, without one the station waits on that thread |
+| `fail`, `malformed`, `timeout` | escalate | new thread on `escalate_to` |
+| `cancelled` | same-model | new thread on `model` |
+| `infra` | reattach | same thread, no new brief |
+
+- A terminal T3 status `cancelled` (or SIGTERM) is `cancelled`; any other non-`completed` terminal status is `fail`.
+- A stored `pass` (stop) or `blocked` without `--answer` (await) is replayed before any T3 access, so it needs no server.
+- Unreachable T3 (preflight or while polling), a failed `thread start`, or malformed JSON from the `t3` CLI is `infra`; a preflight failure finalizes the in-flight attempt as `infra`, terminal outcomes are never overwritten.
+- `retry_policy.exit_code` of every station step in `cycle.yaml` equals the exit codes of the `escalate` outcomes (`retryExitCodes()`).
