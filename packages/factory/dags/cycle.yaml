@@ -42,6 +42,9 @@ params:
   # minutes to wait for CI on the pushed commit
   - name: CI_TIMEOUT_MIN
     default: "30"
+  # comma-separated workflow names that count for the CI verdict (others are ignored)
+  - name: CI_WORKFLOWS
+    default: "CI"
   # optional T3 thread to notify; empty = A4S_INBOX_THREAD from Dagu's base config,
   # else the factory's own inbox thread (created on first use, src/notify.mjs)
   - name: INBOX_THREAD
@@ -262,23 +265,22 @@ steps:
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       if [ "$PUSH" != "true" ]; then echo "not pushed: no CI to wait for"; exit 0; fi
       origin=$(git -C "$PRIMARY" remote get-url origin)
-      deadline=$(( $(date +%s) + CI_TIMEOUT_MIN * 60 ))
-      result=""
-      while [ "$(date +%s)" -lt "$deadline" ]; do
-        result=$(gh run list -R "$origin" --commit "$SHA" --json status,conclusion \
-          --jq 'if length == 0 then "none" elif all(.status == "completed") then
-                (if all(.conclusion == "success") then "success" else "failure" end)
-                else "running" end' 2>/dev/null || echo "error")
-        case "$result" in success|failure) break ;; esac
-        sleep 20
-      done
-      echo "ci on $SHA: $result"
-      [ "$result" = "success" ] && exit 0
-      # red, missing or timed out: the trunk must not keep an unverified change
+      cls=$(node "$FACTORY/src/ci.mjs" wait --primary "$PRIMARY" --origin "$origin" --sha "$SHA" --base "$BASE" \
+        --workflows "${CI_WORKFLOWS:-CI}" --timeout-min "$CI_TIMEOUT_MIN")
+      state=$(printf '%s' "$cls" | jq -r .state)
+      target=$(printf '%s' "$cls" | jq -r .target)
+      conclusion=$(printf '%s' "$cls" | jq -r .conclusion)
+      workflow=$(printf '%s' "$cls" | jq -r .workflow)
+      url=$(printf '%s' "$cls" | jq -r .url)
+      echo "ci on $target: $state ($conclusion)"
+      [ "$state" != "red" ] && exit 0
+      # red (failure, timed_out, or no verdict in time): the trunk must not keep an unverified change
+      node "$FACTORY/src/ci.mjs" failure --file "$ISSUE_STATE/step-failure.json" --run "$DAG_RUN_ID" \
+        --conclusion "$conclusion" --workflow "$workflow" --url "$url" --sha "$target"
       git -C "$PRIMARY" revert --no-edit "$SHA"
       git -C "$PRIMARY" push -q origin "$BASE"
       gh issue comment "$ISSUE" -R "$origin" \
-        --body "Factory: CI was '$result' for $SHA; reverted on $BASE (run $DAG_RUN_ID)." || true
+        --body "Factory: CI ($workflow) concluded '$conclusion' for $target $url; reverted $SHA on $BASE (run $DAG_RUN_ID)." || true
       exit 1
 
   # Idempotent: safe to re-run after a partial close (src/close.sh).
