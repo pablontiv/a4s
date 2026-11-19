@@ -137,6 +137,9 @@ try {
   log("admit dag ->", adm.status);
   checks.admit_dag_succeeded = adm.status === 0;
   checks.admit_ready_enqueued = queued(7001);
+  // the admitted run must be registered under the cycle DAG name, never the parent's `admit`
+  const byName = (name, n) => spawnSync(DAGU_BIN, ["status", "--dagu-home", adHome, "--config", adCfg, "--run-id", `factory-issue-${n}`, name], { encoding: "utf8", env: adEnv }).status === 0;
+  checks.admit_registered_as_cycle = byName("cycle", 7001) && !byName("admit", 7001);
   checks.admit_again_is_duplicate = admitCli(7001) === 21;
   checks.admit_contract_violation_not_admitted = !queued(7003) && admitCli(7003) === 22;
   checks.admit_factory_only_not_admitted = !queued(7002) && admitCli(7002) === 20;

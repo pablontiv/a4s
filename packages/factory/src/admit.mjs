@@ -8,6 +8,7 @@
 //   admit.mjs --list F   prints the numbers of the issues in F that carry the label (one per line).
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkIssue } from "./issue-contract.mjs";
 
@@ -63,11 +64,14 @@ export function admit(o, daguBin = process.env.DAGU_BIN ?? "dagu") {
     return EXIT.CONTRACT;
   }
   const runId = runIdFor(o.issue);
-  const args = ["enqueue", "--run-id", runId];
+  // explicit name: inside an admit step Dagu would register the run under the parent DAG's name
+  const args = ["enqueue", "--run-id", runId, "--name", basename(o.dag).replace(/\.ya?ml$/, "")];
   if (o.daguHome) args.push("--dagu-home", o.daguHome);
   if (o.config) args.push("--config", o.config);
   args.push(o.dag, "--", `ISSUE=${o.issue}`, ...o.params);
-  const r = spawnSync(daguBin, args, { encoding: "utf8" });
+  // clean env: drop the parent step's DAG_* run variables
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("DAG_")));
+  const r = spawnSync(daguBin, args, { encoding: "utf8", env });
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
   if (r.error) { console.error(`admit: ${r.error.message}`); return EXIT.INFRA; }
   if (r.status === 0) { console.log(`admitted #${o.issue} run-id=${runId}`); return EXIT.ADMITTED; }
