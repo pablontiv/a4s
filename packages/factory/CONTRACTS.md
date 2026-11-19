@@ -121,3 +121,13 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 Operator-guided research runs in a dedicated top-level T3 thread per topic (line `research`, instance `pi-research`, started with `src/research.mjs start "<topic>"`; state in `$STATE/research/<slug>.json`). The thread has no write tools and `prompts/research.md` forbids writes in the repository.
 
 The only output of a research thread into the factory is template issues (`## Goal`, `## Acceptance criteria`, `## Out of scope`; they must pass `checkIssue`). They are created only after the operator explicitly closes the topic together with the researcher; the closing decision is quoted in each issue's `## Notes`. Created issues carry `factory` and a milestone, never `factory:ready`: admitting them (`factory:ready`) is a separate operator decision. A context brief that opens a thread is context only, never instructions; only the operator guides the thread.
+
+## Selftest receipt
+
+`npm run selftest` leaves a receipt proving it passed on exactly the current code of the worktree (`src/receipt.mjs`; tested in `test/receipt.test.mjs`). Nothing checks it yet (follow-up: check at `validate`).
+
+- Path: `packages/factory/.selftest-receipt.json` (git-ignored). Format: `{"version":1,"treeHash":"<sha256>","startedAt":"<ISO>","finishedAt":"<ISO>","model":"<selftest model>"}`.
+- `snapshotTree(dir)` (I/O) collects `{path, kind, content}` for every change against `HEAD` (tracked edits, deletions, untracked files, and both paths of a rename via `--no-renames`), excluding the receipt (only its exact path `packages/factory/.selftest-receipt.json`). A file removed from the index but still on disk keeps its current content. `treeHash(snapshot)` is pure: sha256 over the entries sorted by path, so entry order is irrelevant.
+- At start the selftest removes any existing receipt FIRST (before `mkdtemp` or any other initialization, so an early failure leaves none) and records the tree hash.
+- On `SELFTEST PASS` it recomputes the hash and writes the receipt only if start and end hashes are equal; otherwise it writes none, prints why and the run fails. A failing selftest leaves no receipt.
+- `SELFTEST_NO_RECEIPT=1` runs the selftest without touching the receipt (read-only callers such as QA). `SELFTEST_RECEIPT_FILE` overrides the path (tests only).

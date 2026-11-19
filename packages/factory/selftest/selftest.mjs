@@ -10,6 +10,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkVerdict } from "../src/lib.mjs";
+import { beginReceipt, endReceipt } from "../src/receipt.mjs";
 import { instancesFromLines } from "../src/instances.mjs";
 
 const FACTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,10 +41,17 @@ function latestT3() {
   return join(VERSIONS, v, "t3");
 }
 
-const root = mkdtempSync(join(tmpdir(), "factory-selftest-"));
+// SELFTEST_NO_RECEIPT=1: read-only run (e.g. QA) that never touches the receipt.
+const RECEIPT = process.env.SELFTEST_NO_RECEIPT !== "1";
+const startedAt = new Date().toISOString();
 const procs = [];
 let ok = false;
+let root = "";
+let startHash = null;
 try {
+  // the stale receipt goes first, before any other initialization
+  startHash = beginReceipt({ dir: FACTORY, enabled: RECEIPT });
+  root = mkdtempSync(join(tmpdir(), "factory-selftest-"));
   // 1. fixture repository (trunk = main) and fixture brief
   const repo = join(root, "repo"); mkdirSync(repo);
   writeFileSync(join(repo, "calc.mjs"), "export function add(a, b) { return a + b; }\n");
@@ -252,7 +260,11 @@ try {
   log("error:", e.message);
 } finally {
   for (const p of procs) { try { process.kill(-p.pid, "SIGTERM"); } catch { try { p.kill("SIGTERM"); } catch {} } }
-  if (ok && !KEEP) rmSync(root, { recursive: true, force: true }); else log("kept", root);
+  if (ok && !KEEP && root) rmSync(root, { recursive: true, force: true }); else if (root) log("kept", root);
 }
+try {
+  const r = endReceipt({ dir: FACTORY, enabled: RECEIPT, passed: ok, startHash, startedAt, model: MODEL });
+  if (RECEIPT && ok && !r.written) { log(`no receipt: ${r.reason}`); ok = false; }
+} catch (e) { log("receipt error:", e.message); ok = false; }
 console.log(ok ? "SELFTEST PASS" : "SELFTEST FAIL");
 process.exit(ok ? 0 : 1);
