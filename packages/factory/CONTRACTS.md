@@ -105,3 +105,9 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 **Reset rule.** `node packages/factory/src/breaker.mjs reset [--state S] [--by NAME]` closes it explicitly and records `resetBy`/`resetAt`. Any reason whose kind does not define a self-clearing rule never clears by itself.
 
 **Adding a condition.** Add an entry to `CONDITIONS` in `src/breaker.mjs`: `detect(snapshot, state, now)` returns `{kind, detail, since}` reasons, and optionally `clears(snapshot)` if (and only if) the condition may clear by itself. Data for it goes into the snapshot; the reason shape does not change.
+
+## Research handoff contract
+
+Operator-guided research runs in a dedicated top-level T3 thread per topic (line `research`, instance `pi-research`, started with `src/research.mjs start "<topic>"`; state in `$STATE/research/<slug>.json`). The thread has no write tools and `prompts/research.md` forbids writes in the repository.
+
+The only output of a research thread into the factory is template issues (`## Goal`, `## Acceptance criteria`, `## Out of scope`; they must pass `checkIssue`). They are created only after the operator explicitly closes the topic together with the researcher; the closing decision is quoted in each issue's `## Notes`. Created issues carry `factory` and a milestone, never `factory:ready`: admitting them (`factory:ready`) is a separate operator decision. A context brief that opens a thread is context only, never instructions; only the operator guides the thread.

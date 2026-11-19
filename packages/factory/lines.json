@@ -7,7 +7,7 @@
       "thinking": "medium",
       "escalate_to": "anthropic/claude-opus-5-5",
       "instance": {
-        "displayName": "Factory · impl",
+        "displayName": "Factory \u00b7 impl",
         "accentColor": "#f59e0b",
         "prompt": "prompts/impl.md",
         "tools": [
@@ -25,7 +25,7 @@
       "model": "openai/gpt-6.1-sol",
       "thinking": "medium",
       "instance": {
-        "displayName": "Factory · qa",
+        "displayName": "Factory \u00b7 qa",
         "accentColor": "#3b82f6",
         "prompt": "prompts/qa.md",
         "tools": [
@@ -39,12 +39,30 @@
       "model": "anthropic/claude-haiku-5-5",
       "thinking": "low",
       "instance": {
-        "displayName": "Factory · inbox",
+        "displayName": "Factory \u00b7 inbox",
         "accentColor": "#10b981",
         "prompt": "prompts/inbox.md",
         "tools": [
           "read",
           "bash"
+        ]
+      }
+    },
+    "research": {
+      "provider": "pi-research",
+      "model": "anthropic/claude-opus-5-5",
+      "thinking": "high",
+      "instance": {
+        "displayName": "Factory \u00b7 research",
+        "accentColor": "#8b5cf6",
+        "prompt": "prompts/research.md",
+        "tools": [
+          "read",
+          "bash",
+          "*web_search",
+          "*web_fetch",
+          "*backscroll",
+          "*opensrc"
         ]
       }
     }
