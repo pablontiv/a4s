@@ -12,6 +12,8 @@ for _p in PRIMARY FACTORY T3_HOME STATE; do
   fi
 done
 unset _p
+# optional: an explicit inbox thread (param INBOX_THREAD); empty = the factory's own inbox
+INBOX_THREAD="${INBOX_THREAD:-${A4S_INBOX_THREAD:-}}"
 if [ -n "${ISSUE:-}" ]; then
   WT="$PRIMARY/.workspace/worktrees/issue-$ISSUE"
   BRANCH="factory/issue-$ISSUE"

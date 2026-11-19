@@ -42,6 +42,10 @@ params:
   # minutes to wait for CI on the pushed commit
   - name: CI_TIMEOUT_MIN
     default: "30"
+  # optional T3 thread to notify; empty = A4S_INBOX_THREAD from Dagu's base config,
+  # else the factory's own inbox thread (created on first use, src/notify.mjs)
+  - name: INBOX_THREAD
+    default: ""
   # optional line table override (the selftest uses a cheap model).
   # Not named LINES: shells export LINES (terminal height), e.g. "0" under Dagu.
   - name: LINE_TABLE
@@ -269,3 +273,40 @@ steps:
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       bash "$FACTORY/src/verify-close.sh"
+
+# Notifications (VS2): the operator's T3 thread hears about every run outcome, so nobody polls
+# Dagu. A handler never fails the run (src/notify.mjs always exits 0).
+handler_on:
+  success:
+    run: |
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
+          | sed -nE 's/^(├|└)─([^ ]+)( \([^)]*\))? \[([a-z_]+)\]$/\2=\4/p' | paste -sd, - || true)
+        node "$FACTORY/src/notify.mjs" --event success --run "$DAG_RUN_ID" --issue "$ISSUE" \
+          --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
+          --t3-home "$T3_HOME" --state "$STATE"
+      ) || echo "notify failed (ignored)" >&2
+      exit 0
+  failure:
+    run: |
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
+          | sed -nE 's/^(├|└)─([^ ]+)( \([^)]*\))? \[([a-z_]+)\]$/\2=\4/p' | paste -sd, - || true)
+        node "$FACTORY/src/notify.mjs" --event failure --run "$DAG_RUN_ID" --issue "$ISSUE" \
+          --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
+          --t3-home "$T3_HOME" --state "$STATE"
+      ) || echo "notify failed (ignored)" >&2
+      exit 0
+  wait:
+    run: |
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
+          | sed -nE 's/^(├|└)─([^ ]+)( \([^)]*\))? \[([a-z_]+)\]$/\2=\4/p' | paste -sd, - || true)
+        node "$FACTORY/src/notify.mjs" --event wait --run "$DAG_RUN_ID" --issue "$ISSUE" \
+          --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
+          --t3-home "$T3_HOME" --state "$STATE"
+      ) || echo "notify failed (ignored)" >&2
+      exit 0

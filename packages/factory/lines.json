@@ -33,6 +33,20 @@
           "bash"
         ]
       }
+    },
+    "inbox": {
+      "provider": "pi-inbox",
+      "model": "anthropic/claude-haiku-5-5",
+      "thinking": "low",
+      "instance": {
+        "displayName": "Factory · inbox",
+        "accentColor": "#10b981",
+        "prompt": "prompts/inbox.md",
+        "tools": [
+          "read",
+          "bash"
+        ]
+      }
     }
   },
   "isolation": [

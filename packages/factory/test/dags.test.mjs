@@ -140,3 +140,19 @@ test("fixture: bad output references fail", () => {
 test("fixture: human.task step fails", () => {
   assert.equal(checkNoHumanTask(dagOf(GOOD, "  - id: h\n    type: human.task")).length, 1);
 });
+
+// notifications (VS2): cycle.yaml declares the three handlers and each runs notify.mjs
+test("cycle.yaml: handler_on success, failure and wait run src/notify.mjs", () => {
+  const text = stripComments(readFileSync(join(DAGS, "cycle.yaml"), "utf8"));
+  const at = text.search(/^handler_on:\s*$/m);
+  assert.ok(at >= 0, "handler_on missing");
+  const block = text.slice(at);
+  for (const ev of ["success", "failure", "wait"]) {
+    const m = new RegExp(`^  ${ev}:\\s*\\n((?:    .*\\n?)+)`, "m").exec(block);
+    assert.ok(m, `handler ${ev} missing`);
+    assert.match(m[1], /node "\$FACTORY\/src\/notify\.mjs"/);
+    assert.match(m[1], new RegExp(`--event ${ev}\\b`));
+    for (const f of ["--run", "--issue", "--steps"]) assert.ok(m[1].includes(f), `${ev}: ${f}`);
+    assert.match(m[1], /^\s*\. "\$\{FACTORY:-\$\{A4S_FACTORY:-\}\}\/src\/cycle-env\.sh"/m);
+  }
+});

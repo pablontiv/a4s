@@ -151,6 +151,20 @@ try {
       cont3.length === 1 && cont3[0].threadId === impl3.filter((x) => !x.continued).at(-1)?.threadId && cont3[0].outcome === "pass" && findings3.includes("SELFTEST-QA-STUB") &&
       log3.length === log2.length && existsSync(wt3) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt3 }) === "0",
   });
+  // 5a. notifications (VS2): no thread configured, so the first notification created the inbox and later ones reused it
+  const t3cli = (...a) => spawnSync("node", [join(FACTORY, "src", "t3cli.mjs"), ...a], { encoding: "utf8", env: { ...process.env, T3_HOME: t3Home } });
+  const inboxId = (() => { try { return JSON.parse(readFileSync(join(root, "state", "inbox.json"), "utf8")).threadId; } catch { return ""; } })();
+  const inboxThreads = (() => { try { const o = t3cli("thread", "list", "--json", "--project", repo).stdout; return JSON.parse(o.slice(o.indexOf("["))).filter((t) => t.title === "Bandeja de la fábrica"); } catch { return []; } })();
+  const inboxMessages = (() => { try { const o = t3cli("thread", "show", "--json", "--messages", "50", inboxId).stdout; return JSON.parse(o.slice(o.indexOf("{"))).messages.filter((m) => m.role === "user").map((m) => m.text); } catch { return []; } })();
+  const run1 = r1.final?.dagRunId ?? "", run2 = r2.final?.dagRunId ?? "";
+  const about = (run) => inboxMessages.filter((t) => t.includes(`Run ${run} `));
+  log("inbox", inboxId, "threads", inboxThreads.length, "messages", JSON.stringify(inboxMessages));
+  Object.assign(checks, {
+    inbox_created_once: !!inboxId && inboxThreads.length === 1 && inboxThreads[0].threadId === inboxId,
+    st1_one_success_message: about(run1).length === 1 && /evento: success/.test(about(run1)[0]),
+    st2_one_failure_message_names_validate: about(run2).length === 1 && /evento: failure/.test(about(run2)[0]) && /Paso fallido: validate/.test(about(run2)[0]),
+    notified_recorded: (() => { try { return !!JSON.parse(readFileSync(join(root, "state", "st1", "notified.json"), "utf8"))[`${run1}:success`]; } catch { return false; } })(),
+  });
   // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
   const adHome = join(root, "dagu-admit"); mkdirSync(adHome, { recursive: true });
   const adCfg = join(adHome, "config.yaml");

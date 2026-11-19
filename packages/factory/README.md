@@ -39,7 +39,6 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ## Manual steps (this list may only shrink)
 
-1. Watch Dagu for waits and failures — VS2.
 2. Decide in the Dagu UI/API (merge approval, blocked answers) — VS3.
 4. Diagnose failures and blocked verdicts — VS5.
 5. Cancel or clean stuck runs; archive T3 projects of closed issues — VS6.
@@ -58,3 +57,7 @@ Selftest knobs: `SELFTEST_MODEL` (default `anthropic/claude-haiku-5-5`), `SELFTE
 ## Admission (VS1)
 
 `dags/admit.yaml` runs every 5 minutes, lists open issues labelled **`factory:ready`** (`gh issue list`, or the `ISSUES_FILE` fixture) and calls `src/admit.mjs` for each. It enqueues `cycle.yaml` with run-id `factory-issue-<n>`. Exit codes: 0 admitted, 20 not labelled, 21 duplicate (Dagu rejects the run-id), 30 infra. The classification label `factory` never admits.
+
+## Notifications (VS2)
+
+`cycle.yaml` declares `handler_on` for `success`, `failure` and `wait`; each runs `node "$FACTORY/src/notify.mjs"` with the event, run-id, issue and step statuses. `src/notify.mjs` sends one message (run-id, issue, event, failed step, issue URL) with `src/t3cli.mjs thread send` to the thread in param `INBOX_THREAD`, else `A4S_INBOX_THREAD` (Dagu base config, resolved by `src/cycle-env.sh`), else the factory's own inbox: a thread titled `Bandeja de la fábrica` in the T3 project of `PRIMARY`, on the isolated line `inbox` (`pi-inbox`, tools `read` and `bash`, `prompts/inbox.md`), created on first use and recorded in `$STATE/inbox.json` (an existing one is adopted, never two). Each run/event is sent once (`$STATE/<issue>/notified.json`). Notification problems are logged and never fail a run. Until VS7, add the `pi-inbox` instance to the operator's T3 by hand (`src/instances.mjs`).
