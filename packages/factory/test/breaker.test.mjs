@@ -292,3 +292,206 @@ test("ci: real git with a narrow remote.origin.fetch mapping still resolves the 
   assert.equal(ci.sha, fresh);
   assert.equal(ci.status, "none");
 });
+
+// ---- limits: run limits (attempts, step timeouts) ----
+import { collectLimits, cycleTimeouts, toTime } from "../src/breaker.mjs";
+import { mkdirSync } from "node:fs";
+
+const LIM_NOW = Date.parse("2026-01-01T12:00:00Z");
+const limFixture = ({ cycle = "steps:\n  - id: implement\n    run: |\n      exec node \"$F/src/station.mjs\" --line impl --timeout-sec 600\n  - id: qa\n    run: |\n      node \"$F/src/station.mjs\" --line qa --timeout-sec 300\n", files = {} } = {}) => {
+  const state = mkdtempSync(join(tmpdir(), "lim-"));
+  const cycleFile = join(state, "cycle.yaml");
+  writeFileSync(cycleFile, cycle);
+  for (const [rel, v] of Object.entries(files)) {
+    mkdirSync(join(state, rel, ".."), { recursive: true });
+    writeFileSync(join(state, rel), typeof v === "string" ? v : JSON.stringify(v));
+  }
+  return { state, cycleFile };
+};
+const limEval = (fx, st = closed) => evaluate({ limits: collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW }) }, st, LIM_NOW);
+const at = (sec) => LIM_NOW - sec * 1000;
+const okAttempts = { last: 1, streak: 1, parked: false, lastAt: ago(5) };
+
+test("cycleTimeouts reads the configured per-step timeouts", () => {
+  assert.deepEqual(cycleTimeouts("steps:\n  - id: a\n    run: node station.mjs --line impl --timeout-sec 600\n  - id: b\n    timeoutSec: 90\n    run: node station.mjs --line qa\n  - id: c\n    run: echo\n"), { impl: [600], qa: [90] });
+});
+test("limits 1: attempt still running past its configured timeout opens", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(601) }] } } });
+  const r = limEval(fx);
+  assert.equal(r.open, true);
+  assert.equal(r.reasons[0].kind, "limits");
+  assert.match(r.reasons[0].detail, /#5 step impl.*running past its timeout of 600s/);
+});
+test("limits 1b: the timeout comes from the cycle, not a fixed value", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: at(301) }] } } });
+  assert.equal(limEval(fx).open, true); // qa limit is 300 in this cycle
+  const fx2 = limFixture({ cycle: "steps:\n  - id: qa\n    run: node station.mjs --line qa --timeout-sec 4000\n", files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: at(2000) }] } } });
+  assert.equal(limEval(fx2).open, false);
+});
+test("limits 1c: the attempt's own recorded timeoutSec wins", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(100), timeoutSec: 60 }] } } });
+  assert.equal(limEval(fx).open, true);
+});
+test("limits 2: a persisted timeout outcome opens until reset", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  const r = limEval(fx);
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /#5 step impl.*outcome timeout/);
+  const afterReset = { ...closed, resetAt: new Date(LIM_NOW - 60_000).toISOString() };
+  assert.equal(limEval(fx, afterReset).open, false);
+  assert.equal(limEval(fx, { ...closed, resetAt: new Date(LIM_NOW - 4000_000).toISOString() }).open, true);
+});
+test("limits 3: running under its timeout stays closed", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(599) }] } } });
+  assert.equal(limEval(fx).open, false);
+});
+test("limits 4: more than 3 runs of one issue opens; 3 does not", () => {
+  const fx = limFixture({ files: { "5/attempts.json": { ...okAttempts, last: 4, streak: 4 } } });
+  const r = limEval(fx);
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /#5: 4 runs/);
+  assert.equal(limEval(limFixture({ files: { "5/attempts.json": { ...okAttempts, streak: 3 } } })).open, false);
+});
+test("limits 5: attempts archived by admission are not double-counted", () => {
+  const fx = limFixture({ files: {
+    "5/attempts.json": okAttempts,
+    "5/impl.json.1767268800000": { attempts: [{ startedAt: at(9000), outcome: "timeout" }, { startedAt: at(8000) }] },
+    "5/impl.json": { attempts: [{ startedAt: at(100), outcome: "pass" }] },
+  } });
+  const l = collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW });
+  assert.equal(l.steps.length, 1);
+  assert.equal(limEval(fx).open, false);
+});
+test("limits 6: a corrupt or missing attempt file is a reason", () => {
+  const corrupt = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": "{not json" } });
+  const r = limEval(corrupt);
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /#5 step impl.*corrupt/);
+  const invalid = limFixture({ files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: at(1), outcome: "bogus" }] } } });
+  assert.match(limEval(invalid).reasons[0].detail, /step qa.*corrupt/);
+  const missing = limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(10), outcome: "pass" }] } } });
+  assert.match(limEval(missing).reasons[0].detail, /#5 step attempts.*missing/);
+  const badAttempts = limFixture({ files: { "5/attempts.json": "nope" } });
+  assert.match(limEval(badAttempts).reasons[0].detail, /step attempts.*corrupt/);
+});
+test("limits: an invalid lastAt/resetAt in attempts.json is a corruption reason, not a throw", () => {
+  for (const bad of [{ streak: 4, lastAt: "corrupt-date" }, { streak: 1, resetAt: "nope" }, { streak: 4, lastAt: true }, { streak: 4, resetAt: false }, { streak: 4, lastAt: null }, { streak: 4, lastAt: {} }]) {
+    const fx = limFixture({ files: { "5/attempts.json": bad } });
+    const r = limEval(fx);
+    assert.equal(r.reasons.length, 1);
+    assert.match(r.reasons[0].detail, /step attempts.*corrupt.*not a valid timestamp/);
+  }
+});
+test("limits: no state yet is closed; an unreadable cycle file is a reason", () => {
+  const fx = limFixture();
+  assert.equal(limEval(fx).open, false);
+  const l = collectLimits({ state: fx.state, cycleFile: join(fx.state, "nope.yaml"), now: LIM_NOW });
+  assert.equal(evaluate({ limits: l }, closed, LIM_NOW).open, true);
+});
+test("limits reasons are stable across checks (no duplicates) and only reset closes them", () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(700) }] } } });
+  const first = limEval(fx);
+  const state = { ...closed, open: true, reasons: first.reasons };
+  const second = evaluate({ limits: collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW + 60_000 }) }, state, LIM_NOW + 60_000);
+  assert.equal(second.reasons.length, 1);
+  assert.equal(evaluate({ limits: { steps: [], runs: [], problems: [] } }, state, LIM_NOW).open, true);
+});
+test("check wires limits: live state with a timeout attempt opens, reset closes", async () => {
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  const snap = join(fx.state, "snap.json");
+  writeFileSync(snap, JSON.stringify({ services: { dagu: up, t3: up } }));
+  const cli = (...a) => spawnSync("node", [join(import.meta.dirname, "..", "src", "breaker.mjs"), ...a, "--state", fx.state], { encoding: "utf8" });
+  const r = cli("check", "--snapshot", snap, "--cycle", fx.cycleFile, "--factory", join(import.meta.dirname, "..", "src"));
+  assert.equal(r.status, 40);
+  assert.match(r.stdout, /limits: issue #5 step impl/);
+  cli("reset", "--by", "t");
+  assert.equal(readState(fx.state).open, false);
+});
+test("limits: missing startedAt is a corruption reason for every outcome", () => {
+  for (const outcome of ["pass", "fail", "blocked", "timeout", undefined]) {
+    const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [outcome ? { outcome } : {}] } } });
+    const r = limEval(fx);
+    assert.equal(r.open, true, String(outcome));
+    assert.match(r.reasons[0].detail, /impl\.json.*invalid field startedAt/, String(outcome));
+  }
+});
+test("limits: steps of one line with different timeouts are not collapsed to the largest", () => {
+  const cycle = "steps:\n  - id: implement\n    run: node station.mjs --line impl --timeout-sec 60\n  - id: repair\n    run: node station.mjs --line impl --timeout-sec 1800\n";
+  assert.deepEqual(cycleTimeouts(cycle), { impl: [60, 1800] });
+  const mk = (age, extra = {}) => limFixture({ cycle, files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(age), ...extra }] } } });
+  const r = limEval(mk(120));
+  assert.equal(r.open, true); // 120s is past 60s, and which step it is cannot be told
+  assert.match(r.reasons[0].detail, /several timeouts.*60\/1800s/);
+  assert.equal(limEval(mk(30)).open, false);
+  assert.equal(limEval(mk(1900)).open, true);
+  assert.equal(limEval(mk(120, { timeoutSec: 1800 })).open, false); // recorded timeout is applicable
+  assert.equal(limEval(mk(120, { timeoutSec: 60 })).open, true);
+});
+
+// ---- toTime: one total helper for every timestamp read from state ----
+const TIME_TABLE = [
+  ["valid ISO", "2026-01-01T12:00:00Z", Date.parse("2026-01-01T12:00:00Z")],
+  ["valid number", 1767268800000, 1767268800000],
+  ["true", true, null], ["false", false, null], ["corrupt-date", "corrupt-date", null],
+  ["1e20", 1e20, null], ["-1e20", -1e20, null], ["NaN", NaN, null], ["null", null, null], ["{}", {}, null],
+  ["undefined", undefined, null], ["Infinity", Infinity, null], ["empty string", "", null], ["array", [1], null],
+  ["bare numeric string", "1e20", null],
+];
+test("toTime: table-driven, total", () => {
+  for (const [name, v, want] of TIME_TABLE) assert.equal(toTime(v), want, name);
+  assert.equal(toTime(8.64e15), 8.64e15);
+  assert.equal(toTime(8.64e15 + 1), null);
+});
+test("toTime fields in files: each invalid shape is a limits reason naming file and field, never a throw", () => {
+  for (const [name, v, want] of TIME_TABLE) {
+    const bad = want === null;
+    for (const field of ["lastAt", "resetAt"]) {
+      if (v === undefined) continue;
+      const fx = limFixture({ files: { "5/attempts.json": { streak: 4, [field]: v } } });
+      const r = limEval(fx);
+      if (bad) { assert.equal(r.reasons.some((x) => x.kind === "limits" && x.detail.includes("attempts.json") && x.detail.includes(field)), true, `${field} ${name}`); }
+      else assert.equal(r.reasons.some((x) => /corrupt/.test(x.detail)), false, `${field} ${name}`);
+    }
+    const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: v }] } } });
+    const r = limEval(fx);
+    if (bad) assert.equal(r.reasons.some((x) => x.kind === "limits" && x.detail.includes("impl.json") && x.detail.includes("startedAt")), true, `startedAt ${name}`);
+  }
+});
+test("toTime fields in a snapshot: evaluate never throws on any shape", () => {
+  for (const [name, v] of TIME_TABLE) {
+    const snap = {
+      services: { dagu: { reachable: false, lastReachableAt: v }, t3: { reachable: true } },
+      ci: { sha: "abc", commitTime: v, status: "pending", failingSince: v },
+      limits: { runs: [{ issue: 1, runs: 9, at: v }], steps: [{ issue: 1, step: "impl", startedAt: v, timeoutSec: 5 }, { issue: 1, step: "qa", startedAt: v, timeoutSec: 5, outcome: "timeout" }], problems: [{ issue: 1, step: "x", error: "e", at: v }] },
+    };
+    for (const st of [closed, { ...closed, resetAt: v }, { open: true, reasons: [], resetAt: v }]) assert.doesNotThrow(() => evaluate(snap, st, LIM_NOW), name);
+    assert.doesNotThrow(() => evaluate(snap, closed, v), `now ${name}`);
+  }
+});
+
+test("completed attempts: every invalid startedAt shape is a reason naming file and field, whatever the outcome", () => {
+  for (const [name, v, want] of TIME_TABLE) {
+    if (want !== null || v === undefined) continue;
+    for (const outcome of ["pass", "fail", "timeout"]) {
+      const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: v, outcome }] } } });
+      const r = limEval(fx);
+      assert.equal(r.reasons.some((x) => x.kind === "limits" && x.detail.includes("qa.json") && x.detail.includes("startedAt")), true, `${outcome} ${name}`);
+    }
+  }
+});
+test("tracking files: invalid lastReachableAt / failingSince are limits reasons naming file and field (via check)", async () => {
+  for (const [name, v, want] of TIME_TABLE) {
+    if (want !== null || v === undefined) continue;
+    for (const [file, content, field] of [
+      ["reachability.json", { dagu: { lastReachableAt: v }, t3: { lastReachableAt: v } }, "dagu.lastReachableAt"],
+      ["ci-tracking.json", { failingSince: v }, "failingSince"],
+    ]) {
+      const fx = limFixture({ files: { "5/attempts.json": okAttempts, [file]: content } });
+      const snap = join(fx.state, "snap.json");
+      writeFileSync(snap, JSON.stringify({ services: { dagu: up, t3: up } }));
+      const b = await check({ state: fx.state, snapshot: snap, cycle: fx.cycleFile, factory: join(import.meta.dirname, "..", "src"), now: LIM_NOW });
+      assert.equal(b.open, true, `${file} ${name}`);
+      assert.equal(b.reasons.some((x) => x.kind === "limits" && x.detail.includes(file) && x.detail.includes(field)), true, `${file} ${name}`);
+    }
+  }
+});

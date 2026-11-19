@@ -131,6 +131,9 @@ export function retryExitCodes() {
   return [...new Set(OUTCOMES.filter((o) => POLICY[o] === "escalate").map((o) => OUTCOME_EXIT[o]))].sort((x, y) => x - y);
 }
 
+/** Default per-attempt timeout of a station (`--timeout-sec`) when the cycle does not set one. */
+export const STATION_TIMEOUT_SEC = 1800;
+
 /** Validate a station state file; an attempt without outcome is in flight, an unknown outcome is an error. */
 export function validateState(st) {
   if (!st || typeof st !== "object" || !Array.isArray(st.attempts)) throw new Error("invalid state: attempts must be an array");

@@ -1,27 +1,40 @@
 #!/usr/bin/env node
 // Circuit breaker core: the factory stops admitting when continuing would make things worse.
-//   breaker.mjs check [--state S] [--snapshot F] [--primary P] [--t3-home H] [--factory F] [--inbox T]
+//   breaker.mjs check [--state S] [--snapshot F] [--primary P] [--t3-home H] [--factory F] [--inbox T] [--cycle cycle.yaml]
 //       evaluates, updates $STATE/breaker.json, notifies once when it opens. Exit 0 closed, 40 open.
 //   breaker.mjs reset [--state S] [--by NAME]   the operator closes it explicitly (records who/when).
 // --state defaults to $STATE, then $A4S_STATE. --snapshot F: a JSON snapshot instead of live data (fixtures).
 // Rules: CONTRACTS.md, "Circuit breaker contract". `evaluate` is pure.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { resolveT3 } from "./lib.mjs";
+import { STATION_TIMEOUT_SEC, resolveT3, validateState } from "./lib.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = 1;
 export const EXIT_OPEN = 40;
 export const UNREACHABLE_MIN = 30;
 export const CI_TIMEOUT_MIN = 30;
+export const MAX_RUNS = 3;
 export const SERVICES = Object.freeze(["dagu", "t3"]);
 const MIN = 60_000;
-const ms = (v) => (typeof v === "number" ? v : Date.parse(v));
-const iso = (v) => new Date(ms(v)).toISOString();
+const DATE_MAX = 8.64e15;
+const ISO_8601 = /^[+-]?\d{4,6}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:Z|[+-]\d{2}(?::?\d{2})?)?)?$/;
+/**
+ * The one total time helper: finite epoch-ms or null. Only ISO-8601 strings and finite numbers within the JS Date
+ * range (+-8.64e15) are accepted; booleans, other types, unparsable strings and out-of-range numbers give null. Never throws.
+ */
+export function toTime(v) {
+  if (typeof v === "number") return Number.isFinite(v) && Math.abs(v) <= DATE_MAX ? v : null;
+  if (typeof v !== "string" || !ISO_8601.test(v.trim())) return null;
+  const t = Date.parse(v.trim());
+  return Number.isFinite(t) && Math.abs(t) <= DATE_MAX ? t : null;
+}
+const ms = toTime;
+const iso = (v) => new Date(toTime(v) ?? 0).toISOString();
 
 /**
  * Conditions: one function per kind, (snapshot, now) -> [{kind, detail, since}]. Later issues add entries here.
@@ -36,7 +49,7 @@ export const CONDITIONS = {
         const svc = snapshot?.services?.[name];
         if (svc && svc.reachable === true) continue; // a missing entry counts as unreachable
         // down since the last time it was seen reachable; unknown: since the breaker first noticed, else now
-        const since = svc?.lastReachableAt ? ms(svc.lastReachableAt) : prior ? ms(prior.since) : now;
+        const since = ms(svc?.lastReachableAt) ?? ms(prior?.since) ?? now;
         if ((now - since) / MIN > UNREACHABLE_MIN) {
           out.push({ kind: "unreachable", detail: `${name} unreachable for more than ${UNREACHABLE_MIN} min`, since: iso(since) });
         }
@@ -52,16 +65,46 @@ export const CONDITIONS = {
       if (!ci) return [];
       const limit = (Number(ci.timeoutMin) > 0 ? Number(ci.timeoutMin) : CI_TIMEOUT_MIN) * MIN;
       if (ci.lookupFailed) {
-        const since = ci.failingSince ? ms(ci.failingSince) : now;
+        const since = ms(ci.failingSince) ?? now;
         return now - since > limit ? [{ kind: "ci", detail: `CI lookup of main keeps failing for more than ${limit / MIN} min (${ci.error ?? "unknown"})`, since: iso(since) }] : [];
       }
       const short = String(ci.sha).slice(0, 12);
       const at = ms(ci.commitTime);
+      if (at === null) return [{ kind: "ci", detail: `CI snapshot has an invalid commitTime: ${JSON.stringify(ci.commitTime) ?? "undefined"}`, since: iso(now) }];
       if (ci.status === "failure") return [{ kind: "ci", detail: `CI of current main ${short} is failing`, since: iso(at) }];
       if ((ci.status === "none" || ci.status === "pending") && now - at > limit) {
         return [{ kind: "ci", detail: `no finished CI for current main ${short} ${limit / MIN} min after the commit (${ci.status})`, since: iso(at + limit) }];
       }
       return []; // success, or in progress / not yet started under the timeout
+    },
+  },
+  // Run limits: more than MAX_RUNS runs of one issue, a step running past its timeout, a persisted `timeout` outcome.
+  // No `clears`: only `reset` closes it; what happened before the last reset (resetAt) no longer counts.
+  limits: {
+    detect(snapshot, state, now) {
+      const l = snapshot?.limits;
+      if (!l) return [];
+      const after = ms(state?.resetAt) ?? -Infinity;
+      const live = (t) => { const x = ms(t); return x === null || !(x <= after); };
+      const bad = (what, field, v) => ({ kind: "limits", detail: `${what}: invalid ${field} ${JSON.stringify(v) ?? "undefined"}`, since: iso(now) });
+      const maxRuns = Number.isFinite(l.maxRuns) ? l.maxRuns : MAX_RUNS;
+      const out = [];
+      for (const r of Array.isArray(l.runs) ? l.runs : []) {
+        const t = ms(r?.at);
+        if (t === null) { out.push(bad(`issue #${r?.issue}`, "at", r?.at)); continue; }
+        if (r.runs > maxRuns && live(t)) out.push({ kind: "limits", detail: `issue #${r.issue}: ${r.runs} runs (limit ${maxRuns}) in attempts.json`, since: iso(t) });
+      }
+      for (const s of Array.isArray(l.steps) ? l.steps : []) {
+        const at = ms(s?.startedAt);
+        if (at === null) { out.push(bad(`issue #${s?.issue} step ${s?.step}`, "startedAt", s?.startedAt)); continue; }
+        if (!live(at)) continue;
+        if (s.outcome === "timeout") out.push({ kind: "limits", detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} ended with outcome timeout (limit ${s.timeoutSec}s)`, since: iso(at) });
+        else if (s.outcome === undefined && now - at > s.timeoutSec * 1000) out.push({ kind: "limits", detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its timeout of ${s.timeoutSec}s`, since: iso(at + s.timeoutSec * 1000) });
+      }
+      for (const p of Array.isArray(l.problems) ? l.problems : []) {
+        if (live(p?.at)) out.push({ kind: "limits", detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
+      }
+      return out;
     },
   },
 };
@@ -84,7 +127,7 @@ export function collectCi({ git, gh, branch = "main", remote = "origin", env = {
   try {
     sha = String(git(["rev-parse", "--verify", "FETCH_HEAD^{commit}"])).trim();
     commitTime = String(git(["show", "-s", "--format=%cI", sha])).trim();
-    if (!/^[0-9a-f]{7,64}$/i.test(sha) || Number.isNaN(Date.parse(commitTime))) throw new Error("unexpected git output");
+    if (!/^[0-9a-f]{7,64}$/i.test(sha) || toTime(commitTime) === null) throw new Error("unexpected git output");
   } catch (e) { return fail("cannot resolve main commit", e); }
   let runs;
   try {
@@ -97,6 +140,105 @@ export function collectCi({ git, gh, branch = "main", remote = "origin", env = {
   else if (runs.some((r) => r.status === "completed" && !GREEN.has(r.conclusion))) status = "failure";
   else if (runs.some((r) => r.status !== "completed")) status = "pending";
   return { sha, commitTime, status, timeoutMin };
+}
+
+/**
+ * Per-line step timeouts configured in the cycle DAG: for each step running `station.mjs --line X`, its
+ * `--timeout-sec N` (or `timeoutSec:` / `timeout_sec:` key; the station default when absent). Returns the sorted distinct values per line:
+ * several values mean several steps of one line with different timeouts, which an attempt cannot be told apart from (see collectLimits).
+ */
+export function cycleTimeouts(text) {
+  const out = {};
+  for (const block of String(text).split(/^\s*- id:/m).slice(1)) {
+    const line = block.match(/station\.mjs["']?\s+--line\s+(\w+)/)?.[1];
+    if (!line) continue;
+    const sec = Number(block.match(/--timeout-sec[ =]+["']?(\d+)/)?.[1] ?? block.match(/\btimeout_?[sS]ec:\s*(\d+)/)?.[1]);
+    const v = sec > 0 ? sec : STATION_TIMEOUT_SEC; // a step without an explicit value runs with the station default
+    out[line] = [...new Set([...(out[line] ?? []), v])].sort((x, y) => x - y);
+  }
+  return out;
+}
+
+/**
+ * Snapshot `limits` from the station files in `state` and the cycle's configured timeouts (never a fixed value):
+ *   {maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?}], problems: [{issue, step, error, at}]}
+ * Only `<line>.json` counts: files archived by admission (`impl.json.<ts>`) are history, never counted twice.
+ * Timeout of an attempt: its own recorded `timeoutSec`, else the cycle's `--timeout-sec` for the line, else the station default.
+ * When the line's steps have different timeouts and the attempt did not record its own, the step is ambiguous: the largest
+ * timeout is applied, and an in-flight attempt older than the smallest but not the largest is a problem (reason), never silently closed.
+ * An unreadable/corrupt/invalid attempt file, or a state/cycle that cannot be read, is a problem (a reason), not ignored.
+ */
+export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cycle.yaml"), now: now0 = Date.now() }) {
+  const now = toTime(now0) ?? Date.now();
+  const limits = { maxRuns: MAX_RUNS, runs: [], steps: [], problems: [] };
+  const problem = (issue, step, error, at = now) => limits.problems.push({ issue, step, error, at: iso(at) });
+  let timeouts = {};
+  try { timeouts = cycleTimeouts(readFileSync(cycleFile, "utf8")); } catch (e) { problem("-", "cycle", `cannot read cycle file ${cycleFile}: ${e.code ?? e.message}`); }
+  let dirs;
+  try { dirs = readdirSync(state, { withFileTypes: true }).filter((d) => d.isDirectory() && /^\d+$/.test(d.name)).map((d) => d.name); } catch (e) {
+    if (e.code !== "ENOENT") problem("-", "state", `cannot list state ${state}: ${e.code ?? e.message}`);
+    return limits;
+  }
+  const mtime = (f) => { try { return statSync(f).mtimeMs; } catch { return now; } };
+  const load = (issue, step, file, validate) => {
+    let text;
+    try { text = readFileSync(file, "utf8"); } catch (e) {
+      if (e.code === "ENOENT") return { missing: true };
+      problem(issue, step, `${file} unreadable: ${e.code ?? e.message}`); return null;
+    }
+    let at = now; try { at = statSync(file).mtimeMs; } catch { /* keep now */ }
+    try { return { value: validate(JSON.parse(text)) }; } catch (e) { problem(issue, step, `${file} is corrupt: ${e.message}`, at); return null; }
+  };
+  for (const issue of dirs) {
+    const dir = join(state, issue);
+    const stations = ["impl", "qa"].map((line) => [line, load(issue, line, join(dir, `${line}.json`), validateState)]);
+    const af = load(issue, "attempts", join(dir, "attempts.json"), (v) => {
+      if (!v || typeof v !== "object" || Array.isArray(v) || !Number.isInteger(v.streak) || v.streak < 0) throw new Error("streak must be a non-negative integer");
+      for (const k of ["lastAt", "resetAt"]) if (v[k] !== undefined && toTime(v[k]) === null) throw new Error(`${k} is not a valid timestamp: ${JSON.stringify(v[k])}`);
+      return v;
+    });
+    if (af?.missing) { if (stations.some(([, r]) => r && !r.missing)) problem(issue, "attempts", `${join(dir, "attempts.json")} is missing: run count unknown`); }
+    else if (af) limits.runs.push({ issue, runs: af.value.streak, at: toTime(af.value.lastAt) ?? toTime(af.value.resetAt) ?? now });
+    for (const [line, r] of stations) {
+      if (!r || r.missing) continue;
+      for (const [i, at] of r.value.attempts.entries()) {
+        const started = toTime(at?.startedAt);
+        if (started === null) {
+          // any startedAt that toTime rejects (absent included) is corruption, whatever the outcome
+          problem(issue, line, `${join(dir, `${line}.json`)}: attempt ${i + 1} has invalid field startedAt: ${JSON.stringify(at?.startedAt) ?? "undefined"}`, mtime(join(dir, `${line}.json`)));
+          continue;
+        }
+        const last = i === r.value.attempts.length - 1;
+        if (at.outcome === undefined && !last) continue; // superseded without outcome: not in flight
+        const set = at.timeoutSec > 0 ? [at.timeoutSec] : timeouts[line] ?? [STATION_TIMEOUT_SEC];
+        const timeoutSec = set.at(-1);
+        if (at.outcome === undefined && set.length > 1 && now - started > set[0] * 1000 && now - started <= timeoutSec * 1000) {
+          problem(issue, line, `attempt started ${iso(started)} is in flight past ${set[0]}s but the cycle configures several timeouts for this line (${set.join("/")}s) and the attempt did not record which applies`, started);
+        }
+        limits.steps.push({ issue, step: line, startedAt: iso(started), timeoutSec, outcome: at.outcome });
+      }
+    }
+  }
+  return limits;
+}
+
+/**
+ * Timestamps in the tracking files ($STATE/reachability.json `lastReachableAt`, $STATE/ci-tracking.json `failingSince`):
+ * a present but invalid one is a `limits` corruption reason naming file and field (the trackers then rewrite the file).
+ */
+export function trackingProblems(stateDir, now) {
+  const out = [];
+  const bad = (file, field, v) => out.push({ issue: "-", step: "tracking", error: `${file}: invalid field ${field}: ${JSON.stringify(v) ?? "undefined"}`, at: iso(now) });
+  const rf = join(stateDir, "reachability.json");
+  const reach = readJson(rf, {});
+  for (const name of SERVICES) {
+    const v = reach?.[name]?.lastReachableAt;
+    if (v !== undefined && toTime(v) === null) bad(rf, `${name}.lastReachableAt`, v);
+  }
+  const cf = join(stateDir, "ci-tracking.json");
+  const v = readJson(cf, {})?.failingSince;
+  if (v !== undefined && toTime(v) === null) bad(cf, "failingSince", v);
+  return out;
 }
 
 /** Live sources: git and gh run in `cwd` (the primary checkout). */
@@ -113,9 +255,9 @@ export function liveSources(cwd) {
 export function trackCi(stateDir, ci, now) {
   if (!ci) return ci;
   const f = join(stateDir, "ci-tracking.json");
-  const mem = readJson(f, {});
+  const mem0 = readJson(f, {}); const mem = mem0 && typeof mem0 === "object" && !Array.isArray(mem0) ? mem0 : {};
   if (!ci.lookupFailed) { writeJson(f, {}); return ci; }
-  const failingSince = ci.failingSince ?? mem.failingSince ?? iso(now);
+  const failingSince = [ci.failingSince, mem?.failingSince].find((x) => toTime(x) !== null) ?? iso(now);
   writeJson(f, { failingSince });
   return { ...ci, failingSince };
 }
@@ -126,7 +268,7 @@ export function trackCi(stateDir, ci, now) {
  * clears by itself (unreachable: only when both Dagu and T3 are reachable); everything else needs `reset`.
  */
 export function evaluate(snapshot, state, now = Date.now()) {
-  const t = ms(now);
+  const t = toTime(now) ?? Date.now();
   const reasons = [];
   if (state?.invalid) reasons.push({ kind: "state-invalid", detail: state.detail ?? "breaker state is corrupt or has an unknown version", since: iso(t) });
   for (const r of state?.open ? state.reasons ?? [] : []) {
@@ -142,7 +284,7 @@ export function evaluate(snapshot, state, now = Date.now()) {
 const writeJson = (f, v) => { mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, JSON.stringify(v, null, 1)); };
 export const breakerFile = (state) => join(state, "breaker.json");
 
-const validTime = (v) => typeof v === "string" && v !== "" && !Number.isNaN(Date.parse(v));
+const validTime = (v) => typeof v === "string" && toTime(v) !== null;
 const nullOr = (f) => (v) => v === null || v === undefined || f(v);
 const validReason = (r) => !!r && typeof r === "object" && typeof r.kind === "string" && r.kind !== "" && typeof r.detail === "string" && validTime(r.since);
 
@@ -196,12 +338,12 @@ const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, "utf8")); }
  */
 export function trackServices(stateDir, snapshot, now) {
   const f = join(stateDir, "reachability.json");
-  const mem = readJson(f, {});
+  const mem0 = readJson(f, {}); const mem = mem0 && typeof mem0 === "object" && !Array.isArray(mem0) ? mem0 : {};
   const services = { ...(snapshot?.services ?? {}) };
   for (const name of SERVICES) {
     const svc = services[name];
     if (svc?.reachable === true) { mem[name] = { lastReachableAt: iso(now) }; continue; }
-    const last = svc?.lastReachableAt ?? mem[name]?.lastReachableAt ?? iso(now);
+    const last = [svc?.lastReachableAt, mem?.[name]?.lastReachableAt].find((x) => toTime(x) !== null) ?? iso(now);
     mem[name] = { lastReachableAt: last };
     services[name] = { ...svc, reachable: false, lastReachableAt: last };
   }
@@ -253,7 +395,9 @@ export async function check(o, env = process.env) {
   const now = o.now ?? Date.now();
   const raw = o.snapshot ? readJson(o.snapshot, {}) : { services: await probeServices({ t3Home: o.t3Home, env, daguHome: o.daguHome, daguConfig: o.daguConfig }) };
   if (!o.snapshot) raw.ci = collectCi({ ...liveSources(o.primary || process.cwd()), env });
-  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now) };
+  if (!raw.limits) raw.limits = collectLimits({ state: o.state, cycleFile: o.cycle, now });
+  raw.limits = { ...raw.limits, problems: [...(raw.limits?.problems ?? []), ...trackingProblems(o.state, now)] };
+  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits };
   const { open, reasons } = evaluate(snap, prev, now);
   const wasOpen = prev.invalid ? false : prev.open;
   const keep = prev.invalid ? { resetBy: null, resetAt: null } : prev;
@@ -276,12 +420,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const [cmd, ...rest] = process.argv.slice(2);
     const { values: a } = parseArgs({ args: rest, options: {
       state: { type: "string" }, snapshot: { type: "string" }, primary: { type: "string" }, "t3-home": { type: "string" },
-      factory: { type: "string" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" },
+      factory: { type: "string" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" }, cycle: { type: "string" },
     } });
     const state = a.state || process.env.STATE || process.env.A4S_STATE;
     if (!state) throw new Error("--state (or $STATE / $A4S_STATE) is required");
     if (cmd === "check") {
-      const b = await check({ state, snapshot: a.snapshot, primary: a.primary, t3Home: a["t3-home"], factory: a.factory, inbox: a.inbox, daguHome: a["dagu-home"], daguConfig: a["dagu-config"] });
+      const b = await check({ state, snapshot: a.snapshot, primary: a.primary, t3Home: a["t3-home"], factory: a.factory, inbox: a.inbox, daguHome: a["dagu-home"], daguConfig: a["dagu-config"], cycle: a.cycle });
       if (b.open) {
         console.log(`breaker OPEN since ${b.since}: nothing is admitted`);
         for (const r of b.reasons) console.log(`- ${r.kind}: ${r.detail} (since ${r.since})`);

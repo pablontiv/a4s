@@ -110,6 +110,14 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 5. stale `origin/main` after a failed fetch is not proof of health (same as 4).
 6. CI in progress (or not started) under the timeout → closed.
 
+`limits`: a run exceeded its limits. `collectLimits` reads `$STATE/<n>/{impl,qa,attempts}.json` and the per-step timeouts configured in `dags/cycle.yaml` (`--timeout-sec` of each `station.mjs --line X` step; when one line has steps with different timeouts and the attempt recorded none, an in-flight attempt past the smallest but not the largest is reported as an ambiguous-configuration reason rather than judged by the largest; an attempt's own recorded `timeoutSec` wins; the station default `STATION_TIMEOUT_SEC` only when neither exists). Reason `kind: limits`, detail names the issue and step. It never clears by itself (reset only); events whose start is before `resetAt` no longer count. Snapshot `limits`: `{maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?}], problems: [{issue, step, error, at}]}` (`check` collects it from `$STATE` unless the snapshot has one; `--cycle` overrides the cycle file). Edge cases:
+1. an attempt still running (no outcome) longer than its configured timeout → open.
+2. an attempt persisted with outcome `timeout` → open; completed violations count until reset.
+3. running under its timeout → closed.
+4. more than 3 runs for one issue (`streak` of `attempts.json`) → open.
+5. attempts archived by admission (`<line>.json.<ts>`) are never read, so never double-counted.
+6. a missing (`attempts.json` absent while station files exist) or corrupt/invalid attempt file, or an unreadable cycle file, is a reason, never ignored.
+
 **Notification.** On opening, one inbox notification (`notify.mjs --event breaker`) carries the reasons and the reset command; it is not repeated while the breaker stays open.
 
 **Reset rule.** `node packages/factory/src/breaker.mjs reset [--state S] [--by NAME]` closes it explicitly and records `resetBy`/`resetAt`. Any reason whose kind does not define a self-clearing rule never clears by itself.

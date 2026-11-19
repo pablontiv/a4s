@@ -8,13 +8,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
+import { STATION_TIMEOUT_SEC, EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
 
 const { values: a } = parseArgs({ options: {
   line: { type: "string" }, issue: { type: "string" }, run: { type: "string", default: "local" },
   project: { type: "string" }, brief: { type: "string" }, "brief-text": { type: "string" },
   "t3-home": { type: "string" }, state: { type: "string" }, lines: { type: "string" },
-  "timeout-sec": { type: "string", default: "1800" }, "budget-sec": { type: "string" },
+  "timeout-sec": { type: "string", default: String(STATION_TIMEOUT_SEC) }, "budget-sec": { type: "string" },
   continue: { type: "string" }, answer: { type: "string" }, cancel: { type: "string", default: "kill" },
   "reattach-sec": { type: "string", default: "300" }, "stable-sec": { type: "string", default: "12" },
 } });
@@ -45,6 +45,7 @@ const finish = (attempt, outcome) => {
   if (attempt && attempt.outcome === undefined) { attempt.outcome = outcome; save(); }
   out("result", outcome); process.exit(OUTCOME_EXIT[outcome]);
 };
+const timeoutSec = Number(a["timeout-sec"]);
 const tryJSON = (text) => { try { return JSON.parse(text); } catch { return undefined; } };
 
 const linesPath = a.lines || join(dirname(fileURLToPath(import.meta.url)), "..", "lines.json");
@@ -80,12 +81,12 @@ if (a.continue || plan.kind === "resume") {
   threadId = a.continue ?? plan.threadId;
   const msg = a.answer ?? a["brief-text"] ?? readFileSync(a.brief, "utf8");
   const r = t3(["thread", "send", "--json", threadId, "-"], msg);
-  if (r.code !== 0) { log("send failed", r.stderr); const infra = isUnreachable(r.stderr + r.stdout); st.attempts.push({ threadId, continued: true, startedAt: Date.now(), outcome: infra ? "infra" : "fail" }); save(); out("result", infra ? "infra" : "fail"); process.exit(infra ? EXIT.INFRA : EXIT.WORKER_FAIL); }
-  st.attempts.push(cur = { threadId, continued: true, runId: tryJSON(r.stdout)?.runId, startedAt: Date.now() }); save();
+  if (r.code !== 0) { log("send failed", r.stderr); const infra = isUnreachable(r.stderr + r.stdout); st.attempts.push({ threadId, continued: true, startedAt: Date.now(), timeoutSec, outcome: infra ? "infra" : "fail" }); save(); out("result", infra ? "infra" : "fail"); process.exit(infra ? EXIT.INFRA : EXIT.WORKER_FAIL); }
+  st.attempts.push(cur = { threadId, continued: true, runId: tryJSON(r.stdout)?.runId, startedAt: Date.now(), timeoutSec }); save();
   if (!cur.runId) { log("send: malformed CLI output", r.stdout.slice(0, 300)); finish(cur, "infra"); }
 } else if (plan.kind === "reattach") {
   threadId = plan.threadId;
-  if (cur.outcome) st.attempts.push(cur = { threadId, model: plan.model, reattached: true, startedAt: Date.now() });
+  if (cur.outcome) st.attempts.push(cur = { threadId, model: plan.model, reattached: true, startedAt: Date.now(), timeoutSec });
   save();
   log("reattaching to thread", threadId);
 } else {
@@ -100,10 +101,10 @@ if (a.continue || plan.kind === "resume") {
   const j = r.code === 0 ? tryJSON(r.stdout) : undefined;
   if (!j?.threadId) {
     log(r.code !== 0 ? `start failed ${r.stderr}` : `start: malformed CLI output ${r.stdout.slice(0, 300)}`);
-    st.attempts.push(cur = { model, startedAt: Date.now() }); finish(cur, "infra");
+    st.attempts.push(cur = { model, startedAt: Date.now(), timeoutSec }); finish(cur, "infra");
   }
   threadId = j.threadId;
-  st.attempts.push(cur = { threadId, runId: j.runId, model, startedAt: Date.now() }); save();
+  st.attempts.push(cur = { threadId, runId: j.runId, model, startedAt: Date.now(), timeoutSec }); save();
   log("started", threadId, model);
 }
 out("thread_id", threadId);

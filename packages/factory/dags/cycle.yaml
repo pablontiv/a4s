@@ -120,7 +120,7 @@ steps:
       exec node "$FACTORY/src/station.mjs" --line impl \
         --issue "$ISSUE" --run "$DAG_RUN_ID" --project "$WT" \
         --brief "$ISSUE_STATE/brief.md" --t3-home "$T3_HOME" \
-        --state "$STATE" --lines "$LINE_TABLE"
+        --state "$STATE" --lines "$LINE_TABLE" --timeout-sec 1800
 
   - id: require_pass
     depends: implement
@@ -173,7 +173,7 @@ steps:
         DAGU_OUTPUT_FILE="$outf" node "$FACTORY/src/station.mjs" --line qa \
           --issue "$ISSUE" --run "$DAG_RUN_ID-qa$n" --project "$WT" \
           --brief "$brief" --t3-home "$T3_HOME" \
-          --state "$STATE" --lines "$LINE_TABLE" >&2 || rc=$?
+          --state "$STATE" --lines "$LINE_TABLE" --timeout-sec 1800 >&2 || rc=$?
         after=$(snap)
         if [ "$before" != "$after" ]; then echo "qa changed the worktree" >&2; exit 1; fi
         case "$rc" in 0|10) ;; *) echo "qa station exit $rc" >&2; exit 1 ;; esac
@@ -191,7 +191,7 @@ steps:
         DAGU_OUTPUT_FILE="$ISSUE_STATE/qa-fix-out" node "$FACTORY/src/station.mjs" --line impl \
           --issue "$ISSUE" --run "$DAG_RUN_ID-qafix" --project "$WT" \
           --continue "$IMPL_THREAD" --brief "$ISSUE_STATE/qa-findings.md" \
-          --t3-home "$T3_HOME" --state "$STATE" --lines "$LINE_TABLE" >&2 || fixrc=$?
+          --t3-home "$T3_HOME" --state "$STATE" --lines "$LINE_TABLE" --timeout-sec 1800 >&2 || fixrc=$?
         fixres=$(field "$ISSUE_STATE/qa-fix-out" result)
         if [ "$fixrc" != 0 ] || [ "$fixres" != "pass" ]; then
           echo "implementation after QA findings: result=$fixres exit=$fixrc" >&2

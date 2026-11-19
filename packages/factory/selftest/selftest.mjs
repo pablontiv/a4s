@@ -272,6 +272,15 @@ try {
   const ckCi = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", stateAd, "--snapshot", ciSnap, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: adEnv });
   checks.breaker_ci_failing_main_opens = ckCi.status === 40 && brState().open === true && brState().reasons.some((r) => r.kind === "ci");
   spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
+  // limits condition: a fixture attempt with outcome timeout opens the breaker; reset closes it
+  // (startedAt is after the previous reset: events before a reset do not count)
+  mkdirSync(join(stateAd, "7301"), { recursive: true });
+  writeFileSync(join(stateAd, "7301", "attempts.json"), JSON.stringify({ last: 1, streak: 1, parked: false, lastAt: new Date().toISOString() }));
+  writeFileSync(join(stateAd, "7301", "impl.json"), JSON.stringify({ attempts: [{ startedAt: Date.now() + 1000, timeoutSec: 60, outcome: "timeout" }] }));
+  const ckLim = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", stateAd, "--snapshot", snapFile, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: adEnv });
+  checks.breaker_limits_timeout_opens = ckLim.status === 40 && brState().open === true && brState().reasons.some((r) => r.kind === "limits" && /#7301 step impl/.test(r.detail));
+  spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
+  rmSync(join(stateAd, "7301"), { recursive: true, force: true });
   const brAdm2 = admitWithBreaker();
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
   log(JSON.stringify(checks));
