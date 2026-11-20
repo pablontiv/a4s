@@ -8,6 +8,8 @@
 type: graph
 # bash features (${!var}) are used; Dagu's default shell may be sh
 shell: bash
+# global Dagu queue (config.yaml queues) whose max_concurrency equals limits.json maxActiveRuns; integration stays serial by the lease (#1089)
+queue: factory-cycle
 # PRIMARY/FACTORY/T3_HOME/STATE: empty params fall back to A4S_* declared in
 # Dagu's base config `env:` (resolved by src/cycle-env.sh in every step).
 params:
