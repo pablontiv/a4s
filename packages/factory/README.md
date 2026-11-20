@@ -49,6 +49,7 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ```sh
 npm test --workspace @a4s/factory        # unit tests
+npm run selftest:stub                     # push/ci/close against a bare remote and a gh stub, no model (~2 min; runs in CI)
 npm run selftest                          # binary proof (real model calls, ~2 min)
 ```
 

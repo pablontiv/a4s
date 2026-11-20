@@ -34,3 +34,8 @@ jobs:
           tar -xzf "$archive" -C "$RUNNER_TEMP/dagu-2.26.0" dagu
           echo "DAGU_BIN=$RUNNER_TEMP/dagu-2.26.0/dagu" >> "$GITHUB_ENV"
       - run: bash scripts/gate.sh
+      # integration of the factory cycle (push, ci, close) against a bare remote and a gh stub; no model, no T3, no credentials
+      - name: Factory stub selftest
+        run: npm run selftest:stub
+        working-directory: packages/factory
+        timeout-minutes: 5

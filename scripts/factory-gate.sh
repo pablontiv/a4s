@@ -14,4 +14,5 @@ else
   bash scripts/gate.sh
 fi
 node packages/factory/src/check-models.mjs
+npm run selftest:stub -w @a4s/factory
 npm run selftest

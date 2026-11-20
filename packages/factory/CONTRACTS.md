@@ -37,6 +37,18 @@ Validation runs in the same environment as production and CI.
 - The selftest uses the Dagu on PATH (the service's build); only `FACTORY_DAGU_BIN` overrides it.
 - The selftest gives Dagu only `PATH`, `HOME`, `DAGU_HOME` and `DAGU_SKIP_EXAMPLES`; nothing else from the caller's environment.
 
+**Which test runs where.**
+
+| Test | CI (`.github/workflows/ci.yml`) | Gate (`scripts/factory-gate.sh`, the `validate` step) | Schedule |
+| --- | --- | --- | --- |
+| Unit tests (`npm test`) and typecheck (`scripts/gate.sh`) | yes | yes | no |
+| Stub selftest (`npm run selftest:stub`) | yes (own step, 5 min cap) | yes | no |
+| Full selftest (`npm run selftest`, real models, isolated T3) | no (needs credentials) | yes | yes (operator host) |
+
+- `npm run selftest:stub` (`selftest/selftest-stub.mjs`) runs the same cycle as the selftest (isolated Dagu, the DAGs of this checkout, a fixture repository) with `PUSH=true` and `CLOSE_ISSUE=true`. No model, no T3 server, no credentials: the `t3` CLI is `selftest/stub/t3.mjs`, found where `resolveT3` looks (`$HOME/.t3/runtime/versions/stub/t3` of a temporary `HOME`), and answers each line from fixture verdicts; `gh` is `selftest/stub/gh.mjs` on `PATH`, serves issues, labels, comments and CI run lists from a fixture directory and records every call in `gh-calls.jsonl`. The remote is a bare git repository that `integrate` and `push` really push to. It needs `git`, `jq` and Dagu (`FACTORY_DAGU_BIN`, else `DAGU_BIN`, else `dagu` on PATH). It never writes the selftest receipt: only the real selftest proves a factory change.
+- Scenarios, each asserted from the bare remote and the recorded `gh` calls: delivered (commit with the `Factory-Run` trailer on the remote, CI green, issue closed with the comment, `verify_close` passes); CI red (revert commit on the remote, comment, run failed); CI `cancelled` covered by a later green commit (no revert); validation failure (nothing pushed).
+- The real selftest is unchanged.
+
 ## Issue contract
 
 Enforced at admission by `src/issue-contract.mjs` (`checkIssue(body)`), tested in `test/issue-contract.test.mjs`. The GitHub issue form `.github/ISSUE_TEMPLATE/factory.yml` produces these headings.
