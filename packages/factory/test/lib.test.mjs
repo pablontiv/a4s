@@ -47,21 +47,22 @@ test("resolveT3 follows the running server version and fails closed", () => {
   assert.equal(resolveT3(home, versions).bin, join(versions, "9.9.9", "t3"));
 });
 
-test("line instances are isolated and restricted to their allowlist", () => {
+test("line instances run without isolation flags and are restricted to their allowlist", () => {
   const inst = instancesFromLines(join(FACTORY, "lines.json"), "/bin/pi")["pi-impl"];
   const args = inst.config.launchArgs;
-  for (const flag of ["--no-extensions", "--no-mcp", "--no-skills", "--no-context-files", "--tools"]) assert.ok(args.includes(flag), flag);
+  assert.ok(args.includes("--tools"));
+  for (const flag of ["--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes"]) assert.ok(!args.includes(flag), flag);
   assert.ok(args.includes(join(FACTORY, "prompts", "impl.md")));
   assert.deepEqual(inst.environment, [{ name: "A4S_LINE", value: "impl" }]);
 });
 
-test("the qa line gets an isolated, read+bash-only instance of another model family", () => {
+test("the qa line gets a read+bash-only instance of another model family", () => {
   const doc = JSON.parse(readFileSync(join(FACTORY, "lines.json"), "utf8"));
   assert.equal(doc.lines.qa.provider, "pi-qa");
   assert.notEqual(doc.lines.qa.model.split("/")[0], doc.lines.impl.model.split("/")[0]);
   const inst = instancesFromLines(join(FACTORY, "lines.json"), "/bin/pi")["pi-qa"];
   const args = inst.config.launchArgs;
-  for (const flag of ["--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes"]) assert.ok(args.includes(flag), flag);
+  for (const flag of ["--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-themes"]) assert.ok(!args.includes(flag), flag);
   assert.ok(args.includes("--tools read,bash"));
   assert.ok(!/edit|write/.test(args.split("--tools ")[1].split(" ")[0]));
   assert.ok(args.endsWith(`--append-system-prompt ${join(FACTORY, "prompts", "qa.md")}`));

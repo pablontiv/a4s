@@ -35,7 +35,7 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ## Line profiles
 
-`lines.json` holds model, thinking, escalation model and the isolated Pi instance per line. Instances start with `--no-extensions --no-skills --no-prompt-templates --no-context-files --no-themes --no-mcp` and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries. The `qa` line (VS4) needs the `pi-qa` instance in the operator's T3; until VS7 it is added by hand from `src/instances.mjs`'s output.
+`lines.json` holds model, thinking, escalation model and the Pi instance per line. Instances start with the operator's normal Pi setup (no `--no-*` isolation flags; operator decision 2026-11-20) and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries. The `qa` line (VS4) needs the `pi-qa` instance in the operator's T3; until VS7 it is added by hand from `src/instances.mjs`'s output.
 
 ## Manual steps (this list may only shrink)
 
