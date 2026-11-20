@@ -320,7 +320,7 @@ test("limits 1: attempt still running past its configured timeout opens", () => 
   const r = limEval(fx);
   assert.equal(r.open, true);
   assert.equal(r.reasons[0].kind, "limits");
-  assert.match(r.reasons[0].detail, /#5 step impl.*running past its timeout of 600s/);
+  assert.match(r.reasons[0].detail, /#5 step impl.*running past its safety cap of 600s/);
 });
 test("limits 1b: the timeout comes from the cycle, not a fixed value", () => {
   const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: at(301) }] } } });
@@ -341,6 +341,42 @@ test("limits 2: a persisted timeout outcome opens until reset", () => {
   assert.equal(limEval(fx, afterReset).open, false);
   assert.equal(limEval(fx, { ...closed, resetAt: new Date(LIM_NOW - 4000_000).toISOString() }).open, true);
 });
+const stepFx = (attempts) => limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts } } });
+test("limits: stuck then pass in the same step stays closed", () => {
+  assert.equal(limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "stuck" }, { startedAt: at(2000), timeoutSec: 14400, outcome: "pass" }])).open, false);
+  assert.equal(limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "timeout" }, { startedAt: at(2000), timeoutSec: 14400, outcome: "pass" }])).open, false);
+});
+test("limits: stuck then fail opens", () => {
+  const r = limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "stuck" }, { startedAt: at(2000), timeoutSec: 14400, outcome: "fail" }]));
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /#5 step impl.*outcome stuck/);
+});
+test("limits: in-flight past-cap reason clears after timeout then pass", () => {
+  const running = limEval(stepFx([{ startedAt: at(5000), timeoutSec: 600 }]));
+  assert.equal(running.open, true);
+  assert.equal(running.reasons[0].step, "impl");
+  const persisted = { open: true, since: new Date(LIM_NOW).toISOString(), reasons: running.reasons };
+  const still = limEval(stepFx([{ startedAt: at(5000), timeoutSec: 600, outcome: "timeout" }]), persisted);
+  assert.equal(still.open, true);
+  const after = limEval(stepFx([{ startedAt: at(5000), timeoutSec: 600, outcome: "timeout" }, { startedAt: at(2000), timeoutSec: 600, outcome: "pass" }]), { open: true, since: persisted.since, reasons: running.reasons });
+  assert.equal(after.open, false);
+});
+
+test("limits: a persisted stuck reason clears when a later attempt passes; unrelated reasons stay", () => {
+  const first = limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "stuck" }]));
+  assert.equal(first.open, true);
+  const persisted = { open: true, since: first.reasons[0].since, reasons: [...first.reasons, { kind: "fixture", detail: "unrelated", since: first.reasons[0].since }] };
+  const after = limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "stuck" }, { startedAt: at(2000), timeoutSec: 14400, outcome: "pass" }]), persisted);
+  assert.deepEqual(after.reasons.map((r) => r.kind), ["fixture"]);
+  assert.equal(limEval(stepFx([{ startedAt: at(3000), timeoutSec: 14400, outcome: "stuck" }, { startedAt: at(2000), timeoutSec: 14400, outcome: "pass" }]), { open: true, since: persisted.since, reasons: first.reasons }).open, false);
+});
+test("limits: a long active attempt (no outcome, under the safety cap) stays closed", () => {
+  assert.equal(limEval(stepFx([{ startedAt: at(7200), timeoutSec: 14400 }])).open, false);
+});
+test("limits: an attempt past the safety cap still running opens", () => {
+  assert.equal(limEval(stepFx([{ startedAt: at(15000), timeoutSec: 14400 }])).open, true);
+});
+
 test("limits 3: running under its timeout stays closed", () => {
   const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(599) }] } } });
   assert.equal(limEval(fx).open, false);

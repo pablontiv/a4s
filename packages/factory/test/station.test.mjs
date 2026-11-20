@@ -19,7 +19,17 @@ const input = args.includes("-") ? fs.readFileSync(0, "utf8") : "";
 const [, cmd] = args;
 if (cmd === "start") process.stdout.write(sc.start ?? JSON.stringify({ threadId: "T-new", runId: "R1" }));
 else if (cmd === "send") { fs.writeFileSync(process.env.FAKE_T3 + ".sent", input); process.stdout.write(JSON.stringify({ runId: "R2" })); }
-else if (cmd === "show") process.stdout.write(sc.show);
+else if (cmd === "show") {
+  const cf = process.env.FAKE_T3 + ".count";
+  const n = fs.existsSync(cf) ? Number(fs.readFileSync(cf, "utf8")) : 0;
+  fs.writeFileSync(cf, String(n + 1));
+  const t = (status) => ({ status, model: "m", pendingRequestCount: 0, activeRunId: status === "running" ? "R1" : null });
+  if (sc.tickUntil !== undefined) { // scripted activity: a new message on every poll, then a verdict
+    process.stdout.write(JSON.stringify(n < sc.tickUntil
+      ? { thread: t("running"), messages: [{ role: "assistant", text: "step " + n }] }
+      : { thread: t("completed"), messages: [{ role: "assistant", text: '{"verdict":"fail","findings":["x"]}' }] }));
+  } else process.stdout.write(sc.show);
+}
 `;
 
 let server, origin;
@@ -30,7 +40,7 @@ before(async () => {
 });
 after(() => server.close());
 
-function fixture({ show, start, state, reachable = true } = {}) {
+function fixture({ show, start, state, reachable = true, tickUntil } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "station-"));
   const versions = join(dir, "versions"), home = join(dir, "t3home"), stateDir = join(dir, "state");
   mkdirSync(join(versions, "9.9.9"), { recursive: true });
@@ -39,7 +49,7 @@ function fixture({ show, start, state, reachable = true } = {}) {
   mkdirSync(join(home, "userdata"), { recursive: true });
   writeFileSync(join(home, "userdata", "server-runtime.json"), JSON.stringify({ serverVersion: "9.9.9", origin: reachable ? origin : "http://127.0.0.1:1" }));
   writeFileSync(join(dir, "lines.json"), JSON.stringify(LINES));
-  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, start }));
+  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, start, tickUntil }));
   mkdirSync(join(stateDir, "7"), { recursive: true });
   if (state) writeFileSync(join(stateDir, "7", "impl.json"), JSON.stringify(state));
   return { dir, versions, home, stateDir, stFile: join(stateDir, "7", "impl.json"), scenario: join(dir, "scenario.json") };
@@ -47,7 +57,7 @@ function fixture({ show, start, state, reachable = true } = {}) {
 
 function run(f, extra = []) {
   const args = [STATION, "--line", "impl", "--issue", "7", "--project", f.dir, "--t3-home", f.home, "--state", f.stateDir,
-    "--lines", join(f.dir, "lines.json"), "--brief-text", "do it", "--stable-sec", "0", "--timeout-sec", "30", ...extra];
+    "--lines", join(f.dir, "lines.json"), "--brief-text", "do it", "--stable-sec", "0", "--poll-sec", "0.1", ...extra];
   return new Promise((ok) => {
     execFile(process.execPath, args, { env: { ...process.env, T3_VERSIONS_DIR: f.versions, FAKE_T3: f.scenario, DAGU_OUTPUT_FILE: "" } },
       (err, stdout, stderr) => ok({ code: err ? err.code : 0, stdout, stderr }));
@@ -189,4 +199,92 @@ test("stored blocked + answer with T3 unreachable is infra and keeps the blocked
   const r = await run(f, ["--answer", "this one"]);
   assert.equal(r.code, 30, r.stderr);
   assert.deepEqual(state(f).attempts.map((x) => x.outcome), ["blocked"]);
+});
+
+// ---- liveness: stuck after STALL_SEC without activity, timeout at the MAX_SEC cap ----
+import { activitySig } from "../src/lib.mjs";
+const busy = snap("running", { activeRunId: "R1" });
+
+test("steady activity beyond STALL_SEC in total is not cut", async (t) => {
+  const f = fixture({ tickUntil: 15 });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const t0 = Date.now();
+  const r = await run(f, ["--stall-sec", "1", "--max-sec", "100", "--poll-sec", "0.2"]);
+  assert.ok(Date.now() - t0 > 2500, "ran longer than 2 x STALL_SEC");
+  assert.match(r.stdout, /^result=fail$/m, r.stderr); // reached the worker's own verdict
+  assert.equal(state(f).attempts.at(-1).outcome, "fail");
+});
+
+test("silence for STALL_SEC ends the attempt as stuck, and the next attempt escalates", async (t) => {
+  const f = fixture({ show: busy });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "1", "--max-sec", "100"]);
+  assert.equal(r.code, 10, r.stderr);
+  assert.match(r.stdout, /^result=stuck$/m);
+  assert.equal(state(f).attempts.at(-1).outcome, "stuck");
+  writeFileSync(f.scenario, JSON.stringify({ show: snap("completed") }));
+  await run(f);
+  const starts = calls(f).filter((c) => c[1] === "start");
+  assert.equal(starts[1][starts[1].indexOf("--model") + 1], "big");
+});
+
+test("the safety cap ends an always-active attempt as timeout, and the next attempt escalates", async (t) => {
+  const f = fixture({ tickUntil: 1000 });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "100", "--max-sec", "1", "--poll-sec", "0.2"]);
+  assert.equal(r.code, 10, r.stderr);
+  assert.match(r.stdout, /^result=timeout$/m);
+  writeFileSync(f.scenario, JSON.stringify({ show: snap("completed") }));
+  await run(f);
+  const starts = calls(f).filter((c) => c[1] === "start");
+  assert.equal(starts[1][starts[1].indexOf("--model") + 1], "big");
+});
+
+test("limits come from limits.json; the flag wins", async (t) => {
+  const f = fixture({ show: busy });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  writeFileSync(join(f.dir, "limits.json"), JSON.stringify({ stallSec: 1, maxSec: 100 }));
+  const r = await run(f, ["--limits", join(f.dir, "limits.json")]);
+  assert.match(r.stdout, /^result=stuck$/m, r.stderr);
+});
+
+test("reattach keeps the clocks: last activity and startedAt are never reset", async (t) => {
+  const old = Date.now() - 30_000;
+  const f = fixture({ show: busy, state: { attempts: [{ threadId: "T-old", model: "m", startedAt: old, lastActivityAt: old, activitySig: activitySig(JSON.parse(busy)) }] } });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "20", "--max-sec", "100"]);
+  assert.match(r.stdout, /^result=stuck$/m, r.stderr);
+  const at = state(f).attempts;
+  assert.equal(at.length, 1);
+  assert.equal(at[0].startedAt, old);
+  assert.equal(calls(f).filter((c) => c[1] === "start").length, 0);
+});
+
+test("reattach after infra keeps startedAt: the safety cap counts from the first start", async (t) => {
+  const old = Date.now() - 30_000;
+  const f = fixture({ show: busy, state: { attempts: [{ threadId: "T-old", model: "m", startedAt: old, lastActivityAt: Date.now(), outcome: "infra" }] } });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "100", "--max-sec", "20"]);
+  assert.match(r.stdout, /^result=timeout$/m, r.stderr);
+  assert.equal(state(f).attempts.at(-1).startedAt, old);
+});
+
+test("a finished thread reattached after a long silence is classified, not stuck", async (t) => {
+  const old = Date.now() - 30_000;
+  const f = fixture({ show: snap("failed"), state: { attempts: [{ threadId: "T-old", model: "m", startedAt: old, lastActivityAt: old }] } });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "5"]);
+  assert.match(r.stdout, /^result=fail$/m, r.stderr);
+});
+
+test("metadata-only changes (updatedAt) are not activity", async (t) => {
+  const old = Date.now() - 30_000;
+  const a = JSON.parse(snap("running", { activeRunId: "R1", itemCount: 3, updatedAt: "t1" }));
+  const b = JSON.parse(snap("running", { activeRunId: "R1", itemCount: 3, updatedAt: "t2" }));
+  assert.equal(activitySig(a), activitySig(b));
+  const f = fixture({ show: JSON.stringify(b), state: { attempts: [{ threadId: "T-old", model: "m", startedAt: old, lastActivityAt: old, activitySig: activitySig(a) }] } });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "20", "--max-sec", "100"]);
+  assert.match(r.stdout, /^result=stuck$/m, r.stderr);
+  assert.notEqual(activitySig(a), activitySig(JSON.parse(snap("running", { itemCount: 4 }))));
 });

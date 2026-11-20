@@ -1,5 +1,6 @@
 // Pure helpers shared by the station wrapper, the T3 CLI shim and the selftest.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -107,7 +108,7 @@ export function killThread(threadId) {
 }
 
 /** Typed outcome every attempt ends in. */
-export const OUTCOMES = Object.freeze(["pass", "fail", "malformed", "timeout", "blocked", "cancelled", "infra"]);
+export const OUTCOMES = Object.freeze(["pass", "fail", "malformed", "stuck", "timeout", "blocked", "cancelled", "infra"]);
 
 /** What happens after an attempt: the single retry policy table. */
 export const POLICY = Object.freeze({
@@ -115,6 +116,7 @@ export const POLICY = Object.freeze({
   blocked: "resume", // same thread, with the answer
   fail: "escalate", // next attempt on `escalate_to`
   malformed: "escalate",
+  stuck: "escalate",
   timeout: "escalate",
   cancelled: "same-model", // next attempt on `model`
   infra: "reattach", // same thread, no new brief
@@ -122,7 +124,7 @@ export const POLICY = Object.freeze({
 
 /** Exit code the station returns for each outcome (see station.mjs header). */
 export const OUTCOME_EXIT = Object.freeze({
-  pass: EXIT.PASS, blocked: EXIT.PASS, fail: EXIT.WORKER_FAIL, timeout: EXIT.WORKER_FAIL,
+  pass: EXIT.PASS, blocked: EXIT.PASS, fail: EXIT.WORKER_FAIL, stuck: EXIT.WORKER_FAIL, timeout: EXIT.WORKER_FAIL,
   malformed: EXIT.MALFORMED, infra: EXIT.INFRA, cancelled: 143,
 });
 
@@ -131,8 +133,32 @@ export function retryExitCodes() {
   return [...new Set(OUTCOMES.filter((o) => POLICY[o] === "escalate").map((o) => OUTCOME_EXIT[o]))].sort((x, y) => x - y);
 }
 
-/** Default per-attempt timeout of a station (`--timeout-sec`) when the cycle does not set one. */
-export const STATION_TIMEOUT_SEC = 1800;
+/** Silence (no new turn items) after which a producing attempt ends as `stuck`; override: `STALL_SEC` env or limits.json `stallSec`. */
+export const STALL_SEC = 1200;
+/** Safety cap of one producing attempt (outcome `timeout`); override: `MAX_SEC` env or limits.json `maxSec`. */
+export const MAX_SEC = 14400;
+/** Default cap an attempt is judged by when it did not record its own (breaker). */
+export const STATION_TIMEOUT_SEC = MAX_SEC;
+
+/**
+ * Liveness limits: first valid positive number of env (`STALL_SEC`, `MAX_SEC`), then the JSON file
+ * (`{"stallSec":N,"maxSec":N}`), then the defaults. An unreadable file or an invalid value is skipped.
+ */
+export function loadLimits(file, env = process.env) {
+  let j = {};
+  try { j = JSON.parse(readFileSync(file, "utf8")) ?? {}; } catch { /* absent: defaults */ }
+  const pick = (...c) => c.map(Number).find((n) => Number.isFinite(n) && n > 0);
+  return { stallSec: pick(env.STALL_SEC, j.stallSec) ?? STALL_SEC, maxSec: pick(env.MAX_SEC, j.maxSec) ?? MAX_SEC };
+}
+
+/**
+ * Fingerprint (sha1) of a thread's turn items: changes only when a message or tool call is added or changes
+ * (`thread.itemCount`, `thread.runCount`, the recent messages). Thread metadata (`updatedAt`, status...) is not activity.
+ */
+export function activitySig(snap) {
+  const t = snap?.thread ?? {};
+  return createHash("sha1").update(JSON.stringify({ items: t.itemCount ?? null, runs: t.runCount ?? null, messages: snap?.messages ?? [] })).digest("hex");
+}
 
 /** Validate a station state file; an attempt without outcome is in flight, an unknown outcome is an error. */
 export function validateState(st) {

@@ -85,7 +85,16 @@ try {
   linesStub.lines.qa.instance.prompt = qaStubPrompt;
   linesStub.lines.qa.instance.displayName = "Factory · qa (selftest stub)";
   writeFileSync(linesStubPath, JSON.stringify(linesStub));
-  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN), ...instancesFromLines(linesStubPath, PI_BIN) };
+  // fixture LINE_TABLE for the liveness check: `impl` runs on an isolated instance whose stub goes silent (one long tool call)
+  const silentPrompt = join(root, "silent-stub.md");
+  writeFileSync(silentPrompt, "You are a selftest stub. Whatever the user message says, run exactly one bash command: `sleep 600`, and nothing else. Do not write any text before it.\n");
+  const linesSilentPath = join(root, "lines-silent-stub.json");
+  const linesSilent = JSON.parse(JSON.stringify(lines));
+  linesSilent.lines.impl.provider = "pi-impl-silent-stub";
+  linesSilent.lines.impl.instance.prompt = silentPrompt;
+  linesSilent.lines.impl.instance.displayName = "Factory · impl (selftest silent stub)";
+  writeFileSync(linesSilentPath, JSON.stringify(linesSilent));
+  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN), ...instancesFromLines(linesStubPath, PI_BIN), ...instancesFromLines(linesSilentPath, PI_BIN) };
   writeFileSync(join(t3Home, "userdata", "settings.json"), JSON.stringify({ providerInstances: instances }));
   const t3Port = await port();
   const t3 = spawn(latestT3(), ["serve", "--base-dir", t3Home, "--port", String(t3Port), "--host", "127.0.0.1", "--no-browser"], { detached: true, stdio: "ignore" });
@@ -283,6 +292,13 @@ try {
   rmSync(join(stateAd, "7301"), { recursive: true, force: true });
   const brAdm2 = admitWithBreaker();
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
+  // liveness: a stub that stays silent ends `stuck` within a short configured STALL_SEC (no deadline otherwise)
+  const stuckState = join(root, "state-stuck");
+  const t0Stuck = Date.now();
+  const stuckRun = spawnSync("node", [join(FACTORY, "src", "station.mjs"), "--line", "impl", "--issue", "7401", "--run", "selftest-stuck", "--project", repo,
+    "--brief-text", "Do the task.", "--t3-home", t3Home, "--state", stuckState, "--lines", linesSilentPath, "--stall-sec", "20", "--max-sec", "300", "--stable-sec", "5"], { encoding: "utf8", env: { ...process.env, DAGU_OUTPUT_FILE: "" }, timeout: 240_000 });
+  checks.silent_stub_ends_stuck = stuckRun.status === 10 && /^result=stuck$/m.test(stuckRun.stdout) && Date.now() - t0Stuck < 200_000;
+  if (!checks.silent_stub_ends_stuck) log("stuck check:", stuckRun.status, stuckRun.stdout, (stuckRun.stderr ?? "").slice(-500));
   log(JSON.stringify(checks));
   ok = Object.values(checks).every(Boolean);
 } catch (e) {

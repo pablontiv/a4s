@@ -11,7 +11,7 @@ const st = (outcome, extra = {}) => ({ attempts: [{ threadId: "t1", outcome, ...
 
 test("POLICY covers the vocabulary exactly", () => {
   assert.deepEqual(Object.keys(POLICY).sort(), [...OUTCOMES].sort());
-  assert.deepEqual(POLICY, { pass: "stop", blocked: "resume", fail: "escalate", malformed: "escalate", timeout: "escalate", cancelled: "same-model", infra: "reattach" });
+  assert.deepEqual(POLICY, { pass: "stop", blocked: "resume", fail: "escalate", malformed: "escalate", stuck: "escalate", timeout: "escalate", cancelled: "same-model", infra: "reattach" });
 });
 
 test("previous cancelled -> model, even after many attempts", () => {
@@ -24,7 +24,7 @@ test("previous blocked + answer -> same thread", () => {
 });
 
 test("previous fail/malformed/timeout -> escalate_to", () => {
-  for (const o of ["fail", "malformed", "timeout"]) assert.deepEqual(planNext(line, st(o)), { kind: "new", model: "big" });
+  for (const o of ["fail", "malformed", "stuck", "timeout"]) assert.deepEqual(planNext(line, st(o)), { kind: "new", model: "big" });
 });
 
 test("previous infra -> reattach", () => {

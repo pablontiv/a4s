@@ -67,7 +67,7 @@ The last line of the worker's answer is one JSON object:
 
 Enforced by `OUTCOMES`, `POLICY`, `validateState` and `planNext` in `src/lib.mjs`, applied by `src/station.mjs`; tested in `test/policy.test.mjs` and `test/station.test.mjs`.
 
-Every attempt of a line ends in exactly one outcome, stored in `$STATE/<issue>/<line>.json` (`attempts[].outcome`): `pass | fail | malformed | timeout | blocked | cancelled | infra`. An attempt without outcome is in flight; any other value makes the station exit `40` when it reads the file.
+Every attempt of a line ends in exactly one outcome, stored in `$STATE/<issue>/<line>.json` (`attempts[].outcome`): `pass | fail | malformed | stuck | timeout | blocked | cancelled | infra`. An attempt without outcome is in flight; any other value makes the station exit `40` when it reads the file.
 
 The next attempt is chosen from the previous outcome only (`POLICY`), never from the attempt count:
 
@@ -75,10 +75,13 @@ The next attempt is chosen from the previous outcome only (`POLICY`), never from
 |---|---|---|
 | `pass` | stop | none; the stored verdict is replayed |
 | `blocked` | resume | same thread (`threadId`, `question` stored); with `--answer` it is sent there, without one the station waits on that thread |
-| `fail`, `malformed`, `timeout` | escalate | new thread on `escalate_to` |
+| `fail`, `malformed`, `stuck`, `timeout` | escalate | new thread on `escalate_to` |
 | `cancelled` | same-model | new thread on `model` |
 | `infra` | reattach | same thread, no new brief |
 
+- **No fixed deadline on producing steps** (implementation, QA, QA repair): `cycle.yaml` passes no `--timeout-sec` to any station call. The station watches the thread's activity (`t3 thread show --json`: a new or changed message or tool call) and ends the attempt only on two conditions, killing the thread: `stuck` = no activity for `STALL_SEC` (default 1200); `timeout` = the safety cap `MAX_SEC` (default 14400) since the first start of the attempt. Both are configurable in `limits.json` (`stallSec`, `maxSec`; `STALL_SEC`/`MAX_SEC` env or `--stall-sec`/`--max-sec` override it). An attempt that keeps working is never cut by a clock before `MAX_SEC`. Both clocks come from the persisted `startedAt` and `lastActivityAt` (and an `activitySig` fingerprint) of the attempt: reattaching to a running attempt, or after `infra`, never resets them. Only a thread that is still busy can be `stuck`/`timeout`; a finished one is classified by its verdict.
+- Escalation follows results, not time: `fail`, `stuck` and `timeout` escalate to `escalate_to`; time passing while the thread is active escalates nothing.
+- Waits on external things keep their deadlines: `CI_TIMEOUT_MIN` (CI step), service reachability (`UNREACHABLE_MIN`, `--reattach-sec`) and the integration lease. The stall alarm (#1040) only notifies about long runs; it never kills them.
 - A terminal T3 status `cancelled` (or SIGTERM) is `cancelled`; any other non-`completed` terminal status is `fail`.
 - A stored `pass` (stop) or `blocked` without `--answer` (await) is replayed before any T3 access, so it needs no server.
 - Unreachable T3 (preflight or while polling), a failed `thread start`, or malformed JSON from the `t3` CLI is `infra`; a preflight failure finalizes the in-flight attempt as `infra`, terminal outcomes are never overwritten.
@@ -112,10 +115,10 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 5. stale `origin/main` after a failed fetch is not proof of health (same as 4).
 6. CI in progress (or not started) under the timeout → closed.
 
-`limits`: a run exceeded its limits. `collectLimits` reads `$STATE/<n>/{impl,qa,attempts}.json` and the per-step timeouts configured in `dags/cycle.yaml` (`--timeout-sec` of each `station.mjs --line X` step; when one line has steps with different timeouts and the attempt recorded none, an in-flight attempt past the smallest but not the largest is reported as an ambiguous-configuration reason rather than judged by the largest; an attempt's own recorded `timeoutSec` wins; the station default `STATION_TIMEOUT_SEC` only when neither exists). Reason `kind: limits`, detail names the issue and step. It never clears by itself (reset only); events whose start is before `resetAt` no longer count. Snapshot `limits`: `{maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?}], problems: [{issue, step, error, at}]}` (`check` collects it from `$STATE` unless the snapshot has one; `--cycle` overrides the cycle file). Edge cases:
-1. an attempt still running (no outcome) longer than its configured timeout → open.
-2. an attempt persisted with outcome `timeout` → open; completed violations count until reset.
-3. running under its timeout → closed.
+`limits`: a run exceeded its limits. `collectLimits` reads `$STATE/<n>/{impl,qa,attempts}.json` and the per-step timeouts configured in `dags/cycle.yaml` (`--timeout-sec` of each `station.mjs --line X` step; when one line has steps with different timeouts and the attempt recorded none, an in-flight attempt past the smallest but not the largest is reported as an ambiguous-configuration reason rather than judged by the largest; an attempt's own recorded `timeoutSec` wins; the station default `STATION_TIMEOUT_SEC`, equal to the safety cap `MAX_SEC`, only when neither exists). Reason `kind: limits`, detail names the issue and step. It never clears by itself (reset only); events whose start is before `resetAt` no longer count. Snapshot `limits`: `{maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?}], problems: [{issue, step, error, at}]}` (`check` collects it from `$STATE` unless the snapshot has one; `--cycle` overrides the cycle file). Edge cases:
+1. an attempt still running (no outcome) longer than its safety cap (`MAX_SEC`) → open.
+2. an attempt persisted with outcome `stuck` or `timeout` → open, unless a later attempt of the same step passed (an escalation that succeeds does not keep the breaker open); completed violations count until reset.
+3. an active long attempt under its safety cap → closed.
 4. more than 3 runs for one issue (`streak` of `attempts.json`) → open.
 5. attempts archived by admission (`<line>.json.<ts>`) are never read, so never double-counted.
 6. a missing (`attempts.json` absent while station files exist) or corrupt/invalid attempt file, or an unreadable cycle file, is a reason, never ignored.

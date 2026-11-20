@@ -78,7 +78,7 @@ export const CONDITIONS = {
       return []; // success, or in progress / not yet started under the timeout
     },
   },
-  // Run limits: more than MAX_RUNS runs of one issue, a step running past its timeout, a persisted `timeout` outcome.
+  // Run limits: more than MAX_RUNS runs of one issue, a step running past its safety cap, a `stuck`/`timeout` outcome not followed by a pass in the same step.
   // No `clears`: only `reset` closes it; what happened before the last reset (resetAt) no longer counts.
   limits: {
     detect(snapshot, state, now) {
@@ -94,12 +94,16 @@ export const CONDITIONS = {
         if (t === null) { out.push(bad(`issue #${r?.issue}`, "at", r?.at)); continue; }
         if (r.runs > maxRuns && live(t)) out.push({ kind: "limits", detail: `issue #${r.issue}: ${r.runs} runs (limit ${maxRuns}) in attempts.json`, since: iso(t) });
       }
-      for (const s of Array.isArray(l.steps) ? l.steps : []) {
+      const steps = Array.isArray(l.steps) ? l.steps : [];
+      for (const s of steps) {
         const at = ms(s?.startedAt);
         if (at === null) { out.push(bad(`issue #${s?.issue} step ${s?.step}`, "startedAt", s?.startedAt)); continue; }
         if (!live(at)) continue;
-        if (s.outcome === "timeout") out.push({ kind: "limits", detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} ended with outcome timeout (limit ${s.timeoutSec}s)`, since: iso(at) });
-        else if (s.outcome === undefined && now - at > s.timeoutSec * 1000) out.push({ kind: "limits", detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its timeout of ${s.timeoutSec}s`, since: iso(at + s.timeoutSec * 1000) });
+        const bad_ = s.outcome === "timeout" || s.outcome === "stuck";
+        // an escalation that later passes in the same step does not keep the breaker open
+        const recovered = bad_ && stepRecovered(steps, s.issue, s.step, at);
+        if (bad_ && !recovered) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} ended with outcome ${s.outcome}${s.outcome === "timeout" ? ` (safety cap ${s.timeoutSec}s)` : " (no activity)"}`, since: iso(at) });
+        else if (s.outcome === undefined && now - at > s.timeoutSec * 1000) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its safety cap of ${s.timeoutSec}s`, since: iso(at + s.timeoutSec * 1000) });
       }
       for (const p of Array.isArray(l.problems) ? l.problems : []) {
         if (live(p?.at)) out.push({ kind: "limits", detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
@@ -108,6 +112,9 @@ export const CONDITIONS = {
     },
   },
 };
+
+/** A later attempt of the same issue and step passed: its earlier stuck/timeout no longer counts. */
+const stepRecovered = (steps, issue, step, at) => steps.some((n) => n?.issue === issue && n?.step === step && n.outcome === "pass" && (ms(n.startedAt) ?? -Infinity) > at);
 
 const GREEN = new Set(["success", "skipped", "neutral"]);
 
@@ -273,6 +280,8 @@ export function evaluate(snapshot, state, now = Date.now()) {
   if (state?.invalid) reasons.push({ kind: "state-invalid", detail: state.detail ?? "breaker state is corrupt or has an unknown version", since: iso(t) });
   for (const r of state?.open ? state.reasons ?? [] : []) {
     if (CONDITIONS[r.kind]?.clears?.(snapshot)) continue;
+    // a persisted stuck/timeout reason clears when its step later passed (unrelated reasons stay)
+    if (r.kind === "limits" && r.step !== undefined && Array.isArray(snapshot?.limits?.steps) && stepRecovered(snapshot.limits.steps, r.issue, r.step, ms(r.attemptAt) ?? Infinity)) continue;
     reasons.push(r);
   }
   for (const [kind, c] of Object.entries(CONDITIONS)) {
