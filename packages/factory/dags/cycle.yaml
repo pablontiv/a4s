@@ -375,6 +375,11 @@ handler_on:
         else exit 0; fi
         node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" --state "$STATE" "${where[@]}"
       ) || echo "label update failed (ignored)" >&2
+      # run history for the circuit breaker (src/breaker.mjs)
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        node "$FACTORY/src/breaker.mjs" record --issue "$ISSUE" --run "$DAG_RUN_ID" --state "$STATE"
+      ) || echo "breaker record failed (ignored)" >&2
       exit 0
   failure:
     run: |
@@ -391,6 +396,13 @@ handler_on:
           --steps "$steps" --inbox "$INBOX_THREAD" --primary "$PRIMARY" \
           --t3-home "$T3_HOME" --state "$STATE"
       ) || echo "notify failed (ignored)" >&2
+      # run history for the circuit breaker; before `finish` below changes the issue state (outcome comes from the station state)
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
+          | sed -nE 's/^(├|└)─([^ ]+)( \([^)]*\))? \[([a-z_]+)\]$/\2=\4/p' | paste -sd, - || true)
+        node "$FACTORY/src/breaker.mjs" record --issue "$ISSUE" --run "$DAG_RUN_ID" --steps "$steps" --state "$STATE"
+      ) || echo "breaker record failed (ignored)" >&2
       # issue state (src/labels.mjs): back to factory:ready (retryable, < 3 runs) or factory:needs-human + comment
       (
         . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"

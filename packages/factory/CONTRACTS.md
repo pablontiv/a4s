@@ -123,6 +123,8 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 5. attempts archived by admission (`<line>.json.<ts>`) are never read, so never double-counted.
 6. a missing (`attempts.json` absent while station files exist) or corrupt/invalid attempt file, or an unreadable cycle file, is a reason, never ignored.
 
+`streak`: two different issues failed in a row. `collectRuns` reads the finished runs from the factory state `$STATE/runs.jsonl` (`{issue, run, outcome: pass|fail|blocked|cancelled, finishedAt}`, appended once per run id by the `onSuccess`/`onFailure` handlers via `breaker.mjs record`; never the paginated Dagu run list), ordered by `finishedAt`; snapshot `runs` is that list. The last two finished runs both `fail` and belong to different issues → open, reason `streak` naming both runs. Edge cases: (1) two failures of different issues → open; (2) two failures of the same issue (re-attempts) → closed; (3) a success between two failures → closed; (4) a run still in progress is not in the history, so ignored; (5) `blocked`/needs-human (and `cancelled`) is not a failure (and, like a success, breaks the streak). Never clears by itself (reset only); runs finished at or before `resetAt` no longer count.
+
 **Notification.** On opening, one inbox notification (`notify.mjs --event breaker`) carries the reasons and the reset command; it is not repeated while the breaker stays open.
 
 **Reset rule.** `node packages/factory/src/breaker.mjs reset [--state S] [--by NAME]` closes it explicitly and records `resetBy`/`resetAt`. Any reason whose kind does not define a self-clearing rule never clears by itself.

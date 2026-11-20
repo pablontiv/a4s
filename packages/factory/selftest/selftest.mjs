@@ -290,6 +290,13 @@ try {
   checks.breaker_limits_timeout_opens = ckLim.status === 40 && brState().open === true && brState().reasons.some((r) => r.kind === "limits" && /#7301 step impl/.test(r.detail));
   spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
   rmSync(join(stateAd, "7301"), { recursive: true, force: true });
+  // streak condition: two fixture failures of different issues open the breaker and the next admission enqueues nothing
+  // (finish times are after the previous reset: runs before a reset do not count)
+  writeFileSync(join(stateAd, "runs.jsonl"), [{ issue: "7301", run: "factory-issue-7301-1", outcome: "fail", finishedAt: new Date(Date.now() + 1000).toISOString() }, { issue: "7302", run: "factory-issue-7302-1", outcome: "fail", finishedAt: new Date(Date.now() + 2000).toISOString() }].map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const brAdm3 = admitWithBreaker();
+  checks.breaker_streak_opens_and_enqueues_nothing = brAdm3.status === 0 && !queued(7201) && labelsOf(7201).includes("factory:ready") && brState().open === true && brState().reasons.some((r) => r.kind === "streak" && /7301-1/.test(r.detail) && /7302-1/.test(r.detail));
+  spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
+  rmSync(join(stateAd, "runs.jsonl"), { force: true });
   const brAdm2 = admitWithBreaker();
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
   // ordering: a lower-numbered issue blocked by an open one, and an unblocked one; maxActiveRuns 1 picks the unblocked one

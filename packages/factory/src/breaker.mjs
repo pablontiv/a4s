@@ -2,17 +2,20 @@
 // Circuit breaker core: the factory stops admitting when continuing would make things worse.
 //   breaker.mjs check [--state S] [--snapshot F] [--primary P] [--t3-home H] [--factory F] [--inbox T] [--cycle cycle.yaml]
 //       evaluates, updates $STATE/breaker.json, notifies once when it opens. Exit 0 closed, 40 open.
+//   breaker.mjs record --issue N --run ID [--steps "a=succeeded,b=failed"] [--state S]   append a finished run to $STATE/runs.jsonl
 //   breaker.mjs reset [--state S] [--by NAME]   the operator closes it explicitly (records who/when).
 // --state defaults to $STATE, then $A4S_STATE. --snapshot F: a JSON snapshot instead of live data (fixtures).
 // Rules: CONTRACTS.md, "Circuit breaker contract". `evaluate` is pure.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { STATION_TIMEOUT_SEC, resolveT3, validateState } from "./lib.mjs";
 import { waitedWithin } from "./lease.mjs";
+import { runOutcome } from "./labels.mjs";
+import { failedStep, parseSteps } from "./notify.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = 1;
@@ -112,6 +115,22 @@ export const CONDITIONS = {
         if (live(p?.at)) out.push({ kind: "limits", detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
       }
       return out;
+    },
+  },
+  // Two different issues failed in a row: the last two FINISHED runs (by finish time) both failed and belong to different issues.
+  // A success, a blocked/needs-human or cancelled outcome, or a re-attempt of the same issue breaks it; runs in progress are ignored.
+  // No `clears`: only `reset` closes it; runs finished at or before resetAt no longer count.
+  streak: {
+    detect(snapshot, state, now) {
+      const after = ms(state?.resetAt) ?? -Infinity;
+      const done = (Array.isArray(snapshot?.runs) ? snapshot.runs : [])
+        .map((r) => ({ r, t: ms(r?.finishedAt) }))
+        .filter(({ r, t }) => t !== null && t > after && ["pass", "fail", "blocked", "cancelled"].includes(r?.outcome))
+        .sort((a, b) => a.t - b.t);
+      if (done.length < 2) return [];
+      const [a, b] = done.slice(-2);
+      if (a.r.outcome !== "fail" || b.r.outcome !== "fail" || String(a.r.issue) === String(b.r.issue)) return [];
+      return [{ kind: "streak", detail: `two different issues failed in a row: run ${a.r.run} (#${a.r.issue}, finished ${iso(a.t)}) and run ${b.r.run} (#${b.r.issue}, finished ${iso(b.t)})`, since: iso(b.t) }];
     },
   },
 };
@@ -230,6 +249,33 @@ export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cyc
     }
   }
   return limits;
+}
+
+const runsFile = (state) => join(state, "runs.jsonl");
+
+/** Outcome of a finished run for the history: pass | fail | blocked | cancelled (the last two are not breakage). */
+export function runResult(state, issue, steps) {
+  const failed = failedStep(parseSteps(steps));
+  if (!failed) return "pass";
+  const o = runOutcome(state, issue, failed);
+  return o === "blocked" || o === "cancelled" ? o : "fail";
+}
+
+/** Appends a finished run to $STATE/runs.jsonl; idempotent per run id. */
+export function recordRun(state, { issue, run, outcome, finishedAt = new Date().toISOString() }) {
+  mkdirSync(state, { recursive: true });
+  if (collectRuns(state).some((r) => r.run === run)) return false;
+  appendFileSync(runsFile(state), `${JSON.stringify({ issue: String(issue), run, outcome, finishedAt })}\n`);
+  return true;
+}
+
+/** Finished runs from the factory state ($STATE/runs.jsonl), ordered by finish time; unreadable lines are skipped (never a pass). */
+export function collectRuns(state) {
+  let text;
+  try { text = readFileSync(runsFile(state), "utf8"); } catch { return []; }
+  const out = [];
+  for (const l of text.split("\n")) { try { const r = JSON.parse(l); if (r && toTime(r.finishedAt) !== null) out.push(r); } catch { /* skip */ } }
+  return out.sort((a, b) => toTime(a.finishedAt) - toTime(b.finishedAt));
 }
 
 /**
@@ -408,8 +454,9 @@ export async function check(o, env = process.env) {
   const raw = o.snapshot ? readJson(o.snapshot, {}) : { services: await probeServices({ t3Home: o.t3Home, env, daguHome: o.daguHome, daguConfig: o.daguConfig }) };
   if (!o.snapshot) raw.ci = collectCi({ ...liveSources(o.primary || process.cwd()), env });
   if (!raw.limits) raw.limits = collectLimits({ state: o.state, cycleFile: o.cycle, now });
+  if (!raw.runs) raw.runs = collectRuns(o.state);
   raw.limits = { ...raw.limits, problems: [...(raw.limits?.problems ?? []), ...trackingProblems(o.state, now)] };
-  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits };
+  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits, runs: raw.runs };
   const { open, reasons } = evaluate(snap, prev, now);
   const wasOpen = prev.invalid ? false : prev.open;
   const keep = prev.invalid ? { resetBy: null, resetAt: null } : prev;
@@ -432,7 +479,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const [cmd, ...rest] = process.argv.slice(2);
     const { values: a } = parseArgs({ args: rest, options: {
       state: { type: "string" }, snapshot: { type: "string" }, primary: { type: "string" }, "t3-home": { type: "string" },
-      factory: { type: "string" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" }, cycle: { type: "string" },
+      factory: { type: "string" }, issue: { type: "string" }, run: { type: "string" }, steps: { type: "string", default: "" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" }, cycle: { type: "string" },
     } });
     const state = a.state || process.env.STATE || process.env.A4S_STATE;
     if (!state) throw new Error("--state (or $STATE / $A4S_STATE) is required");
@@ -444,6 +491,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         process.exit(EXIT_OPEN);
       }
       console.log("breaker closed");
+    } else if (cmd === "record") {
+      if (!a.issue || !a.run) throw new Error("--issue and --run are required");
+      const outcome = runResult(state, a.issue, a.steps);
+      console.log(`${recordRun(state, { issue: a.issue, run: a.run, outcome }) ? "recorded" : "already recorded"} ${a.run}: ${outcome}`);
     } else if (cmd === "reset") {
       const by = a.by || process.env.USER || userInfo().username;
       console.log(`breaker closed by ${by} at ${reset(state, by)}`);

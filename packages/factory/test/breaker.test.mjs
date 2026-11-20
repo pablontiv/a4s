@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evaluate, readState, reset, check } from "../src/breaker.mjs";
+import { evaluate, readState, reset, check, recordRun, collectRuns } from "../src/breaker.mjs";
 
 const NOW = Date.parse("2026-01-01T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60_000).toISOString();
@@ -548,4 +548,51 @@ test("limits: time waiting for the integration lease is not step time", () => {
   assert.equal(limEval(partial).open, true); // 90s overlap -> 610s of step time
   const partial2 = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 300_000, waits: [wait(900, 550)] } } });
   assert.equal(limEval(partial2).open, false); // 150s overlap -> 550s
+});
+
+const mk = (issue, outcome, min, n = 1) => ({ issue, run: `factory-issue-${issue}-${n}`, outcome, finishedAt: ago(min) });
+const streak = (runs, state = closed) => evaluate({ services: { dagu: up, t3: up }, runs }, state, NOW);
+test("streak: two failures of different issues open, naming both runs", () => {
+  const r = streak([mk(2, "fail", 5), mk(1, "fail", 20)]); // unordered input: sorted by finish time
+  assert.equal(r.open, true);
+  assert.equal(r.reasons[0].kind, "streak");
+  assert.match(r.reasons[0].detail, /factory-issue-1-1.*factory-issue-2-1/);
+});
+test("streak: two failures of the same issue stay closed", () => {
+  assert.equal(streak([mk(1, "fail", 20, 1), mk(1, "fail", 5, 2)]).open, false);
+});
+test("streak: a success between two failures stays closed", () => {
+  assert.equal(streak([mk(1, "fail", 30), mk(3, "pass", 20), mk(2, "fail", 10)]).open, false);
+});
+test("streak: runs without outcome (in progress) are ignored", () => {
+  assert.equal(streak([mk(1, "fail", 30), { issue: 2, run: "r2", outcome: "running" }, { issue: 3, run: "r3" }]).open, false);
+  assert.equal(streak([mk(1, "fail", 30), mk(2, "fail", 20), { issue: 3, run: "r3", outcome: "running" }]).open, true);
+});
+test("streak: blocked is not a failure", () => {
+  assert.equal(streak([mk(1, "fail", 30), mk(2, "blocked", 20)]).open, false);
+  assert.equal(streak([mk(1, "fail", 30), mk(2, "blocked", 20), mk(3, "fail", 10)]).open, false);
+});
+test("streak: reset only; runs before resetAt do not count", () => {
+  const open = streak([mk(1, "fail", 20), mk(2, "fail", 10)]);
+  const state = { ...closed, open: true, reasons: open.reasons };
+  assert.equal(evaluate({ services: { dagu: up, t3: up }, runs: [mk(1, "fail", 20), mk(2, "fail", 10), mk(3, "pass", 1)] }, state, NOW).open, true);
+  assert.equal(streak([mk(1, "fail", 20), mk(2, "fail", 10)], { ...closed, resetAt: ago(5) }).open, false);
+});
+test("collectRuns/recordRun: state file, ordered by finish time, idempotent per run", () => {
+  const d = tmp();
+  assert.deepEqual(collectRuns(d), []);
+  assert.equal(recordRun(d, { issue: 2, run: "b", outcome: "fail", finishedAt: ago(1) }), true);
+  assert.equal(recordRun(d, { issue: 1, run: "a", outcome: "fail", finishedAt: ago(9) }), true);
+  assert.equal(recordRun(d, { issue: 1, run: "a", outcome: "fail", finishedAt: ago(9) }), false);
+  assert.deepEqual(collectRuns(d).map((r) => r.run), ["a", "b"]);
+});
+test("check reads runs from the state and opens on a streak", async () => {
+  const d = tmp();
+  recordRun(d, { issue: 1, run: "a", outcome: "fail", finishedAt: ago(9) });
+  recordRun(d, { issue: 2, run: "b", outcome: "fail", finishedAt: ago(1) });
+  const snap = join(d, "snap.json");
+  writeFileSync(snap, JSON.stringify({ services: { dagu: up, t3: up } }));
+  const b = await check({ state: d, snapshot: snap, factory: d, now: NOW }, { ...process.env, A4S_STATE: d });
+  assert.equal(b.open, true);
+  assert.equal(b.reasons[0].kind, "streak");
 });
