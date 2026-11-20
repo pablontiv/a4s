@@ -10,19 +10,17 @@ import { slugify } from "../src/research.mjs";
 const F = join(dirname(fileURLToPath(import.meta.url)), "..");
 const doc = JSON.parse(readFileSync(join(F, "lines.json"), "utf8"));
 
-test("research profile: pi-research, read/shell/web/backscroll/opensrc, no write tools", () => {
-  const l = doc.lines.research;
-  assert.equal(l.provider, "pi-research");
-  assert.ok(l.model);
-  const t = l.instance.tools;
-  for (const w of ["write", "edit"]) assert.ok(!t.some((x) => x.replace(/^\*/, "") === w), w);
-  for (const need of ["read", "bash", "web_search", "web_fetch", "backscroll", "opensrc"]) assert.ok(t.some((x) => x.replace(/^\*/, "") === need), need);
-  assert.ok(!t.some((x) => /delegate|thread/.test(x)));
+test("research profile: pi-research, read/write/edit/shell/web/backscroll/opensrc", () => {
+  const lines = JSON.parse(readFileSync(new URL("../lines.json", import.meta.url), "utf8")).lines;
+  const r = lines.research;
+  assert.equal(r.provider, "pi-research");
+  const t = r.instance.tools.map((x) => x.replace(/^\*/, ""));
+  for (const w of ["read", "write", "edit", "bash", "web_search", "web_fetch", "backscroll", "opensrc"]) assert.ok(t.includes(w), w);
 });
 
-test("prompt forbids repo writes and early issue creation, never factory:ready", () => {
-  const p = readFileSync(join(F, "prompts", "research.md"), "utf8");
-  for (const s of ["context only", "never create, edit or label issues", "NEVER `factory:ready`", "## Notes", "checkIssue"]) assert.ok(p.includes(s) || p.toLowerCase().includes(s.toLowerCase()), s);
+test("prompt: everything except main, no live factory changes, own branch, handoff protocol, never factory:ready", () => {
+  const p = readFileSync(new URL("../prompts/research.md", import.meta.url), "utf8");
+  for (const s of ["except merging to main", "research/<slug>", "Never push to, merge into or commit on `main`", "Never change the live factory", "Never create, edit or label issues yourself", "NEVER `factory:ready`", "[research <slug>] <absolute artifact path>", "quote it verbatim", "checkIssue", "context only"]) assert.ok(p.includes(s), s);
 });
 
 test("slugify: readable, stable, collision-safe", () => {

@@ -58,6 +58,8 @@
         "prompt": "prompts/research.md",
         "tools": [
           "read",
+          "edit",
+          "write",
           "bash",
           "*web_search",
           "*web_fetch",
