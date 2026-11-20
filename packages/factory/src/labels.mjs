@@ -118,9 +118,24 @@ function failingAttempt(state, n, failed) {
   return qa;
 }
 
+/**
+ * The `qa` step failed inside the implementation repair (qafix) and the repair attempt produced no findings
+ * (infra / stuck / thread failed): an infrastructure failure, not a verdict on the work.
+ */
+export function isRepairInfra(state, n, failed) {
+  if (failed !== "qa") return false;
+  const qa = lastAttempt(state, n, "qa"), impl = lastAttempt(state, n, "impl");
+  // the repair is the failing station only when failingAttempt picked impl (explicit station check, not object identity)
+  if (!impl || impl.outcome === "pass" || (impl.startedAt ?? 0) < (qa?.startedAt ?? 0)) return false;
+  const a = impl;
+  if (a.findings?.length || a.question) return false;
+  return ["infra", "stuck", "fail"].includes(a.outcome);
+}
+
 /** Outcome of a failed run: that of the station that failed; any other failing step is a `fail`. */
 export function runOutcome(state, n, failed) {
   if (!["implement", "require_pass", "qa"].includes(failed)) return "fail";
+  if (isRepairInfra(state, n, failed)) return "infra";
   const o = failingAttempt(state, n, failed)?.outcome;
   if (failed === "require_pass") return o === "blocked" ? "blocked" : "fail";
   if (o === undefined || o === "pass") return "fail";
@@ -132,7 +147,8 @@ const findingsText = (state, n, failed, run) => {
     const f = readJson(join(state, String(n), "step-failure.json"), null);
     if (f && f.step === failed && f.run === run) return { question: "", findings: f.findings ?? [] };
   }
-  const last = failingAttempt(state, n, failed);
+  // a failed repair keeps the findings of the QA round that triggered it
+  const last = isRepairInfra(state, n, failed) ? lastAttempt(state, n, "qa") : failingAttempt(state, n, failed);
   return { question: last?.question ?? "", findings: last?.findings ?? [] };
 };
 
@@ -158,7 +174,11 @@ export function finishRun(src, { issue, state, run, steps }) {
   const failed = failedStep(parseSteps(steps)) ?? "unknown";
   const outcome = runOutcome(state, issue, failed);
   const at = readAttempts(state, issue);
-  const to = decideAfterFailure(outcome, at.streak);
+  const repairInfra = isRepairInfra(state, issue, failed);
+  // an infrastructure failure of the QA repair is not a normal run: refund it, so it never parks the issue
+  const to = repairInfra ? "ready" : decideAfterFailure(outcome, at.streak);
+  // refund once per run: a retried transition (GitHub outage, reconciliation) must not refund the same run again
+  if (repairInfra && at.refundedRun !== String(run)) writeJson(attemptsFile(state, issue), { ...at, streak: Math.max(0, at.streak - 1), refundedRun: String(run) });
   const { question, findings } = findingsText(state, issue, failed, run);
   if (to === "ready") {
     moveLabel(src, issue, "ready");
@@ -178,6 +198,12 @@ export function finishRun(src, { issue, state, run, steps }) {
   return { to, outcome, failed };
 }
 
+// ---- handler record: $STATE/<n>/handled.json = {run, event, at, ok}; reconciliation re-runs only runs without ok:true ----
+const handledFile = (state, n) => join(state, String(n), "handled.json");
+export const readHandled = (state, n) => readJson(handledFile(state, n), null);
+export const recordHandled = (state, n, run, event, ok) => writeJson(handledFile(state, n), { run, event, at: new Date().toISOString(), ok });
+export const isHandled = (state, n, run) => { const h = readHandled(state, n); return h?.run === run && h.ok === true; };
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const [cmd, ...rest] = process.argv.slice(2);
@@ -188,11 +214,15 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     if (cmd === "move") { moveLabel(src, a.issue, a.to, a.comment); if (a.state && a.to !== "ready") clearCarry(a.state, a.issue); console.log(`#${a.issue} -> ${a.to}`); }
     else if (cmd === "finish") {
       if (!a.state) throw new Error("--state is required");
-      const r = finishRun(src, { issue: a.issue, state: a.state, run: a.run, steps: a.steps });
+      let r;
+      try { r = finishRun(src, { issue: a.issue, state: a.state, run: a.run, steps: a.steps }); }
+      catch (e) { recordHandled(a.state, a.issue, a.run, "failure", false); throw e; }
+      recordHandled(a.state, a.issue, a.run, "failure", true);
       console.log(r.to ? `#${a.issue} -> ${r.to} (outcome ${r.outcome}, failed step ${r.failed})` : `#${a.issue} not ${LABEL.RUNNING}: untouched`);
     } else if (cmd === "success") {
-      if (src.labels(a.issue).includes(LABEL.RUNNING)) moveLabel(src, a.issue, "done");
-      if (a.state) clearCarry(a.state, a.issue);
+      try { if (src.labels(a.issue).includes(LABEL.RUNNING)) moveLabel(src, a.issue, "done"); }
+      catch (e) { if (a.state) recordHandled(a.state, a.issue, a.run, "success", false); throw e; }
+      if (a.state) { clearCarry(a.state, a.issue); recordHandled(a.state, a.issue, a.run, "success", true); }
       console.log(`#${a.issue} done`);
     } else throw new Error(`unknown command ${cmd}`);
   } catch (e) { console.error(`labels: ${e.message}`); process.exit(30); }

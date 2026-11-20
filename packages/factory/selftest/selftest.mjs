@@ -281,6 +281,19 @@ try {
   // seed after admission: admission archives a stale pass/blocked station state
   failRun(7102, 1, "implement=succeeded,require_pass=failed", () => seedStation(7102, "blocked", "which db?"));
   checks.blocked_needs_human = labelsOf(7102).includes("factory:needs-human") && /which db\?/.test(commentsOf(7102).at(-1) ?? "");
+  // 5c2. reconciliation: a finished failed `cycle` run whose failure handler was skipped (the fixture DAG has none) leaves its
+  // issue on factory:running; the next admission puts it back to ready (and records handled.json)
+  const fixDagDir = join(root, "fixdag"); mkdirSync(fixDagDir, { recursive: true });
+  writeFileSync(join(fixDagDir, "cycle.yaml"), "name: cycle\nparams:\n  - ISSUE: \"\"\nsteps:\n  - id: implement\n    run: exit 1\n");
+  const recIssues = JSON.parse(readFileSync(issuesFile, "utf8"));
+  recIssues.push({ number: 7301, labels: [{ name: "factory:running" }], body });
+  writeFileSync(issuesFile, JSON.stringify(recIssues));
+  seedStation(7301, "fail", "", ["SELFTEST-RECONCILE-FINDING"]);
+  daguAd("start", "--run-id", "factory-issue-7301-1", join(fixDagDir, "cycle.yaml"), "--", "ISSUE=7301");
+  checks.reconcile_fixture_still_running = labelsOf(7301).includes("factory:running");
+  const recAdm = daguAd("start", "--run-id", `admit-rec${Date.now()}`, admitDag, "--", `ISSUES_FILE=${issuesFile}`, `TARGET_DAGU_HOME=${adHome}`, `TARGET_DAGU_CONFIG=${adCfg}`);
+  const handled7301 = (() => { try { return JSON.parse(readFileSync(join(stateAd, "7301", "handled.json"), "utf8")); } catch { return {}; } })();
+  checks.reconcile_skipped_handler_by_next_admission = recAdm.status === 0 && labelsOf(7301).includes("factory:ready") && handled7301.run === "factory-issue-7301-1" && handled7301.ok === true;
   // 5d. circuit breaker: a fixture state with an open breaker makes the next admission enqueue nothing; after `reset` it admits again
   const iss = JSON.parse(readFileSync(issuesFile, "utf8"));
   iss.push({ number: 7201, labels: [{ name: "factory:ready" }], body });

@@ -50,6 +50,17 @@ steps:
     run: |
       set -uo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh" || exit 30
+      # reconcile first: a finished run whose success/failure handler could not reach GitHub/T3 leaves its issue
+      # on factory:running; apply the transition the handler should have (src/reconcile.mjs; failures are not fatal)
+      rorigin=$(git -C "$PRIMARY" remote get-url origin 2>/dev/null || true)
+      if [ -n "$ISSUES_FILE" ]; then rwhere=(--issues-file "$ISSUES_FILE")
+      elif [ -n "$rorigin" ]; then rwhere=(--repo "$rorigin")
+      else rwhere=(); fi
+      if [ "${#rwhere[@]}" != 0 ]; then
+        node "$FACTORY/src/reconcile.mjs" --state "$STATE" "${rwhere[@]}" \
+          ${TARGET_DAGU_HOME:+--dagu-home "$TARGET_DAGU_HOME"} ${TARGET_DAGU_CONFIG:+--dagu-config "$TARGET_DAGU_CONFIG"} \
+          || echo "admit: reconcile failed (ignored)" >&2
+      fi
       # circuit breaker: while open nothing is admitted; opening notifies the inbox once
       rc=0
       node "$FACTORY/src/breaker.mjs" check --state "$STATE" --primary "$PRIMARY" --t3-home "$T3_HOME" \

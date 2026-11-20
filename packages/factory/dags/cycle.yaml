@@ -373,7 +373,7 @@ handler_on:
         if [ -n "$ISSUES_FILE" ]; then where=(--issues-file "$ISSUES_FILE")
         elif [ -n "$origin" ]; then where=(--repo "$origin")
         else exit 0; fi
-        node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" --state "$STATE" "${where[@]}"
+        node "$FACTORY/src/labels.mjs" success --issue "$ISSUE" --state "$STATE" --run "$DAG_RUN_ID" "${where[@]}"
       ) || echo "label update failed (ignored)" >&2
       # run history for the circuit breaker (src/breaker.mjs)
       (
