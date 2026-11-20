@@ -1,6 +1,7 @@
 {
   "version": 1,
   "maxActiveRuns": 3,
-  "stallSec": 3600,
+  "stallSec": 1200,
+  "toolStallSec": 3600,
   "maxSec": 14400
 }

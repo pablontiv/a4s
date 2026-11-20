@@ -1,5 +1,6 @@
 // Pure helpers shared by the station wrapper, the T3 CLI shim and the selftest.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -138,6 +139,8 @@ export function retryExitCodes() {
 export const STALL_SEC = 1200;
 /** Safety cap of one producing attempt (outcome `timeout`); override: `MAX_SEC` env or limits.json `maxSec`. */
 export const MAX_SEC = 14400;
+/** A tool call in flight longer than this is logged as a warning (never a kill); override: `TOOL_STALL_SEC` env or limits.json `toolStallSec`. */
+export const TOOL_STALL_SEC = 3600;
 /** Default cap an attempt is judged by when it did not record its own (breaker). */
 export const STATION_TIMEOUT_SEC = MAX_SEC;
 
@@ -149,7 +152,7 @@ export function loadLimits(file, env = process.env) {
   let j = {};
   try { j = JSON.parse(readFileSync(file, "utf8")) ?? {}; } catch { /* absent: defaults */ }
   const pick = (...c) => c.map(Number).find((n) => Number.isFinite(n) && n > 0);
-  return { stallSec: pick(env.STALL_SEC, j.stallSec) ?? STALL_SEC, maxSec: pick(env.MAX_SEC, j.maxSec) ?? MAX_SEC };
+  return { stallSec: pick(env.STALL_SEC, j.stallSec) ?? STALL_SEC, maxSec: pick(env.MAX_SEC, j.maxSec) ?? MAX_SEC, toolStallSec: pick(env.TOOL_STALL_SEC, j.toolStallSec) ?? TOOL_STALL_SEC };
 }
 
 /**
@@ -159,6 +162,43 @@ export function loadLimits(file, env = process.env) {
 export function activitySig(snap) {
   const t = snap?.thread ?? {};
   return createHash("sha1").update(JSON.stringify({ items: t.itemCount ?? null, runs: t.runCount ?? null, messages: snap?.messages ?? [] })).digest("hex");
+}
+
+/**
+ * Is a tool call in flight (started, no result yet)? Reads the turn items of a `t3 thread show --json` snapshot
+ * (`turnItems` | `items`, top level or under `thread`). Any unfinished tool item counts (parallel calls).
+ * Returns false, or `{ count, startedAt }` (startedAt: ms epoch of the oldest unfinished call, or null).
+ */
+export function snapItems(snap) {
+  return [snap?.turnItems, snap?.items, snap?.thread?.turnItems, snap?.thread?.items].find(Array.isArray);
+}
+export function toolInFlight(snap) {
+  const items = snapItems(snap) ?? [];
+  const open = items.filter((it) => {
+    if (!it || typeof it !== "object") return false;
+    const ty = String(it.type ?? it.kind ?? it.role ?? "");
+    if (!ty || /message|reasoning|thinking|plan/i.test(ty)) return false; // only work items (command_execution, tool calls, file changes...) can be in flight
+    const st = String(it.status ?? "").toLowerCase();
+    // an explicit status decides; partial output of a streaming tool is not completion
+    if (!st && (it.completedAt || it.finishedAt || it.endedAt || it.result !== undefined || it.output !== undefined)) return false;
+    return !/^(completed|complete|done|finished|success|succeeded|failed|error|errored|cancelled|canceled|declined)$/.test(st);
+  });
+  if (!open.length) return false;
+  const ts = open.map((it) => Date.parse(it.startedAt ?? it.createdAt ?? it.at ?? "")).filter(Number.isFinite);
+  return { count: open.length, startedAt: ts.length ? Math.min(...ts) : null };
+}
+
+/**
+ * Turn items (`type`, `status`) of a thread read straight from the T3 state DB under `<t3Home>/userdata/statev2.sqlite`
+ * (read-only): `t3 thread show --json` exposes only `itemCount`/`runCount`. [] when unreadable.
+ */
+export function readTurnItems(t3Home, threadId) {
+  try {
+    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
+    const db = new DatabaseSync(join(t3Home, "userdata", "statev2.sqlite"), { readOnly: true });
+    try { return db.prepare("select type, status from orchestration_v2_projection_turn_items where thread_id = ? and status not in ('completed','failed','cancelled','canceled','declined')").all(threadId).map((r) => ({ type: r.type, status: r.status })); }
+    finally { db.close(); }
+  } catch { return []; }
 }
 
 /** Validate a station state file; an attempt without outcome is in flight, an unknown outcome is an error. */

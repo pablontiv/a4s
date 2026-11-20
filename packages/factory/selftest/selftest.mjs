@@ -106,7 +106,7 @@ try {
   writeFileSync(linesViolPath, JSON.stringify(linesViol));
   // fixture LINE_TABLE for the liveness check: `impl` runs on an isolated instance whose stub goes silent (one long tool call)
   const silentPrompt = join(root, "silent-stub.md");
-  writeFileSync(silentPrompt, "You are a selftest stub. Whatever the user message says, run exactly one bash command: `sleep 600`, and nothing else. Do not write any text before it.\n");
+  writeFileSync(silentPrompt, "You are a selftest stub. Whatever the user message says, run exactly one bash command: `sleep 50`, and nothing else. Do not write any text before it. When it returns, reply with exactly this single line and nothing else:\n" + JSON.stringify({ verdict: "fail", criteria: [], findings: ["selftest long tool call"], commit: null, question: null }) + "\n");
   const linesSilentPath = join(root, "lines-silent-stub.json");
   const linesSilent = JSON.parse(JSON.stringify(lines));
   linesSilent.lines.impl.provider = "pi-impl-silent-stub";
@@ -380,13 +380,13 @@ try {
   const ordFree = nextCli([]), ordBusy = nextCli([9001]);
   checks.ordering_picks_unblocked = ordFree.status === 0 && /choice #8002$/m.test(ordFree.stdout) && !/choice.*#8001/.test(ordFree.stdout);
   checks.ordering_nothing_while_run_in_flight = ordBusy.status === 0 && /choice \(none\)$/m.test(ordBusy.stdout);
-  // liveness: a stub that stays silent ends `stuck` within a short configured STALL_SEC (no deadline otherwise)
+  // liveness: a stub that runs `sleep` longer than the short configured STALL_SEC inside ONE tool call is not cut and ends with its verdict
   const stuckState = join(root, "state-stuck");
   const t0Stuck = Date.now();
   const stuckRun = spawnSync("node", [join(FACTORY, "src", "station.mjs"), "--line", "impl", "--issue", "7401", "--run", "selftest-stuck", "--project", repo,
     "--brief-text", "Do the task.", "--t3-home", t3Home, "--state", stuckState, "--lines", linesSilentPath, "--stall-sec", "20", "--max-sec", "300", "--stable-sec", "5"], { encoding: "utf8", env: { ...process.env, DAGU_OUTPUT_FILE: "" }, timeout: 240_000 });
-  checks.silent_stub_ends_stuck = stuckRun.status === 10 && /^result=stuck$/m.test(stuckRun.stdout) && Date.now() - t0Stuck < 200_000;
-  if (!checks.silent_stub_ends_stuck) log("stuck check:", stuckRun.status, stuckRun.stdout, (stuckRun.stderr ?? "").slice(-500));
+  checks.long_tool_call_not_cut_ends_with_verdict = /^result=fail$/m.test(stuckRun.stdout) && !/^result=stuck$/m.test(stuckRun.stdout) && Date.now() - t0Stuck < 230_000;
+  if (!checks.long_tool_call_not_cut_ends_with_verdict) log("stuck check:", stuckRun.status, stuckRun.stdout, (stuckRun.stderr ?? "").slice(-500));
   log(JSON.stringify(checks));
   ok = Object.values(checks).every(Boolean);
 } catch (e) {

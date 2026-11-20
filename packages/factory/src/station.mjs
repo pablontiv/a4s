@@ -9,13 +9,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { collectSnapshot, compareSnapshots, gitIsFastForward } from "./shared-git.mjs";
-import { loadLimits, activitySig, EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
+import { loadLimits, activitySig, toolInFlight, snapItems, readTurnItems, EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
 
 const { values: a } = parseArgs({ options: {
   line: { type: "string" }, issue: { type: "string" }, run: { type: "string", default: "local" },
   project: { type: "string" }, brief: { type: "string" }, "brief-text": { type: "string" },
   "t3-home": { type: "string" }, state: { type: "string" }, lines: { type: "string" },
-  "stall-sec": { type: "string" }, "max-sec": { type: "string" }, limits: { type: "string" }, "poll-sec": { type: "string", default: "3" },
+  "stall-sec": { type: "string" }, "tool-stall-sec": { type: "string" }, "max-sec": { type: "string" }, limits: { type: "string" }, "poll-sec": { type: "string", default: "3" },
   "budget-sec": { type: "string" },
   continue: { type: "string" }, answer: { type: "string" }, cancel: { type: "string", default: "kill" },
   "reattach-sec": { type: "string", default: "300" }, "stable-sec": { type: "string", default: "12" },
@@ -75,6 +75,7 @@ const finish = (attempt, outcome) => {
 const lim = loadLimits(a.limits || join(dirname(fileURLToPath(import.meta.url)), "..", "limits.json"));
 const stallSec = Number(a["stall-sec"]) > 0 ? Number(a["stall-sec"]) : lim.stallSec;
 const maxSec = Number(a["max-sec"]) > 0 ? Number(a["max-sec"]) : lim.maxSec;
+const toolStallSec = Number(a["tool-stall-sec"]) > 0 ? Number(a["tool-stall-sec"]) : lim.toolStallSec;
 const timeoutSec = maxSec; // recorded on the attempt: what the breaker judges an in-flight attempt by
 const pollMs = Math.max(50, Number(a["poll-sec"]) * 1000);
 const tryJSON = (text) => { try { return JSON.parse(text); } catch { return undefined; } };
@@ -157,7 +158,7 @@ process.on("SIGTERM", () => {
 });
 
 const stableMs = Number(a["stable-sec"]) * 1000;
-let downSince = null, stable = null, snap;
+let downSince = null, stable = null, snap, toolSince = null, toolWarned = false;
 /** Poll until the thread settles (idle for stable-sec); stuck/timeout/infra exit from here. */
 async function waitSettled() {
 stable = null;
@@ -181,6 +182,14 @@ while (!stopping) {
   const sig = activitySig(snap);
   if (sig !== cur.activitySig) { cur.activitySig = sig; cur.lastActivityAt = Date.now(); save(); }
   const phase = threadPhase(snap.thread);
+  // a tool call in flight is activity (a long test or sleep is not stuck); the cap still applies, and a hung tool is warned about
+  const tool = phase === "busy" ? toolInFlight(snapItems(snap) ? snap : { turnItems: readTurnItems(T3_HOME, threadId) }) : false;
+  if (tool) {
+    cur.lastActivityAt = Date.now();
+    toolSince ??= tool.startedAt ?? Date.now();
+    if (!toolWarned && Date.now() - toolSince > toolStallSec * 1000) { toolWarned = true; log(`WARNING: tool call running for over ${toolStallSec}s (${tool.count} in flight)`); }
+    save();
+  } else { toolSince = null; toolWarned = false; }
   if (phase === "busy") {
     stable = null;
     // only a thread that is still working can be stuck or capped: an idle one is classified below

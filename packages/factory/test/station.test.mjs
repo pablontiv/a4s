@@ -396,3 +396,66 @@ test("a corrupt shared config before the call is infra: the worker is never laun
   assert.doesNotMatch(r.stdout, /^result=pass$/m);
   assert.equal(calls(f).filter((c) => c[1] === "start").length, 0);
 });
+
+// ---- an in-flight tool call is activity ----
+const tool = (status, extra = {}) => ({ type: "tool_call", id: "c1", status, ...extra });
+const withItems = (items) => { const s = JSON.parse(busy); s.turnItems = items; return JSON.stringify(s); };
+
+test("a tool call in flight for longer than STALL_SEC is not stuck; only the cap ends it", async (t) => {
+  const f = fixture({ show: withItems([tool("completed", { id: "c0" }), tool("running"), tool("completed", { id: "c2" })]) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const t0 = Date.now();
+  const r = await run(f, ["--stall-sec", "1", "--max-sec", "3"]);
+  assert.ok(Date.now() - t0 > 2500);
+  assert.match(r.stdout, /^result=timeout$/m, r.stderr);
+});
+
+test("a finished tool call followed by silence for STALL_SEC is stuck", async (t) => {
+  const f = fixture({ show: withItems([tool("completed", { result: "ok" })]) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "1", "--max-sec", "100"]);
+  assert.match(r.stdout, /^result=stuck$/m, r.stderr);
+});
+
+test("a tool call beyond toolStallSec is warned about in the log, not killed", async (t) => {
+  const f = fixture({ show: withItems([tool("completed", { id: "c0" }), tool("in_progress")]) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "1", "--tool-stall-sec", "1", "--max-sec", "3"]);
+  assert.match(r.stdout + r.stderr, /WARNING: tool call running for over 1s/);
+  assert.match(r.stdout, /^result=timeout$/m);
+});
+
+test("toolInFlight: parallel calls, any unfinished counts; metadata only is not a tool", async () => {
+  const { toolInFlight, loadLimits } = await import("../src/lib.mjs");
+  assert.ok(toolInFlight(JSON.parse(withItems([tool("running"), tool("running", { id: "c2" })]))).count === 2);
+  assert.equal(toolInFlight(JSON.parse(busy)), false);
+  assert.equal(loadLimits("/nonexistent", {}).toolStallSec, 3600);
+  assert.equal(loadLimits(join(dirname(STATION), "..", "limits.json"), {}).stallSec, 1200);
+});
+
+test("readTurnItems reads unfinished items from the T3 state DB", async (t) => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const { readTurnItems, toolInFlight } = await import("../src/lib.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "db-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  mkdirSync(join(dir, "userdata"));
+  const db = new DatabaseSync(join(dir, "userdata", "statev2.sqlite"));
+  db.exec("create table orchestration_v2_projection_turn_items (thread_id text, type text, status text)");
+  db.exec("insert into orchestration_v2_projection_turn_items values ('T','user_message','completed'),('T','command_execution','running'),('T','command_execution','completed'),('U','command_execution','running')");
+  db.close();
+  const items = readTurnItems(dir, "T");
+  assert.equal(toolInFlight({ turnItems: items }).count, 1);
+  assert.deepEqual(readTurnItems(dir, "none"), []);
+  assert.deepEqual(readTurnItems("/nonexistent", "T"), []);
+});
+
+test("items under thread.turnItems count as in flight; a running tool with partial output still counts", async (t) => {
+  const { toolInFlight } = await import("../src/lib.mjs");
+  assert.equal(toolInFlight({ thread: { turnItems: [tool("running", { output: "partial" })] } }).count, 1);
+  assert.equal(toolInFlight({ items: [tool("completed", { output: "x" })] }), false);
+  const s = JSON.parse(busy); s.thread.turnItems = [tool("running", { output: "partial" })];
+  const f = fixture({ show: JSON.stringify(s) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f, ["--stall-sec", "1", "--max-sec", "3"]);
+  assert.match(r.stdout, /^result=timeout$/m, r.stderr);
+});
