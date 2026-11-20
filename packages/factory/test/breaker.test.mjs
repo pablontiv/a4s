@@ -674,3 +674,65 @@ test("limits archive: persisted reasons without an issue field end once the issu
   const r = evaluate(lim, persisted, LIM_NOW);
   assert.deepEqual(r.reasons.map((x) => x.detail), ["issue #6: 9 runs (limit 3) in attempts.json"]);
 });
+
+// ---- streak: which failures count (known-flakes, classes, dedupe)
+import { classifyRun, fingerprint, knownFlakesError, loadKnownFlakes, KNOWN_FLAKES_FILE, runDetails } from "../src/breaker.mjs";
+const fr = (issue, min, extra = {}) => ({ ...mk(issue, "fail", min), ...extra });
+const flk = { knownFlakes: { entries: [{ kind: "test", match: "killed lease", issue: 9 }], error: null } };
+const sk = (runs, extra = {}) => evaluate({ services: { dagu: up, t3: up }, runs, ...extra }, closed, NOW);
+test("streak counts: QA rejections of two issues stay closed", () => {
+  assert.equal(sk([fr(1, 20, { failedStep: "qa", outcomeClass: "fail", fingerprint: "a" }), fr(2, 5, { failedStep: "qa", outcomeClass: "fail", fingerprint: "b" })]).open, false);
+  assert.equal(sk([fr(1, 20, { failedStep: "implement", outcomeClass: "fail" }), fr(2, 5, { failedStep: "qa", outcomeClass: "fail" })]).open, false);
+});
+test("streak counts: validate + ci of two issues open, naming the class", () => {
+  const r = sk([fr(1, 20, { failedStep: "validate", outcomeClass: "fail", fingerprint: "a" }), fr(2, 5, { failedStep: "ci", outcomeClass: "fail", fingerprint: "b" })]);
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /class post-qa.*class post-qa/);
+});
+test("streak counts: flaky + validate stays closed", () => {
+  const r = sk([fr(1, 20, { failedStep: "validate", outcomeClass: "fail", evidence: ["the killed lease test failed"] }), fr(2, 5, { failedStep: "validate", outcomeClass: "fail", fingerprint: "b" })], flk);
+  assert.equal(r.open, false);
+});
+test("streak counts: infra + infra open; an ignored run between does not break", () => {
+  const r = sk([fr(1, 30, { failedStep: "qa", outcomeClass: "infra" }), fr(3, 20, { failedStep: "qa", outcomeClass: "fail" }), fr(2, 5, { failedStep: "implement", outcomeClass: "timeout" })]);
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /class infra.*class timeout/);
+});
+test("streak counts: same cause twice counts once", () => {
+  const same = { failedStep: "validate", outcomeClass: "fail", fingerprint: fingerprint("tsc error TS2304 in /tmp/x/a.ts line 12") };
+  assert.equal(sk([fr(1, 20, same), fr(2, 5, { ...same, fingerprint: fingerprint("tsc error TS2304 in /tmp/y/a.ts line 99") })]).open, false);
+});
+test("streak counts: unknown failed step counts", () => {
+  assert.equal(sk([fr(1, 20), fr(2, 5)]).open, true);
+  assert.equal(classifyRun(fr(1, 5)).class, "unknown");
+});
+test("streak counts: ordinary prepare failures of two issues do not open", () => {
+  assert.equal(sk([fr(1, 20, { failedStep: "prepare", outcomeClass: "fail" }), fr(2, 5, { failedStep: "prepare", outcomeClass: "fail" })]).open, false);
+  assert.equal(classifyRun(fr(1, 5, { failedStep: "prepare", outcomeClass: "fail" })).counts, false);
+});
+test("known flakes: missing or malformed fails closed; committed file is valid", () => {
+  assert.ok(loadKnownFlakes("/nonexistent/known-flakes.json").error);
+  assert.deepEqual(loadKnownFlakes("/nonexistent/known-flakes.json").entries, []);
+  assert.equal(knownFlakesError(JSON.parse(readFileSync(KNOWN_FLAKES_FILE, "utf8"))), null);
+  assert.ok(knownFlakesError({ version: 1, flakes: [{ kind: "test", match: "x" }] })); // no tracking issue
+  assert.ok(knownFlakesError({ version: 1, flakes: [{ kind: "test", match: "x", issue: 0 }] }));
+  assert.ok(knownFlakesError({ version: 2, flakes: [] }));
+  assert.equal(knownFlakesError({ version: 1, flakes: [{ kind: "selftest", match: "x", issue: 5 }] }), null);
+});
+test("runDetails: pass has none; a failed validate carries its findings", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bk-"));
+  assert.deepEqual(runDetails(dir, 5, "a=succeeded", "r1"), {});
+  mkdirSync(join(dir, "5"));
+  writeFileSync(join(dir, "5", "step-failure.json"), JSON.stringify({ run: "r1", step: "validate", findings: ["Test X failed at 12:00"] }));
+  const d = runDetails(dir, 5, "implement=succeeded,validate=failed", "r1");
+  assert.equal(d.failedStep, "validate");
+  assert.equal(d.outcomeClass, "fail");
+  assert.equal(d.evidence[0], "Test X failed at 12:00");
+  assert.ok(d.fingerprint);
+});
+test("known flakes gate: every committed entry tracks an open issue (flakes-check)", () => {
+  const { entries } = loadKnownFlakes();
+  if (entries.length === 0) return; // nothing to verify
+  const r = spawnSync("node", [join(import.meta.dirname, "..", "src", "breaker.mjs"), "flakes-check", "--state", tmpdir()], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+});

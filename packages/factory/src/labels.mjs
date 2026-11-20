@@ -142,7 +142,7 @@ export function runOutcome(state, n, failed) {
   return o;
 }
 
-const findingsText = (state, n, failed, run) => {
+export const findingsText = (state, n, failed, run) => {
   if (failed === "integrate" || failed === "validate" || failed === "ci") {
     const f = readJson(join(state, String(n), "step-failure.json"), null);
     if (f && f.step === failed && f.run === run) return { question: "", findings: f.findings ?? [] };

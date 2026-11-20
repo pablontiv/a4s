@@ -3,6 +3,7 @@
 //   breaker.mjs check [--state S] [--snapshot F] [--primary P] [--t3-home H] [--factory F] [--inbox T] [--cycle cycle.yaml]
 //       evaluates, updates $STATE/breaker.json, notifies once when it opens. Exit 0 closed, 40 open.
 //   breaker.mjs record --issue N --run ID [--steps "a=succeeded,b=failed"] [--state S]   append a finished run to $STATE/runs.jsonl
+//   breaker.mjs flakes-check [--flakes F] [--repo R]   every known-flakes.json entry must track an open issue (gh)
 //   breaker.mjs reset [--state S] [--by NAME]   the operator closes it explicitly (records who/when).
 // --state defaults to $STATE, then $A4S_STATE. --snapshot F: a JSON snapshot instead of live data (fixtures).
 // Rules: CONTRACTS.md, "Circuit breaker contract". `evaluate` is pure.
@@ -14,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { STATION_TIMEOUT_SEC, resolveT3, validateState } from "./lib.mjs";
 import { waitedWithin } from "./lease.mjs";
-import { runOutcome } from "./labels.mjs";
+import { findingsText, runOutcome } from "./labels.mjs";
 import { failedStep, parseSteps } from "./notify.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -129,23 +130,103 @@ export const CONDITIONS = {
       return [{ kind: "selftest-red", detail: "the scheduled selftest of main failed in two consecutive runs", since: iso(b.date) }];
     },
   },
-  // Two different issues failed in a row: the last two FINISHED runs (by finish time) both failed and belong to different issues.
-  // A success, a blocked/needs-human or cancelled outcome, or a re-attempt of the same issue breaks it; runs in progress are ignored.
+  // Two different issues failed in a row, counting only failures that point to a shared cause (see classifyRun):
+  // runs that failed after QA, or with infra/stuck/timeout, or with an unknown failed step. QA/implementation rejections
+  // (`fail` in implement/qa) and known flakes (known-flakes.json) are ignored: they neither break nor extend a streak.
+  // Two counted failures with the same failed step and fingerprint count once. A success, a blocked/needs-human or
+  // cancelled outcome breaks it; runs in progress are ignored.
   // No `clears`: only `reset` closes it; runs finished at or before resetAt no longer count.
   streak: {
     detect(snapshot, state, now) {
       const after = ms(state?.resetAt) ?? -Infinity;
-      const done = (Array.isArray(snapshot?.runs) ? snapshot.runs : [])
+      const flakes = snapshot?.knownFlakes?.entries ?? [];
+      const seq = [];
+      for (const { r, t } of (Array.isArray(snapshot?.runs) ? snapshot.runs : [])
         .map((r) => ({ r, t: ms(r?.finishedAt) }))
         .filter(({ r, t }) => t !== null && t > after && ["pass", "fail", "blocked", "cancelled"].includes(r?.outcome))
-        .sort((a, b) => a.t - b.t);
-      if (done.length < 2) return [];
-      const [a, b] = done.slice(-2);
+        .sort((a, b) => a.t - b.t)) {
+        if (r.outcome !== "fail") { seq.push({ r, t }); continue; }
+        const cls = classifyRun(r, flakes);
+        if (!cls.counts) continue; // ignored: neither breaks nor extends
+        const prev = seq.at(-1);
+        if (prev && prev.r.outcome === "fail" && prev.key !== undefined && prev.key === cls.key) continue; // same cause: counts once
+        seq.push({ r, t, cls, key: cls.key });
+      }
+      if (seq.length < 2) return [];
+      const [a, b] = seq.slice(-2);
       if (a.r.outcome !== "fail" || b.r.outcome !== "fail" || String(a.r.issue) === String(b.r.issue)) return [];
-      return [{ kind: "streak", detail: `two different issues failed in a row: run ${a.r.run} (#${a.r.issue}, finished ${iso(a.t)}) and run ${b.r.run} (#${b.r.issue}, finished ${iso(b.t)})`, since: iso(b.t) }];
+      const d = (x) => `run ${x.r.run} (#${x.r.issue}, class ${x.cls.class}, finished ${iso(x.t)})`;
+      return [{ kind: "streak", detail: `two different issues failed in a row: ${d(a)} and ${d(b)}`, since: iso(b.t) }];
     },
   },
 };
+
+export const POST_QA_STEPS = Object.freeze(["validate", "integration_lease", "integrate", "ci", "close", "verify_close"]);
+const PRE_QA_STEPS = ["implement", "qa", "require_pass"];
+
+/** Normalised fingerprint of a finding: lowercase, volatile tokens (hex ids, numbers, timestamps, paths) removed. */
+export function fingerprint(finding) {
+  const t = String(typeof finding === "string" ? finding : JSON.stringify(finding) ?? "")
+    .toLowerCase()
+    .replace(/\d{4}-\d{2}-\d{2}t[\d:.]+z?/g, " ")
+    .replace(/(?:\/[\w.@-]+){2,}/g, " ")
+    .replace(/\b[0-9a-f]{7,64}\b/g, " ")
+    .replace(/\d+/g, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return t.slice(0, 160);
+}
+
+/** The known flake an evidence list matches, or null. Entries: {kind: "test"|"selftest", match, issue}. */
+export function matchFlake(evidence, entries) {
+  const text = (Array.isArray(evidence) ? evidence : []).map(String).join("\n").toLowerCase();
+  return (Array.isArray(entries) ? entries : []).find((e) => typeof e?.match === "string" && e.match !== "" && text.includes(e.match.toLowerCase())) ?? null;
+}
+
+/**
+ * Class of a failed run for the streak: {class, counts, key}.
+ *   flaky (known-flakes.json)                  ignored
+ *   infra | stuck | timeout outcome            counts, class = the outcome
+ *   failed step after QA                       counts, class `post-qa`
+ *   no failed step recorded                    counts, class `unknown` (conservative)
+ *   implement/qa/require_pass with `fail`      ignored, class `qa-rejection`
+ *   any other pre-QA outcome (malformed, ...)  ignored, class `qa-rejection`
+ *   other known steps (prepare, ...)           ignored, class `non-post-qa`
+ * `key` = failed step + first finding fingerprint (two counted runs with the same key count once).
+ */
+export function classifyRun(run, flakes = []) {
+  const step = typeof run?.failedStep === "string" && run.failedStep !== "" && run.failedStep !== "unknown" ? run.failedStep : null;
+  const fp = typeof run?.fingerprint === "string" && run.fingerprint !== "" ? run.fingerprint : null;
+  const key = fp === null ? undefined : `${step ?? "?"}|${fp}`;
+  if (matchFlake(run?.evidence, flakes)) return { class: "flaky", counts: false, key };
+  const oc = run?.outcomeClass;
+  if (["infra", "stuck", "timeout"].includes(oc)) return { class: oc, counts: true, key };
+  if (step === null) return { class: "unknown", counts: true, key };
+  if (POST_QA_STEPS.includes(step)) return { class: "post-qa", counts: true, key };
+  if (PRE_QA_STEPS.includes(step)) return { class: "qa-rejection", counts: false, key };
+  return { class: "non-post-qa", counts: false, key };
+}
+
+/** Validates the parsed known-flakes.json; returns an error text or null. Every entry names the issue that tracks it. */
+export function knownFlakesError(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v) || v.version !== 1 || !Array.isArray(v.flakes)) return "expected {version: 1, flakes: []}";
+  for (const [i, e] of v.flakes.entries()) {
+    if (!e || typeof e !== "object") return `entry ${i} is not an object`;
+    if (!["test", "selftest"].includes(e.kind)) return `entry ${i}: kind must be test or selftest`;
+    if (typeof e.match !== "string" || e.match.trim() === "") return `entry ${i}: match is required`;
+    if (!Number.isInteger(e.issue) || e.issue <= 0) return `entry ${i}: a tracking issue number is required`;
+  }
+  return null;
+}
+
+export const KNOWN_FLAKES_FILE = join(HERE, "..", "known-flakes.json");
+
+/** {entries, error}: a missing or malformed file fails closed (no entries) and reports the error. */
+export function loadKnownFlakes(file = KNOWN_FLAKES_FILE) {
+  let v;
+  try { v = JSON.parse(readFileSync(file, "utf8")); } catch (e) { return { entries: [], error: `${file}: ${e.code ?? e.message}` }; }
+  const err = knownFlakesError(v);
+  return err ? { entries: [], error: `${file}: ${err}` } : { entries: v.flakes, error: null };
+}
 
 /** A later attempt of the same issue and step passed: its earlier stuck/timeout no longer counts. */
 const stepRecovered = (steps, issue, step, at) => steps.some((n) => n?.issue === issue && n?.step === step && n.outcome === "pass" && (ms(n.startedAt) ?? -Infinity) > at);
@@ -290,11 +371,22 @@ export function runResult(state, issue, steps) {
   return o === "blocked" || o === "cancelled" ? o : "fail";
 }
 
+/** Failure facts of a finished run for the streak: {failedStep, outcomeClass, evidence, fingerprint} ({} for a pass). */
+export function runDetails(state, issue, steps, run) {
+  const failed = failedStep(parseSteps(steps));
+  if (!failed) return {};
+  const outcomeClass = runOutcome(state, issue, failed);
+  let findings = [];
+  try { const f = findingsText(state, issue, failed, run); findings = [...(f.findings ?? []), ...(f.question ? [f.question] : [])]; } catch { /* no evidence */ }
+  const evidence = findings.map((f) => (typeof f === "string" ? f : JSON.stringify(f))).slice(0, 20).map((f) => f.slice(0, 500));
+  return { failedStep: failed, outcomeClass, evidence, fingerprint: evidence.length ? fingerprint(evidence[0]) : "" };
+}
+
 /** Appends a finished run to $STATE/runs.jsonl; idempotent per run id. */
-export function recordRun(state, { issue, run, outcome, finishedAt = new Date().toISOString() }) {
+export function recordRun(state, { issue, run, outcome, finishedAt = new Date().toISOString(), ...details }) {
   mkdirSync(state, { recursive: true });
   if (collectRuns(state).some((r) => r.run === run)) return false;
-  appendFileSync(runsFile(state), `${JSON.stringify({ issue: String(issue), run, outcome, finishedAt })}\n`);
+  appendFileSync(runsFile(state), `${JSON.stringify({ issue: String(issue), run, outcome, finishedAt, ...details })}\n`);
   return true;
 }
 
@@ -489,9 +581,13 @@ export async function check(o, env = process.env) {
   if (!o.snapshot) raw.ci = collectCi({ ...liveSources(o.primary || process.cwd()), env });
   if (!raw.limits) raw.limits = collectLimits({ state: o.state, cycleFile: o.cycle, now });
   if (!raw.runs) raw.runs = collectRuns(o.state);
+  if (!raw.knownFlakes) {
+    raw.knownFlakes = loadKnownFlakes(o.flakes);
+    if (raw.knownFlakes.error) console.error(`breaker: known flakes ignored (fail closed): ${raw.knownFlakes.error}`);
+  }
   raw.limits = { ...raw.limits, problems: [...(raw.limits?.problems ?? []), ...trackingProblems(o.state, now)] };
   if (!raw.selftest) raw.selftest = { runs: readSelftestRuns(o.state) };
-  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits, runs: raw.runs, selftest: raw.selftest };
+  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits, runs: raw.runs, selftest: raw.selftest, knownFlakes: raw.knownFlakes };
   const { open, reasons } = evaluate(snap, prev, now);
   const wasOpen = prev.invalid ? false : prev.open;
   const keep = prev.invalid ? { resetBy: null, resetAt: null } : prev;
@@ -514,12 +610,12 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     const [cmd, ...rest] = process.argv.slice(2);
     const { values: a } = parseArgs({ args: rest, options: {
       state: { type: "string" }, snapshot: { type: "string" }, primary: { type: "string" }, "t3-home": { type: "string" },
-      factory: { type: "string" }, issue: { type: "string" }, run: { type: "string" }, steps: { type: "string", default: "" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" }, cycle: { type: "string" },
+      factory: { type: "string" }, issue: { type: "string" }, run: { type: "string" }, steps: { type: "string", default: "" }, "dagu-home": { type: "string" }, "dagu-config": { type: "string" }, inbox: { type: "string" }, by: { type: "string" }, cycle: { type: "string" }, flakes: { type: "string" }, repo: { type: "string" },
     } });
     const state = a.state || process.env.STATE || process.env.A4S_STATE;
     if (!state) throw new Error("--state (or $STATE / $A4S_STATE) is required");
     if (cmd === "check") {
-      const b = await check({ state, snapshot: a.snapshot, primary: a.primary, t3Home: a["t3-home"], factory: a.factory, inbox: a.inbox, daguHome: a["dagu-home"], daguConfig: a["dagu-config"], cycle: a.cycle });
+      const b = await check({ state, snapshot: a.snapshot, primary: a.primary, t3Home: a["t3-home"], factory: a.factory, inbox: a.inbox, flakes: a.flakes, daguHome: a["dagu-home"], daguConfig: a["dagu-config"], cycle: a.cycle });
       if (b.open) {
         console.log(`breaker OPEN since ${b.since}: nothing is admitted`);
         for (const r of b.reasons) console.log(`- ${r.kind}: ${r.detail} (since ${r.since})`);
@@ -529,7 +625,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     } else if (cmd === "record") {
       if (!a.issue || !a.run) throw new Error("--issue and --run are required");
       const outcome = runResult(state, a.issue, a.steps);
-      console.log(`${recordRun(state, { issue: a.issue, run: a.run, outcome }) ? "recorded" : "already recorded"} ${a.run}: ${outcome}`);
+      console.log(`${recordRun(state, { issue: a.issue, run: a.run, outcome, ...(outcome === "fail" ? runDetails(state, a.issue, a.steps, a.run) : {}) }) ? "recorded" : "already recorded"} ${a.run}: ${outcome}`);
+    } else if (cmd === "flakes-check") {
+      // gate: the list is valid and every entry's tracking issue is open (gh); exit 30 otherwise
+      const { entries, error } = loadKnownFlakes(a.flakes);
+      if (error) throw new Error(error);
+      for (const e of entries) {
+        const r = spawnSync("gh", ["issue", "view", String(e.issue), ...(a.repo ? ["-R", a.repo] : []), "--json", "state", "-q", ".state"], { encoding: "utf8", timeout: 60_000 });
+        if (r.status !== 0 || r.stdout.trim() !== "OPEN") throw new Error(`known flake "${e.match}": tracking issue #${e.issue} is not open`);
+      }
+      console.log(`known flakes ok (${entries.length})`);
     } else if (cmd === "reset") {
       const by = a.by || process.env.USER || userInfo().username;
       console.log(`breaker closed by ${by} at ${reset(state, by)}`);

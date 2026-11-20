@@ -365,8 +365,11 @@ try {
   const brAdm3 = admitWithBreaker();
   checks.breaker_streak_opens_and_enqueues_nothing = brAdm3.status === 0 && !queued(7201) && labelsOf(7201).includes("factory:ready") && brState().open === true && brState().reasons.some((r) => r.kind === "streak" && /7301-1/.test(r.detail) && /7302-1/.test(r.detail));
   spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
-  rmSync(join(stateAd, "runs.jsonl"), { force: true });
+  // two QA rejections of different issues are ordinary verdicts: they do not count, admission stays open
+  writeFileSync(join(stateAd, "runs.jsonl"), [{ issue: "7301", run: "factory-issue-7301-2", outcome: "fail", failedStep: "qa", outcomeClass: "fail", fingerprint: "a", finishedAt: new Date(Date.now() + 3000).toISOString() }, { issue: "7302", run: "factory-issue-7302-2", outcome: "fail", failedStep: "qa", outcomeClass: "fail", fingerprint: "b", finishedAt: new Date(Date.now() + 4000).toISOString() }].map((r) => JSON.stringify(r)).join("\n") + "\n");
   const brAdm2 = admitWithBreaker();
+  checks.breaker_qa_rejections_leave_admission_open = brAdm2.status === 0 && brState().open === false && queued(7201);
+  rmSync(join(stateAd, "runs.jsonl"), { force: true });
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
   // ordering: a lower-numbered issue blocked by an open one, and an unblocked one; maxActiveRuns 1 picks the unblocked one
   const ob = (blocked) => `${body}${blocked ? `\n## Blocked by\n${blocked}\n` : ""}`;
