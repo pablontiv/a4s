@@ -15,7 +15,7 @@ const { values: a } = parseArgs({ options: {
   project: { type: "string" }, brief: { type: "string" }, "brief-text": { type: "string" },
   "t3-home": { type: "string" }, state: { type: "string" }, lines: { type: "string" },
   "stall-sec": { type: "string" }, "max-sec": { type: "string" }, limits: { type: "string" }, "poll-sec": { type: "string", default: "3" },
-  "budget-sec": { type: "string" },
+  "budget-sec": { type: "string" }, tag: { type: "string", default: "" },
   continue: { type: "string" }, answer: { type: "string" }, cancel: { type: "string", default: "kill" },
   "reattach-sec": { type: "string", default: "300" }, "stable-sec": { type: "string", default: "12" },
 } });
@@ -36,7 +36,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const T3_HOME = a["t3-home"];
 
 const stDir = join(a.state, String(a.issue)); mkdirSync(stDir, { recursive: true });
-const stFile = join(stDir, `${a.line}.json`);
+const stFile = join(stDir, `${a.line}${a.tag ? `-${a.tag}` : ""}.json`);
 let st;
 try { st = validateState(existsSync(stFile) ? JSON.parse(readFileSync(stFile, "utf8")) : { attempts: [] }); }
 catch (e) { console.error(`[station ${a.line} #${a.issue}] ${stFile}: ${e.message}`); process.exit(EXIT.MALFORMED); }
