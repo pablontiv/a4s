@@ -161,6 +161,7 @@ test("cycle.yaml: handler_on success, failure and wait run src/notify.mjs", () =
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync, mkdirSync, readdirSync as ls } from "node:fs";
 import { tmpdir } from "node:os";
+import { randomBytes } from "node:crypto";
 
 const FACTORY = join(DAGS, "..");
 const cycle = parseDag(readFileSync(join(DAGS, "cycle.yaml"), "utf8"));
@@ -208,7 +209,13 @@ function fixture() {
   const finish = (issue) => writeFileSync(join(stub, `status-run-${issue}`), "Succeeded");
   return { root, primary, step, astep, wt, rebasing, finish };
 }
-const ok = (r) => assert.equal(r.status, 0, r.stderr + r.stdout);
+// the message is always a string, also when the step timed out or could not be spawned (null stdout/stderr)
+const ok = (r) => assert.equal(r.status, 0, `status ${r.status} signal ${r.signal ?? "none"}${r.error ? ` error ${r.error.message}` : ""}\n${r.stderr ?? ""}${r.stdout ?? ""}`);
+
+test("ok(): a timed-out or unspawnable step fails with an AssertionError that says why, never ERR_INVALID_ARG_TYPE", () => {
+  const r = { status: null, signal: "SIGTERM", error: new Error("spawnSync bash ETIMEDOUT"), stdout: null, stderr: null };
+  assert.throws(() => ok(r), (e) => e instanceof assert.AssertionError && /status null signal SIGTERM error spawnSync bash ETIMEDOUT/.test(e.message));
+});
 
 test("validate: a factory change without a selftest receipt fails before the gate, with the finding", () => {
   const f = fixture();
@@ -455,6 +462,12 @@ export function findExecutable(name, path = process.env.PATH ?? "") {
 const DAGU = findExecutable("dagu");
 /** Every file under `dir` (recursive), [] when it does not exist. */
 const walk = (dir) => { try { return ls(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath ?? e.path, e.name)); } catch { return []; } };
+/** Polls `cond` every 100 ms until true; fails with `what` and `detail()` after `timeoutMs`. */
+async function waitFor(cond, what, timeoutMs, detail = () => "") {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) { if (cond()) return; await new Promise((r) => setTimeout(r, 100)); }
+  assert.fail(`timed out after ${timeoutMs} ms waiting for ${what}\n${detail()}`);
+}
 function daguFixture() {
   const f = fixture();
   const home = join(f.root, "dagu"); mkdirSync(join(home, "dags"), { recursive: true });
@@ -464,22 +477,50 @@ function daguFixture() {
   const env = { PATH: `${join(f.root, "stub")}:${process.env.PATH}`, HOME: process.env.HOME, PRIMARY: f.primary, FACTORY, T3_HOME: join(f.root, "t3"),
     STATE: join(f.root, "state"), BASE: "main", GATE: "true", PUSH: "true", STUB: join(f.root, "stub"), DAGU_EXECUTABLE: DAGU, DAGU_HOME: home,
     LEASE_POLL_MS: "100", CI_TIMEOUT_MIN: "30", CI_WORKFLOWS: "CI", CI_DELAY: "2" };
-  writeFileSync(join(home, "dags", "integ.yaml"), [
+  // a DAG name unique to this fixture: Dagu derives each run's control socket from the DAG name and run id only
+  // (an abstract `/tmp/@dagu_<dag>_<hash>.sock`, not under DAGU_HOME), so two test processes on the same host
+  // (parallel gates, the repeat script) using one fixed name collide with "already running" and fail at random
+  const dag = `integ_${randomBytes(4).toString("hex")}`;
+  writeFileSync(join(home, "dags", `${dag}.yaml`), [
     "type: graph", "shell: bash", "max_active_runs: 5", "params:", "  - name: ISSUE", "    required: true", "  - name: CI_DELAY", '    default: "2"',
     "env:", ...Object.entries(env).filter(([k]) => k !== "CI_DELAY").map(([k, v]) => `  - ${k}: ${JSON.stringify(v)}`),
     "steps:", steps.trimEnd(), "handler_on:", abort.trimEnd(), ""].join("\n"));
   const denv = { ...process.env, DAGU_HOME: home };
-  const start = (issue, extra = []) => spawn(DAGU, ["start", "--run-id", `run-${issue}`, "integ", "--", `ISSUE=${issue}`, ...extra], { env: denv, stdio: "ignore", detached: true });
-  const done = (p) => new Promise((r) => p.on("exit", (code) => r(code)));
+  const start = (issue, extra = []) => spawn(DAGU, ["start", "--run-id", `run-${issue}`, dag, "--", `ISSUE=${issue}`, ...extra], { env: denv, stdio: "ignore", detached: true });
+  // resolves also when the process already exited before the call (no lost `exit` event)
+  const done = (p) => new Promise((r) => { if (p.exitCode !== null || p.signalCode !== null) r(p.exitCode); else p.once("exit", (code) => r(code)); });
   // step times as Dagu records them (its status store, last line of the run's status.jsonl)
   const status = (issue) => {
     const find = walk(join(home, "data")).find((p) => p.includes(`_run-${issue}/`) && p.endsWith("/status.jsonl"));
     const last = JSON.parse(readFileSync(find, "utf8").trim().split("\n").at(-1));
     return Object.fromEntries(last.nodes.map((n) => [n.step.id ?? n.step.name, { start: Date.parse(n.startedAt), end: Date.parse(n.finishedAt), status: n.status }]));
   };
-  const word = (issue) => (spawnSync(DAGU, ["status", "--run-id", `run-${issue}`, "integ"], { encoding: "utf8", env: denv }).stdout.match(/^(\w[\w ]*?) - \d{4}-/m) ?? [])[1];
-  return { ...f, start, done, status, word, home };
+  const rawWord = (issue) => (spawnSync(DAGU, ["status", "--run-id", `run-${issue}`, dag], { encoding: "utf8", env: denv }).stdout ?? "").match(/^(\w[\w ]*?) - \d{4}-/m)?.[1];
+  /** Last `n` lines of every log of the run. */
+  const tail = (issue, n = 40) => walk(join(home, "logs")).filter((p) => p.includes(`run-${issue}`)).map((p) => `--- ${p}\n${readFileSync(p, "utf8").split("\n").slice(-n).join("\n")}`).join("\n");
+  /** Always a string: the run's status word, its step statuses and the tail of its logs. */
+  const word = (issue) => {
+    let steps;
+    try { steps = Object.entries(status(issue)).map(([k, v]) => `${k}=${v.status}`).join(" "); } catch (e) { steps = `no step statuses (${e.message})`; }
+    return `run-${issue} status ${rawWord(issue) ?? "unknown"}; steps: ${steps}\n${tail(issue)}`;
+  };
+  const state = (issue) => rawWord(issue) ?? "unknown";
+  return { ...f, start, done, status, word, state, home, dag };
 }
+
+test("dagu fixture: word() and state() are always strings, also for a run Dagu never saw (assert messages never undefined)", { skip: !DAGU && "dagu not installed" }, () => {
+  const f = daguFixture();
+  const w = f.word(999);
+  assert.equal(typeof w, "string", "word() must return a string");
+  assert.match(w, /run-999 status unknown; steps: no step statuses/);
+  assert.equal(f.state(999), "unknown");
+});
+
+test("dagu fixture: each fixture has its own DAG name, so equal run ids in parallel test processes do not share a Dagu socket", { skip: !DAGU && "dagu not installed" }, () => {
+  const [a, b] = [daguFixture(), daguFixture()];
+  assert.notEqual(a.dag, b.dag, "two fixtures got the same DAG name");
+  for (const f of [a, b]) assert.ok(existsSync(join(f.home, "dags", `${f.dag}.yaml`)), `missing ${f.dag}.yaml`);
+});
 
 test("dagu: two runs reach integrate at the same moment; both land on main, the second integrate starts after the first ci ends", { skip: !DAGU && "dagu not installed", timeout: 180_000 }, async () => {
   const f = daguFixture();
@@ -488,7 +529,7 @@ test("dagu: two runs reach integrate at the same moment; both land on main, the 
   ok(f.step("validate", 31)); ok(f.step("validate", 32));
   const codes = await Promise.all([f.done(f.start(31)), f.done(f.start(32))]);
   assert.deepEqual(codes, [0, 0], `${f.word(31)} / ${f.word(32)}`);
-  assert.equal(f.word(31), "Succeeded"); assert.equal(f.word(32), "Succeeded");
+  assert.equal(f.state(31), "Succeeded", f.word(31)); assert.equal(f.state(32), "Succeeded", f.word(32));
   sh(f.primary, "fetch", "-q", "origin");
   assert.equal(sh(f.primary, "show", "origin/main:a.txt"), "A\n");
   assert.equal(sh(f.primary, "show", "origin/main:b.txt"), "B\n");
@@ -515,13 +556,18 @@ test("dagu: a run killed while holding the lease does not block the next one, wh
   ok(f.step("validate", 33)); ok(f.step("validate", 34));
   // run 33 integrates and sits in ci (slow CI); then the whole run is SIGKILLed: no trap, no handler releases the lease
   const p = f.start(33, ["CI_DELAY=600"]);
-  for (let i = 0; i < 300 && !(existsSync(join(f.root, "stub", "gh.log")) && readFileSync(join(f.root, "stub", "gh.log"), "utf8").includes("run list")); i++) await new Promise((r) => setTimeout(r, 100));
-  assert.equal(holder(f).run, "run-33");
+  const ghLog = () => (existsSync(join(f.root, "stub", "gh.log")) ? readFileSync(join(f.root, "stub", "gh.log"), "utf8") : "");
+  // observable state, not sleeps: run 33 holds the lease and is inside ci (the gh stub logged `run list`)
+  await waitFor(() => holder(f)?.run === "run-33" && ghLog().includes("run list"), "run-33 holding the lease and inside ci", 60_000, () => `lease ${JSON.stringify(holder(f))}\ngh.log: ${ghLog()}\n${f.word(33)}`);
   process.kill(-p.pid, "SIGKILL");
-  await new Promise((r) => setTimeout(r, 500));
-  assert.equal(holder(f).run, "run-33"); // still held by the dead run
-  const code = await f.done(f.start(34));
-  assert.equal(code, 0, f.word(34));
+  await f.done(p); // the Dagu process is gone
+  assert.equal(holder(f)?.run, "run-33", "the lease file is gone after the kill, expected it still held by the dead run"); // still held by the dead run
+  const p34 = f.start(34);
+  let timer; // cleared below: a pending timer would keep the test process alive for its full length
+  const code = await Promise.race([f.done(p34), new Promise((r) => { timer = setTimeout(() => r("timeout"), 200_000); })]);
+  clearTimeout(timer);
+  if (code === "timeout") process.kill(-p34.pid, "SIGKILL");
+  assert.equal(code, 0, `second run ended with ${code}\n${f.word(34)}\nlease: ${JSON.stringify(holder(f))}`);
   const err = walk(join(f.home, "logs")).filter((p) => p.includes("run-34")).map((p) => readFileSync(p, "utf8")).join("\n");
   assert.match(err, /reclaimed the integration lease of dead run run-33/);
   assert.equal(holder(f), null);
