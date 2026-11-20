@@ -188,50 +188,6 @@ try {
     const finding = (() => { try { return JSON.parse(readFileSync(join(root, "state", "rcpt", "step-failure.json"), "utf8")).findings[0]; } catch { return ""; } })();
     Object.assign(checks, { validate_requires_receipt_for_factory_changes: validateBody.length > 0 && rr.status !== 0 && !existsSync(marker) && /^selftest not run on this code: receipt missing/.test(finding) });
   }
-  // 5b'. re-QA after a rebase (#1091): the real `integrate` step on a fixture; two issues touching the same file integrate one
-  // after the other and the second is re-QAed (real QA line, cheap model); a pair with disjoint files is re-validated but not re-QAed
-  {
-    const cyc = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
-    const m = /^  - id: integrate\n[\s\S]*?^    run: \|\n([\s\S]*?)(?=^\S|^  # |^  - id:)/m.exec(cyc);
-    const integrateBody = (m?.[1] ?? "").split("\n").map((l) => l.replace(/^ {6}/, "")).join("\n");
-    const git = (cwd, ...a) => sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", ...a], { cwd });
-    const pair = (tag, fileA, contentA, fileB, contentB) => {
-      const prim = join(root, `requa-${tag}`); mkdirSync(prim, { recursive: true });
-      writeFileSync(join(prim, "a.txt"), "a1\na2\na3\n"); writeFileSync(join(prim, "b.txt"), "b\n"); writeFileSync(join(prim, ".gitignore"), ".workspace/\n");
-      git(prim, "init", "-q", "-b", "main"); git(prim, "add", "-A"); git(prim, "commit", "-qm", "init");
-      const state = join(root, `requa-state-${tag}`);
-      const runs = [];
-      for (const [n, file, content] of [[`rq${tag}1`, fileA, contentA], [`rq${tag}2`, fileB, contentB]]) {
-        const wt = join(prim, ".workspace", "worktrees", `issue-${n}`);
-        git(prim, "worktree", "add", "-q", "-b", `factory/issue-${n}`, wt, "main");
-        writeFileSync(join(wt, file), content);
-        mkdirSync(join(state, n), { recursive: true });
-        writeFileSync(join(state, n, "title"), `Fixture ${n}`); writeFileSync(join(state, n, "brief.md"), `# Fixture ${n}\n\n## Acceptance criteria\n- [ ] ${file} contains the line \`${content.split("\n").find((l) => /^[XYZ]$/.test(l))}\` (check with grep).\n- [ ] This is a read-only review: do not change anything.\n`);
-        spawnSync("node", [join(FACTORY, "src", "t3cli.mjs"), "project", "add", "--title", `issue-${n}`, wt], { encoding: "utf8", env: { ...process.env, T3_HOME: t3Home } });
-        runs.push(n);
-      }
-      const integrate = (n) => {
-        const marker = join(root, `requa-gate-${n}`);
-        const r = spawnSync("bash", ["-c", integrateBody], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME, PRIMARY: prim, FACTORY, T3_HOME: t3Home, STATE: state,
-          ISSUE: n, BASE: "main", DAG_RUN_ID: `selftest-${n}`, GATE: `touch ${marker}`, PUSH: "false", LINE_TABLE: linesPath, DAGU_OUTPUT_FILE: join(root, `requa-out-${n}`) } });
-        spawnSync("node", [join(FACTORY, "src", "lease.mjs"), "release", "--state", state, "--run", `selftest-${n}`], { encoding: "utf8" }); // what `ci` does
-        return { status: r.status, gateRan: existsSync(marker), stderr: r.stderr };
-      };
-      const first = integrate(runs[0]), second = integrate(runs[1]);
-      const rq = (() => { try { return JSON.parse(readFileSync(join(state, runs[1], "requa.json"), "utf8")); } catch { return null; } })();
-      const qaTagged = stLine2(state, runs[1], "qa-requa");
-      return { first, second, rq, qaTagged, mainFiles: git(prim, "show", "--name-only", "--format=", "main").split("\n").filter(Boolean), count: git(prim, "rev-list", "--count", "main") };
-    };
-    const stLine2 = (state, issue, name) => { try { return JSON.parse(readFileSync(join(state, issue, `${name}.json`), "utf8")).attempts; } catch { return []; } };
-    const same = pair("same", "a.txt", "X\na1\na2\na3\n", "a.txt", "a1\na2\na3\nY\n");
-    const disj = pair("disj", "a.txt", "X\na1\na2\na3\n", "b.txt", "Z\n");
-    log("requa same", JSON.stringify({ ...same, first: { ...same.first, stderr: undefined }, second: { ...same.second, stderr: same.second.stderr.slice(-400) } }));
-    log("requa disj", JSON.stringify({ ...disj, first: { ...disj.first, stderr: undefined }, second: { ...disj.second, stderr: disj.second.stderr.slice(-400) } }));
-    Object.assign(checks, {
-      requa_same_file_second_is_reqaed: same.first.status === 0 && same.second.status === 0 && same.count === "3" && same.second.gateRan && same.rq?.result === "pass" && same.rq.incomingCommits === 1 && same.qaTagged.length === 1 && same.qaTagged[0].outcome === "pass",
-      requa_disjoint_files_not_reqaed: disj.first.status === 0 && disj.second.status === 0 && disj.count === "3" && disj.second.gateRan && disj.rq === null && disj.qaTagged.length === 0,
-    });
-  }
   // 5a. notifications (VS2): no thread configured, so the first notification created the inbox and later ones reused it
   const t3cli = (...a) => spawnSync("node", [join(FACTORY, "src", "t3cli.mjs"), ...a], { encoding: "utf8", env: { ...process.env, T3_HOME: t3Home } });
   const inboxId = (() => { try { return JSON.parse(readFileSync(join(root, "state", "inbox.json"), "utf8")).threadId; } catch { return ""; } })();

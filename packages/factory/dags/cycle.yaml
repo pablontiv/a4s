@@ -265,11 +265,8 @@ steps:
       git add -A
       git commit -q -m "$(cat "$ISSUE_STATE/title") (#$ISSUE)" \
         -m "Factory-Run: $DAG_RUN_ID"
-      rm -f "$ISSUE_STATE/requa.json" "$ISSUE_STATE/qa-requa.json"
-      ORIG=$(git merge-base HEAD "$BASE")
-      if [ "$ORIG" != "$(git rev-parse "$BASE")" ]; then
-        # the trunk moved since validation: rebase, then re-validate and (if it touches the issue's files) re-QA the final candidate
-        PRE=$(git rev-parse HEAD); NEWBASE=$(git rev-parse "$BASE")
+      if [ "$(git merge-base HEAD "$BASE")" != "$(git rev-parse "$BASE")" ]; then
+        # the trunk moved since validation: rebase and validate the final candidate
         if ! git rebase -q "$BASE"; then
           files=$(git diff --name-only --diff-filter=U | paste -sd, - | sed 's/,/, /g')
           git rebase --abort || true
@@ -279,32 +276,7 @@ steps:
           echo "rebase-conflict: $files" >&2
           exit 1
         fi
-        # validation always re-runs on the rebased tree: the selftest receipt check (on the issue's diff against the new
-        # trunk, so the commit is folded back softly while it runs) and then the gate
-        git reset -q --soft "$NEWBASE"
-        rcpt=0
-        node "$FACTORY/src/receipt.mjs" check "$WT" "$ISSUE_STATE/step-failure.json" "$DAG_RUN_ID" || rcpt=$?
-        git commit -q -C "$PRE"
-        if [ "$rcpt" != 0 ]; then
-          sed -i 's/"step":"validate"/"step":"integrate"/' "$ISSUE_STATE/step-failure.json"
-          exit 1
-        fi
         bash -euo pipefail -c "$GATE"
-        # re-QA only when the commits it was rebased onto changed files the issue touches
-        # every path touched by any commit of each side (not the net diff: a change later restored still counts);
-        # --no-renames lists a rename as its source and its destination
-        git log --no-renames --name-only --format= "$ORIG..$PRE" | sort -u > "$ISSUE_STATE/requa-issue-files"
-        git log --no-renames --name-only --format= "$ORIG..$NEWBASE" | sort -u > "$ISSUE_STATE/requa-incoming-files"
-        if [ "$(node "$FACTORY/src/requa.mjs" decide "$ISSUE_STATE/requa-issue-files" "$ISSUE_STATE/requa-incoming-files")" = true ]; then
-          # Same QA line on the rebased commit (src/requa.sh): own station state and timing record, so it counts
-          # toward neither the window nor the step timeouts of the original QA.
-          if ! bash "$FACTORY/src/requa.sh" "$ORIG" "$NEWBASE"; then
-            # back to the issue's changes as working-tree changes on its old fork point (the window is released by the trap)
-            git reset -q --hard "$PRE"
-            git reset -q "$ORIG"
-            exit 1
-          fi
-        fi
       fi
       git -C "$PRIMARY" merge -q --ff-only "$BRANCH"
       if [ "$PUSH" = "true" ]; then git -C "$PRIMARY" push -q origin "$BASE"; fi

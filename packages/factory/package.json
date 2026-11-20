@@ -7,7 +7,7 @@
   "description": "A4S factory on T3/Dagu/Pi: the self-constructing delivery cycle (seed VS0).",
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "typecheck": "node --check src/lib.mjs && node --check src/station.mjs && node --check src/t3cli.mjs && node --check src/instances.mjs && node --check src/check-models.mjs && node --check src/admit.mjs && node --check src/labels.mjs && node --check src/issue-contract.mjs && node --check src/notify.mjs && node --check src/breaker.mjs && node --check src/lease.mjs && node --check src/research.mjs && node --check src/receipt.mjs && node --check src/next.mjs && node --check src/requa.mjs && bash -n src/prepare-brief.sh && bash -n src/requa.sh && bash -n src/close.sh && bash -n src/verify-close.sh && node --check selftest/selftest.mjs",
+    "typecheck": "node --check src/lib.mjs && node --check src/station.mjs && node --check src/t3cli.mjs && node --check src/instances.mjs && node --check src/check-models.mjs && node --check src/admit.mjs && node --check src/labels.mjs && node --check src/issue-contract.mjs && node --check src/notify.mjs && node --check src/breaker.mjs && node --check src/lease.mjs && node --check src/research.mjs && node --check src/receipt.mjs && node --check src/next.mjs && bash -n src/prepare-brief.sh && bash -n src/close.sh && bash -n src/verify-close.sh && node --check selftest/selftest.mjs",
     "selftest": "node selftest/selftest.mjs"
   },
   "engines": {
