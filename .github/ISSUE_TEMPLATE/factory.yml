@@ -24,3 +24,10 @@ body:
       description: What must not be done here.
     validations:
       required: true
+  - type: textarea
+    id: blocked-by
+    attributes:
+      label: Blocked by
+      description: Optional. Issues that must be closed as completed first, one `#<n>` per line. Delete the field if none.
+    validations:
+      required: false

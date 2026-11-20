@@ -40,6 +40,9 @@ params:
   # circuit breaker (src/breaker.mjs): injectable snapshot (fixtures); empty = live data
   - name: BREAKER_SNAPSHOT
     default: ""
+  # ordering (src/next.mjs): JSON list of in-flight issue numbers (fixtures); empty = count cycle runs in Dagu
+  - name: INFLIGHT_FILE
+    default: ""
   - name: INBOX_THREAD
     default: ""
 steps:
@@ -95,4 +98,13 @@ steps:
         fi
         case "$rc" in 0|20|21|22) ;; *) rc_all=30 ;; esac
       done
+      # mechanical ordering: fill the free run slots with the next unblocked issues (label factory:ready)
+      all=""
+      if [ -n "$ISSUES_FILE" ]; then all=$(mktemp); cp "$ISSUES_FILE" "$all"; fi
+      nopts=()
+      [ -n "$INFLIGHT_FILE" ] && nopts+=(--inflight-file "$INFLIGHT_FILE")
+      [ -n "$TARGET_DAGU_HOME" ] && nopts+=(--dagu-home "$TARGET_DAGU_HOME")
+      [ -n "$TARGET_DAGU_CONFIG" ] && nopts+=(--dagu-config "$TARGET_DAGU_CONFIG")
+      if [ -n "$all" ]; then nopts+=(--issues-file "$all"); else nopts+=(--fetch-issues --repo "$origin"); fi  # live: gh api --paginate to exhaustion
+      node "$FACTORY/src/next.mjs" --limits "$FACTORY/limits.json" "${nopts[@]}" || rc_all=30
       exit $rc_all

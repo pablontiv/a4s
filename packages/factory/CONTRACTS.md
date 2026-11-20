@@ -47,7 +47,7 @@ An admitted issue body must contain, in this order:
 2. `## Acceptance criteria`: non-empty, with at least one checklist item `- [ ] ...`.
 3. `## Out of scope`: non-empty.
 
-`## Activation` and `## Notes` are optional. Only structure is checked, never content quality.
+`## Blocked by` is optional: issues as `#<n>`, one per line (or comma separated), at least one; a malformed entry or an empty section is a contract problem. `## Activation` and `## Notes` are optional. Only structure is checked, never content quality.
 
 An issue labelled `factory:ready` that breaks the contract is not enqueued: `admit.mjs` prints the problems and exits `22` (contract). `admit.yaml` treats 22 as non-fatal and, when the issues come from GitHub, comments the problems on the issue.
 
@@ -157,3 +157,12 @@ Changes reach the trunk one at a time; everything before `integrate` runs in par
 - **Dags tests.** `test/dags.test.mjs` runs the literal `integrate` and `ci` steps under real Dagu (skipped when `dagu` is not installed) on a fixture repository with a local bare origin and a stub `gh`: two concurrent runs land one after the other (step times from Dagu's status store), and a SIGKILLed lease holder is reclaimed once Dagu reports its run dead (Dagu marks a killed run `Failed` when its heartbeat goes stale, about 90 s).
 - **Revert.** `ci` reverts only a commit that carries this run's `Factory-Run` trailer and only while it is the tip of both the local and the origin trunk (`ci.mjs revert-check`). Otherwise `step-failure.json` gets an `infra:` finding, the inbox is notified (`--event infra`) and the step fails without reverting.
 - **Env.** `LEASE_POLL_MS` (default 2000) is the polling interval while waiting.
+
+## Ordering contract
+
+Enforced by `src/next.mjs` (`pickNext`, `analyze`, `loadPolicy`), tested in `test/next.test.mjs` and the selftest. `admit.yaml` runs it after admission on each schedule.
+
+- `limits.json` (`version: 1`, `maxActiveRuns`) is operator policy, validated on load: `maxActiveRuns` is an integer of at least 1; an error names the field, the expected value and the observed one. Shipped with `maxActiveRuns: 1` until the exclusive integration window (#1089) exists.
+- `pickNext(issues, inFlight, limits, conflicts)` returns at most `maxActiveRuns - inFlight.length` issues. Candidates: open, labelled `factory` and one of `M0`..`M3`, without `factory:ready`, `factory:hold`, `factory:running` or `factory:needs-human`, passing the issue contract, with every `Blocked by` issue closed as **completed**. Order: lowest milestone, then lowest number. A candidate for which `conflicts(candidate, other)` holds against an in-flight or already picked issue is skipped (default: never).
+- A blocker closed as **not planned** puts the blocked issue on `factory:hold` with a comment naming it. Cycles in `Blocked by` are never picked; each member gets one comment naming the cycle. Issues without a milestone label or failing the contract are never picked and are reported once per admission log.
+- `admit.yaml` counts in-flight `cycle` runs (queued, running, waiting), labels the picked issues `factory:ready` and logs why each was picked or skipped. With `ISSUES_FILE` it only prints the choice.

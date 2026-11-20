@@ -292,6 +292,18 @@ try {
   rmSync(join(stateAd, "7301"), { recursive: true, force: true });
   const brAdm2 = admitWithBreaker();
   checks.breaker_closed_admits_again = brAdm2.status === 0 && queued(7201) && labelsOf(7201).includes("factory:running");
+  // ordering: a lower-numbered issue blocked by an open one, and an unblocked one; maxActiveRuns 1 picks the unblocked one
+  const ob = (blocked) => `${body}${blocked ? `\n## Blocked by\n${blocked}\n` : ""}`;
+  const ordFile = join(root, "ordering.json"), ordInflight = join(root, "ordering-inflight.json"), ordLimits = join(root, "ordering-limits.json");
+  writeFileSync(ordFile, JSON.stringify([
+    { number: 8001, state: "open", labels: ["factory", "M0"], body: ob("#8003") },
+    { number: 8002, state: "open", labels: ["factory", "M0"], body: ob("") },
+    { number: 8003, state: "open", labels: ["factory", "M1", "factory:hold"], body: ob("") }]));
+  writeFileSync(ordLimits, JSON.stringify({ version: 1, maxActiveRuns: 1 }));
+  const nextCli = (inflight) => { writeFileSync(ordInflight, JSON.stringify(inflight)); return spawnSync("node", [join(FACTORY, "src", "next.mjs"), "--issues-file", ordFile, "--limits", ordLimits, "--inflight-file", ordInflight], { encoding: "utf8", env: adEnv }); };
+  const ordFree = nextCli([]), ordBusy = nextCli([9001]);
+  checks.ordering_picks_unblocked = ordFree.status === 0 && /choice #8002$/m.test(ordFree.stdout) && !/choice.*#8001/.test(ordFree.stdout);
+  checks.ordering_nothing_while_run_in_flight = ordBusy.status === 0 && /choice \(none\)$/m.test(ordBusy.stdout);
   // liveness: a stub that stays silent ends `stuck` within a short configured STALL_SEC (no deadline otherwise)
   const stuckState = join(root, "state-stuck");
   const t0Stuck = Date.now();

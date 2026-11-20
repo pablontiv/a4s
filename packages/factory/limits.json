@@ -1,4 +1,6 @@
 {
+  "version": 1,
+  "maxActiveRuns": 1,
   "stallSec": 1200,
   "maxSec": 14400
 }
