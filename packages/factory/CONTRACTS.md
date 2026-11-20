@@ -145,6 +145,16 @@ Enforced by `src/breaker.mjs` (`evaluate(snapshot, state, now)`, pure; tested in
 
 **Adding a condition.** Add an entry to `CONDITIONS` in `src/breaker.mjs`: `detect(snapshot, state, now)` returns `{kind, detail, since}` reasons, and optionally `clears(snapshot)` if (and only if) the condition may clear by itself. Data for it goes into the snapshot; the reason shape does not change.
 
+## Scheduled selftest contract
+
+`dags/selftest.yaml` runs daily at 04:00 local time (edit `schedule` to change it; before the T3 update timer) and calls `src/scheduled-selftest.mjs run`: `npm ci` + `npm run selftest` on a fresh temporary worktree of `origin/main` (removed afterwards), with the environment of the `validate` step (official Dagu 2.26.0 when present). Purpose: detect environment drift (T3, Pi, Dagu, model, credentials) when no issue is running.
+
+- **History.** `$STATE/selftest/history.json`: `{version: 1, runs: [{date, sha, durationMs, result: pass|fail|skipped, versions: {t3, pi, dagu}, failing?}]}` (last 365).
+- **Decision (`decide`, pure).** Busy → `skip`. Red → `notify` (one inbox message with the failing checks and the versions changed since the last pass); if the previous judged run (`pass`/`fail`; `skipped` says nothing) was red too, also open the breaker. Green after red → `recover` (one message). Green after green → nothing.
+- **Breaker.** Condition `selftest-red` in `src/breaker.mjs` (reason `selftest-red`): the last two judged runs after `resetAt` both failed. No self-clearing; only `reset`.
+- **Busy.** If Dagu cannot be read the run also skips (fail closed, `error` recorded). A queued, running or waiting `cycle` run (Dagu) skips the run and records `skipped`.
+- Tested in `test/scheduled-selftest.test.mjs`; the DAG follows `test/dags.test.mjs`.
+
 ## Research handoff contract
 
 Operator-guided research runs in a dedicated top-level T3 thread per topic (line `research`, instance `pi-research`, started with `src/research.mjs start "<topic>"`; state in `$STATE/research/<slug>.json`). The researcher may do everything except merging to main (operator, 2026-11-19): web, the whole codebase, its own worktree and branch `research/<slug>` (commits, and push of that branch only), tests, the gate, the selftest, isolated T3/Dagu, real model calls (expensive ones with the operator's agreement). It never pushes to, merges into or commits on `main`, never touches the primary checkout or other branches, never changes the live factory (Dagu service, T3 settings/instances, `$STATE` of runs, breaker, labels), never creates issues itself and never handles secrets. It hands off to the supervisor named in its `launch.md` with `[research <slug>] <absolute artifact path>`, quoting the operator's handoff instruction verbatim; the supervisor creates the issues.

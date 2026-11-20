@@ -117,6 +117,18 @@ export const CONDITIONS = {
       return out;
     },
   },
+  // Scheduled selftest of main (src/scheduled-selftest.mjs): the last two judged runs (pass/fail; `skipped` says nothing) both failed.
+  // No `clears`: only `reset` closes it; runs at or before resetAt no longer count. Snapshot `selftest`: {runs: [{date, result}]}.
+  "selftest-red": {
+    detect(snapshot, state, now) {
+      const after = ms(state?.resetAt) ?? -Infinity;
+      const judged = (Array.isArray(snapshot?.selftest?.runs) ? snapshot.selftest.runs : [])
+        .filter((r) => (r?.result === "pass" || r?.result === "fail") && ms(r.date) !== null && ms(r.date) > after);
+      const [a, b] = judged.slice(-2);
+      if (a?.result !== "fail" || b?.result !== "fail") return [];
+      return [{ kind: "selftest-red", detail: "the scheduled selftest of main failed in two consecutive runs", since: iso(b.date) }];
+    },
+  },
   // Two different issues failed in a row: the last two FINISHED runs (by finish time) both failed and belong to different issues.
   // A success, a blocked/needs-human or cancelled outcome, or a re-attempt of the same issue breaks it; runs in progress are ignored.
   // No `clears`: only `reset` closes it; runs finished at or before resetAt no longer count.
@@ -261,6 +273,11 @@ export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cyc
     }
   }
   return limits;
+}
+
+/** Entries of $STATE/selftest/history.json (version 1); [] when missing or unreadable. */
+export function readSelftestRuns(state) {
+  try { const h = JSON.parse(readFileSync(join(state, "selftest", "history.json"), "utf8")); return h?.version === 1 && Array.isArray(h.runs) ? h.runs : []; } catch { return []; }
 }
 
 const runsFile = (state) => join(state, "runs.jsonl");
@@ -473,7 +490,8 @@ export async function check(o, env = process.env) {
   if (!raw.limits) raw.limits = collectLimits({ state: o.state, cycleFile: o.cycle, now });
   if (!raw.runs) raw.runs = collectRuns(o.state);
   raw.limits = { ...raw.limits, problems: [...(raw.limits?.problems ?? []), ...trackingProblems(o.state, now)] };
-  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits, runs: raw.runs };
+  if (!raw.selftest) raw.selftest = { runs: readSelftestRuns(o.state) };
+  const snap = { ...trackServices(o.state, raw, now), ci: trackCi(o.state, raw.ci, now), limits: raw.limits, runs: raw.runs, selftest: raw.selftest };
   const { open, reasons } = evaluate(snap, prev, now);
   const wasOpen = prev.invalid ? false : prev.open;
   const keep = prev.invalid ? { resetBy: null, resetAt: null } : prev;

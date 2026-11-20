@@ -1,0 +1,39 @@
+---
+# Scheduled full selftest (src/scheduled-selftest.mjs): every day at 04:00 local time (before the T3 update timer) runs
+# `npm run selftest` on a fresh temporary worktree of origin/main, removed afterwards, to detect environment drift
+# (T3, Pi, Dagu, model, credentials) even when no issue is running. To change the time edit `schedule` (cron, local time).
+# Results: $STATE/selftest/history.json. It skips (recording `skipped`) while a factory cycle run is queued or running.
+type: graph
+# bash features are used; Dagu's default shell may be sh
+shell: bash
+schedule: "0 4 * * *"
+max_active_runs: 1
+# PRIMARY/FACTORY/T3_HOME/STATE: when empty, resolved from A4S_* declared in Dagu's base config `env:`.
+params:
+  - name: PRIMARY
+    default: ""
+  - name: FACTORY
+    default: ""
+  - name: T3_HOME
+    default: ""
+  - name: STATE
+    default: ""
+  - name: INBOX_THREAD
+    default: ""
+  - name: BASE
+    default: origin/main
+  - name: TARGET_DAGU_HOME
+    default: ""
+  - name: TARGET_DAGU_CONFIG
+    default: ""
+steps:
+  - id: selftest
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      # same environment as the `validate` step: the official Dagu 2.26.0 when present, as scripts/factory-gate.sh does
+      official="$HOME/.local/opt/dagu-2.26.0/dagu"
+      if [ -z "${DAGU_BIN:-}" ] && [ -x "$official" ]; then export DAGU_BIN="$official"; fi
+      node "$FACTORY/src/scheduled-selftest.mjs" run --state "$STATE" --primary "$PRIMARY" --t3-home "$T3_HOME" \
+        --factory "$FACTORY/src" --inbox "$INBOX_THREAD" --base "$BASE" \
+        ${TARGET_DAGU_HOME:+--dagu-home "$TARGET_DAGU_HOME"} ${TARGET_DAGU_CONFIG:+--dagu-config "$TARGET_DAGU_CONFIG"}
