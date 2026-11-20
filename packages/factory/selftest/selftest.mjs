@@ -15,7 +15,7 @@ import { instancesFromLines } from "../src/instances.mjs";
 
 const FACTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const KEEP = process.env.SELFTEST_KEEP === "1";
-const MODEL = process.env.SELFTEST_MODEL ?? "anthropic/claude-haiku-5-5";
+const MODEL = process.env.SELFTEST_MODEL ?? "anthropic/claude-sonnet-5-5"; // Haiku often omits the JSON verdict line (malformed) and fails the selftest at random; see #1115
 const PI_BIN = process.env.PI_BIN ?? join(homedir(), "bin", "pi");
 // Same Dagu as the operator's service (on PATH), not the gate's DAGU_BIN: packaged builds
 // differ (e.g. the default shell), and the selftest must catch what production would hit.
