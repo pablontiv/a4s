@@ -405,7 +405,7 @@ test("limits 6: a corrupt or missing attempt file is a reason", () => {
   assert.match(r.reasons[0].detail, /#5 step impl.*corrupt/);
   const invalid = limFixture({ files: { "5/attempts.json": okAttempts, "5/qa.json": { attempts: [{ startedAt: at(1), outcome: "bogus" }] } } });
   assert.match(limEval(invalid).reasons[0].detail, /step qa.*corrupt/);
-  const missing = limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(10), outcome: "pass" }] } } });
+  const missing = limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(10) }] } } });
   assert.match(limEval(missing).reasons[0].detail, /#5 step attempts.*missing/);
   const badAttempts = limFixture({ files: { "5/attempts.json": "nope" } });
   assert.match(limEval(badAttempts).reasons[0].detail, /step attempts.*corrupt/);
@@ -595,4 +595,82 @@ test("check reads runs from the state and opens on a streak", async () => {
   const b = await check({ state: d, snapshot: snap, factory: d, now: NOW }, { ...process.env, A4S_STATE: d });
   assert.equal(b.open, true);
   assert.equal(b.reasons[0].kind, "streak");
+});
+
+test("limits archive: archived issue is ignored (even with a timeout and a corrupt file)", () => {
+  const fx = limFixture({ files: { "archive/5/attempts.json": { ...okAttempts, streak: 9 }, "archive/5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  assert.equal(limEval(fx).open, false);
+});
+test("limits archive: done.json makes the issue ignored", () => {
+  const fx = limFixture({ files: { "5/done.json": { run_id: "r" }, "5/attempts.json": { ...okAttempts, streak: 9 }, "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  assert.equal(limEval(fx).open, false);
+});
+test("limits archive: legacy directory without attempts.json and no in-flight attempt is ignored", () => {
+  assert.equal(limEval(limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "pass" }] } } })).open, false);
+  assert.equal(limEval(limFixture({ files: { "5/notified.json": {} } })).open, false);
+});
+test("limits archive: in-flight attempt without attempts.json is reported", () => {
+  const r = limEval(limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(10) }] } } }));
+  assert.equal(r.open, true);
+  assert.match(r.reasons[0].detail, /attempts\.json is missing/);
+});
+test("limits archive: a timeout counts while active and ends once the state is archived", async () => {
+  const { renameSync } = await import("node:fs");
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  assert.equal(limEval(fx).open, true);
+  mkdirSync(join(fx.state, "archive"));
+  renameSync(join(fx.state, "5"), join(fx.state, "archive", "5"));
+  assert.equal(limEval(fx).open, false);
+});
+
+test("archive-state.sh moves the issue state; an existing entry gets a -<ts> suffix; failure never fails", () => {
+  const { existsSync, readdirSync } = require_fs();
+  const st = mkdtempSync(join(tmpdir(), "arch-"));
+  const run = () => spawnSync("bash", [join(import.meta.dirname, "..", "src", "archive-state.sh")], { env: { ...process.env, PRIMARY: st, FACTORY: join(import.meta.dirname, ".."), T3_HOME: st, STATE: st, ISSUE: "9" }, encoding: "utf8" });
+  mkdirSync(join(st, "9")); writeFileSync(join(st, "9", "done.json"), "{}");
+  assert.equal(run().status, 0);
+  assert.ok(existsSync(join(st, "archive", "9", "done.json")) && !existsSync(join(st, "9")));
+  mkdirSync(join(st, "9")); writeFileSync(join(st, "9", "done.json"), "{}");
+  assert.equal(run().status, 0);
+  assert.equal(readdirSync(join(st, "archive")).filter((d) => /^9-\d{8}T\d{6}Z$/.test(d)).length, 1);
+  writeFileSync(join(st, "archive-blocker"), "");
+  mkdirSync(join(st, "9")); rmSync(join(st, "archive"), { recursive: true }); writeFileSync(join(st, "archive"), "file");
+  assert.equal(run().status, 0);
+  assert.ok(existsSync(join(st, "9")));
+});
+function require_fs() { return { existsSync: fsExists, readdirSync: fsReaddir }; }
+import { existsSync as fsExists, readdirSync as fsReaddir, rmSync } from "node:fs";
+
+test("limits archive: a persisted timeout reason ends when the issue is archived or done, other reasons stay", async () => {
+  const { renameSync } = await import("node:fs");
+  const fx = limFixture({ files: { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  const lim = () => ({ limits: collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW }) });
+  const prior = evaluate(lim(), closed, LIM_NOW);
+  assert.equal(prior.open, true);
+  const persisted = { version: 1, open: true, since: iso0(), reasons: [...prior.reasons, { kind: "ci", detail: "CI of current main abc is failing", since: iso0() }], resetBy: null, resetAt: null };
+  // done.json
+  writeFileSync(join(fx.state, "5", "done.json"), "{}");
+  let r = evaluate(lim(), persisted, LIM_NOW);
+  assert.deepEqual(r.reasons.map((x) => x.kind), ["ci"]);
+  // archived, and with an empty limits snapshot
+  mkdirSync(join(fx.state, "archive"));
+  renameSync(join(fx.state, "5"), join(fx.state, "archive", "5"));
+  r = evaluate(lim(), persisted, LIM_NOW);
+  assert.deepEqual(r.reasons.map((x) => x.kind), ["ci"]);
+});
+function iso0() { return new Date(LIM_NOW).toISOString(); }
+
+test("limits archive: legacy state with a completed timeout and no attempts.json is skipped entirely", () => {
+  const fx = limFixture({ files: { "5/impl.json": { attempts: [{ startedAt: at(3000), outcome: "timeout" }] } } });
+  const l = collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW });
+  assert.equal(l.steps.length, 0);
+  assert.equal(limEval(fx).open, false);
+});
+test("limits archive: persisted reasons without an issue field end once the issue is done or archived", () => {
+  const fx = limFixture({ files: { "5/done.json": { run_id: "r" } } });
+  const lim = { limits: collectLimits({ state: fx.state, cycleFile: fx.cycleFile, now: LIM_NOW }) };
+  const mk = (detail) => ({ kind: "limits", detail, since: iso0() });
+  const persisted = { version: 1, open: true, since: iso0(), reasons: [mk("/s/5/attempts.json is missing for issue #5"), mk("issue #5: 9 runs (limit 3) in attempts.json"), mk("issue #6: 9 runs (limit 3) in attempts.json")], resetBy: null, resetAt: null };
+  const r = evaluate(lim, persisted, LIM_NOW);
+  assert.deepEqual(r.reasons.map((x) => x.detail), ["issue #6: 9 runs (limit 3) in attempts.json"]);
 });

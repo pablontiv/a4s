@@ -4,7 +4,7 @@
 // repository with no human step and checks the result.
 // Exit 0 = the cycle closed; anything else = it did not. Uses real model calls (cheap model).
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -135,6 +135,23 @@ try {
   const trunkLog = () => sh("git", ["log", "--format=%s%n%b%x00", "main"], { cwd: repo }).split("\0").map((x) => x.trim()).filter(Boolean);
   const r1 = await runCycle("st1", brief, "node test.mjs");
   const log1 = trunkLog();
+  let deliveredAdmission = false;
+  // admission against the SHARED state right after st1 was delivered (before the st2/st3 failures): its state sits under archive/
+  // and numeric fixtures exercise collectLimits' issue-directory filtering: 9001 closed with a failed move (done.json), 9002 archived with a timeout, 9003 legacy (no attempts.json)
+  {
+    const sh0 = join(root, "state"), ts = { attempts: [{ startedAt: Date.now() - 1000, timeoutSec: 60, outcome: "timeout" }] };
+    mkdirSync(join(sh0, "9001"), { recursive: true }); writeFileSync(join(sh0, "9001", "done.json"), "{}"); writeFileSync(join(sh0, "9001", "impl.json"), JSON.stringify(ts));
+    mkdirSync(join(sh0, "archive", "9002"), { recursive: true }); writeFileSync(join(sh0, "archive", "9002", "impl.json"), JSON.stringify(ts));
+    mkdirSync(join(sh0, "9003"), { recursive: true }); writeFileSync(join(sh0, "9003", "impl.json"), JSON.stringify(ts));
+    const snap0 = join(root, "breaker-snapshot-shared.json");
+    writeFileSync(snap0, JSON.stringify({ services: { dagu: { reachable: true }, t3: { reachable: true } } }));
+    const ck = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", sh0, "--snapshot", snap0, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME } });
+    let open = true; try { open = JSON.parse(readFileSync(join(sh0, "breaker.json"), "utf8")).open; } catch { open = false; }
+    deliveredAdmission = existsSync(join(sh0, "archive", "st1", "done.json")) && !existsSync(join(sh0, "st1")) && ck.status === 0 && open === false;
+    for (const n of ["9001", "9003"]) rmSync(join(sh0, n), { recursive: true, force: true });
+    rmSync(join(sh0, "archive", "9002"), { recursive: true, force: true });
+    rmSync(join(sh0, "breaker.json"), { force: true });
+  }
   const r2 = await runCycle("st2", brief2, "node test.mjs && false");
   const log2 = trunkLog();
   const wt2 = join(repo, ".workspace", "worktrees", "issue-st2");
@@ -146,7 +163,9 @@ try {
     trunk_tests_pass: spawnSync("node", ["test.mjs"], { cwd: repo }).status === 0,
     worktree_removed: !existsSync(join(repo, ".workspace", "worktrees", "issue-st1")),
     verify_close_succeeded: r1.step("verify_close") === "succeeded",
-    done_json_present: (() => { try { const d = JSON.parse(readFileSync(join(root, "state", "st1", "done.json"), "utf8")); return !!(d.run_id && d.commit && d.timestamp); } catch { return false; } })(),
+    delivered_st1_admission_not_blocked: deliveredAdmission,
+    state_archived_after_delivery: existsSync(join(root, "state", "archive", "st1", "done.json")) && !existsSync(join(root, "state", "st1")),
+    done_json_present: (() => { try { const d = JSON.parse(readFileSync(join(root, "state", "archive", "st1", "done.json"), "utf8")); return !!(d.run_id && d.commit && d.timestamp); } catch { return false; } })(),
     pass_without_criteria_downgraded: checkVerdict({ verdict: "pass", findings: [] }).verdict.verdict === "fail",
     failed_validation_blocks_commit: r2.step("validate") === "failed" && r2.step("integrate") !== "succeeded" && log2.length === log1.length &&
       existsSync(wt2) && sh("git", ["rev-list", "--count", "main..HEAD"], { cwd: wt2 }) === "0",
@@ -155,7 +174,7 @@ try {
   const r3 = await runCycle("st3", brief3, "node test.mjs", linesStubPath);
   const log3 = trunkLog();
   const wt3 = join(repo, ".workspace", "worktrees", "issue-st3");
-  const stLine = (issue, l) => { try { return JSON.parse(readFileSync(join(root, "state", issue, `${l}.json`), "utf8")).attempts; } catch { return []; } };
+  const stLine = (issue, l) => { try { return JSON.parse(readFileSync(existsSync(join(root, "state", issue)) ? join(root, "state", issue, `${l}.json`) : join(root, "state", "archive", issue, `${l}.json`), "utf8")).attempts; } catch { return []; } };
   const qa1 = stLine("st1", "qa"), qa3 = stLine("st3", "qa"), impl3 = stLine("st3", "impl");
   const cont3 = impl3.filter((x) => x.continued);
   const findings3 = (() => { try { return readFileSync(join(root, "state", "st3", "qa-findings.md"), "utf8"); } catch { return ""; } })();
@@ -200,7 +219,7 @@ try {
     inbox_created_once: !!inboxId && inboxThreads.length === 1 && inboxThreads[0].threadId === inboxId,
     st1_one_success_message: about(run1).length === 1 && /evento: success/.test(about(run1)[0]),
     st2_one_failure_message_names_validate: about(run2).length === 1 && /evento: failure/.test(about(run2)[0]) && /Paso fallido: validate/.test(about(run2)[0]),
-    notified_recorded: (() => { try { return !!JSON.parse(readFileSync(join(root, "state", "st1", "notified.json"), "utf8"))[`${run1}:success`]; } catch { return false; } })(),
+    notified_recorded: (() => { try { return !!JSON.parse(readFileSync(join(root, "state", "archive", "st1", "notified.json"), "utf8"))[`${run1}:success`]; } catch { return false; } })(),
   });
   // 5b. admission: a scheduler-less Dagu (runs are only queued, never executed) fed from an ISSUES_FILE fixture
   const adHome = join(root, "dagu-admit"); mkdirSync(adHome, { recursive: true });
@@ -288,6 +307,12 @@ try {
   writeFileSync(join(stateAd, "7301", "impl.json"), JSON.stringify({ attempts: [{ startedAt: Date.now() + 1000, timeoutSec: 60, outcome: "timeout" }] }));
   const ckLim = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", stateAd, "--snapshot", snapFile, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: adEnv });
   checks.breaker_limits_timeout_opens = ckLim.status === 40 && brState().open === true && brState().reasons.some((r) => r.kind === "limits" && /#7301 step impl/.test(r.detail));
+  // delivered: archiving the issue ends its persisted reason without a reset, and the next admission check is closed
+  mkdirSync(join(stateAd, "archive"), { recursive: true });
+  renameSync(join(stateAd, "7301"), join(stateAd, "archive", "7301"));
+  const ckArch = spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "check", "--state", stateAd, "--snapshot", snapFile, "--factory", join(FACTORY, "src")], { encoding: "utf8", env: adEnv });
+  checks.breaker_archived_issue_does_not_block = ckArch.status === 0 && brState().open === false;
+  rmSync(join(stateAd, "archive"), { recursive: true, force: true });
   spawnSync("node", [join(FACTORY, "src", "breaker.mjs"), "reset", "--state", stateAd, "--by", "selftest"], { encoding: "utf8", env: adEnv });
   rmSync(join(stateAd, "7301"), { recursive: true, force: true });
   // streak condition: two fixture failures of different issues open the breaker and the next admission enqueues nothing

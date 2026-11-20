@@ -7,7 +7,7 @@
 // --state defaults to $STATE, then $A4S_STATE. --snapshot F: a JSON snapshot instead of live data (fixtures).
 // Rules: CONTRACTS.md, "Circuit breaker contract". `evaluate` is pure.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,7 +96,7 @@ export const CONDITIONS = {
       for (const r of Array.isArray(l.runs) ? l.runs : []) {
         const t = ms(r?.at);
         if (t === null) { out.push(bad(`issue #${r?.issue}`, "at", r?.at)); continue; }
-        if (r.runs > maxRuns && live(t)) out.push({ kind: "limits", detail: `issue #${r.issue}: ${r.runs} runs (limit ${maxRuns}) in attempts.json`, since: iso(t) });
+        if (r.runs > maxRuns && live(t)) out.push({ kind: "limits", issue: r.issue, detail: `issue #${r.issue}: ${r.runs} runs (limit ${maxRuns}) in attempts.json`, since: iso(t) });
       }
       const steps = Array.isArray(l.steps) ? l.steps : [];
       for (const s of steps) {
@@ -112,7 +112,7 @@ export const CONDITIONS = {
         else if (s.outcome === undefined && now - at - waited > s.timeoutSec * 1000) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its safety cap of ${s.timeoutSec}s`, since: iso(at + waited + s.timeoutSec * 1000) });
       }
       for (const p of Array.isArray(l.problems) ? l.problems : []) {
-        if (live(p?.at)) out.push({ kind: "limits", detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
+        if (live(p?.at)) out.push({ kind: "limits", issue: p?.issue, detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
       }
       return out;
     },
@@ -199,7 +199,7 @@ export function cycleTimeouts(text) {
  */
 export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cycle.yaml"), now: now0 = Date.now() }) {
   const now = toTime(now0) ?? Date.now();
-  const limits = { maxRuns: MAX_RUNS, runs: [], steps: [], problems: [] };
+  const limits = { maxRuns: MAX_RUNS, runs: [], steps: [], problems: [], delivered: [] };
   const problem = (issue, step, error, at = now) => limits.problems.push({ issue, step, error, at: iso(at) });
   let timeouts = {};
   try { timeouts = cycleTimeouts(readFileSync(cycleFile, "utf8")); } catch (e) { problem("-", "cycle", `cannot read cycle file ${cycleFile}: ${e.code ?? e.message}`); }
@@ -218,15 +218,27 @@ export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cyc
     let at = now; try { at = statSync(file).mtimeMs; } catch { /* keep now */ }
     try { return { value: validate(JSON.parse(text)) }; } catch (e) { problem(issue, step, `${file} is corrupt: ${e.message}`, at); return null; }
   };
+  // delivered issues: archived ones (name may carry a -<ts> suffix) and active directories holding done.json
+  const active = new Set(dirs.filter((d) => !existsSync(join(state, d, "done.json"))));
+  const delivered = new Set(dirs.filter((d) => !active.has(d)));
+  try { for (const d of readdirSync(join(state, "archive"))) { const n = d.match(/^(\d+)(?:-.*)?$/)?.[1]; if (n) delivered.add(n); } } catch { /* no archive */ }
+  limits.delivered = [...delivered].filter((n) => !active.has(n));
   for (const issue of dirs) {
     const dir = join(state, issue);
+    // a closed issue whose move to archive/ failed is not counted either
+    if (existsSync(join(dir, "done.json"))) continue;
     const stations = ["impl", "qa"].map((line) => [line, load(issue, line, join(dir, `${line}.json`), validateState)]);
     const af = load(issue, "attempts", join(dir, "attempts.json"), (v) => {
       if (!v || typeof v !== "object" || Array.isArray(v) || !Number.isInteger(v.streak) || v.streak < 0) throw new Error("streak must be a non-negative integer");
       for (const k of ["lastAt", "resetAt"]) if (v[k] !== undefined && toTime(v[k]) === null) throw new Error(`${k} is not a valid timestamp: ${JSON.stringify(v[k])}`);
       return v;
     });
-    if (af?.missing) { if (stations.some(([, r]) => r && !r.missing)) problem(issue, "attempts", `${join(dir, "attempts.json")} is missing: run count unknown`); }
+    if (af?.missing) {
+      // only an in-flight latest attempt (a station file, no outcome) makes the missing count a corruption; otherwise legacy state: skipped
+      const inFlight = stations.some(([, r]) => r && !r.missing && r.value.attempts.at(-1)?.outcome === undefined && r.value.attempts.length > 0);
+      if (inFlight) problem(issue, "attempts", `${join(dir, "attempts.json")} is missing: run count unknown`);
+      else { console.debug(`breaker: issue #${issue} skipped: no attempts.json and no in-flight attempt`); continue; }
+    }
     else if (af) limits.runs.push({ issue, runs: af.value.streak, at: toTime(af.value.lastAt) ?? toTime(af.value.resetAt) ?? now });
     for (const [line, r] of stations) {
       if (!r || r.missing) continue;
@@ -327,11 +339,16 @@ export function evaluate(snapshot, state, now = Date.now()) {
   const t = toTime(now) ?? Date.now();
   const reasons = [];
   if (state?.invalid) reasons.push({ kind: "state-invalid", detail: state.detail ?? "breaker state is corrupt or has an unknown version", since: iso(t) });
-  for (const r of state?.open ? state.reasons ?? [] : []) {
+  for (const r0 of state?.open ? state.reasons ?? [] : []) {
+    // reasons persisted before the `issue` field existed: recover it from the detail ("issue #N ..." / "#N step ...")
+    const r = r0.kind === "limits" && r0.issue === undefined ? { ...r0, issue: r0.detail?.match(/(?:issue )?#(\d+)/)?.[1] } : r0;
+    if (r.issue === undefined) delete r.issue;
     if (CONDITIONS[r.kind]?.clears?.(snapshot)) continue;
     // a persisted stuck/timeout reason clears when its step later passed (unrelated reasons stay)
+    // a delivered issue (archived or done) no longer holds the breaker: its persisted limits reasons end without a reset
+    if (r.kind === "limits" && r.issue !== undefined && Array.isArray(snapshot?.limits?.delivered) && snapshot.limits.delivered.map(String).includes(String(r.issue))) continue;
     if (r.kind === "limits" && r.step !== undefined && Array.isArray(snapshot?.limits?.steps) && stepRecovered(snapshot.limits.steps, r.issue, r.step, ms(r.attemptAt) ?? Infinity)) continue;
-    reasons.push(r);
+    reasons.push(r0);
   }
   for (const [kind, c] of Object.entries(CONDITIONS)) {
     for (const r of c.detect(snapshot, state, t)) if (!reasons.some((x) => x.kind === kind && x.detail === r.detail)) reasons.push(r);

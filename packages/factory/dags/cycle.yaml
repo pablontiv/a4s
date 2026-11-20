@@ -380,6 +380,8 @@ handler_on:
         . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
         node "$FACTORY/src/breaker.mjs" record --issue "$ISSUE" --run "$DAG_RUN_ID" --state "$STATE"
       ) || echo "breaker record failed (ignored)" >&2
+      # delivered: the issue's state leaves $STATE/<n>/ for $STATE/archive/<n>/ so the breaker limits never see it (last: nothing reads it after)
+      bash "${FACTORY:-${A4S_FACTORY:-}}/src/archive-state.sh" || echo "archive failed (ignored)" >&2
       exit 0
   failure:
     run: |
