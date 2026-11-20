@@ -18,7 +18,7 @@ fs.appendFileSync(process.env.FAKE_T3 + ".log", JSON.stringify(args) + "\\n");
 const input = args.includes("-") ? fs.readFileSync(0, "utf8") : "";
 const [, cmd] = args;
 if (cmd === "start") process.stdout.write(sc.start ?? JSON.stringify({ threadId: "T-new", runId: "R1" }));
-else if (cmd === "send") { fs.writeFileSync(process.env.FAKE_T3 + ".sent", input); process.stdout.write(JSON.stringify({ runId: "R2" })); }
+else if (cmd === "send") { if (!fs.existsSync(process.env.FAKE_T3 + ".sent")) fs.writeFileSync(process.env.FAKE_T3 + ".sent", input); process.stdout.write(JSON.stringify({ runId: "R2" })); }
 else if (cmd === "show") {
   const cf = process.env.FAKE_T3 + ".count";
   const n = fs.existsSync(cf) ? Number(fs.readFileSync(cf, "utf8")) : 0;
@@ -28,7 +28,7 @@ else if (cmd === "show") {
     process.stdout.write(JSON.stringify(n < sc.tickUntil
       ? { thread: t("running"), messages: [{ role: "assistant", text: "step " + n }] }
       : { thread: t("completed"), messages: [{ role: "assistant", text: '{"verdict":"fail","findings":["x"]}' }] }));
-  } else process.stdout.write(sc.show);
+  } else process.stdout.write(fs.existsSync(process.env.FAKE_T3 + ".sent") && sc.showAfterSend ? sc.showAfterSend : sc.show);
 }
 `;
 
@@ -40,7 +40,7 @@ before(async () => {
 });
 after(() => server.close());
 
-function fixture({ show, start, state, reachable = true, tickUntil } = {}) {
+function fixture({ show, showAfterSend, start, state, reachable = true, tickUntil } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "station-"));
   const versions = join(dir, "versions"), home = join(dir, "t3home"), stateDir = join(dir, "state");
   mkdirSync(join(versions, "9.9.9"), { recursive: true });
@@ -49,7 +49,7 @@ function fixture({ show, start, state, reachable = true, tickUntil } = {}) {
   mkdirSync(join(home, "userdata"), { recursive: true });
   writeFileSync(join(home, "userdata", "server-runtime.json"), JSON.stringify({ serverVersion: "9.9.9", origin: reachable ? origin : "http://127.0.0.1:1" }));
   writeFileSync(join(dir, "lines.json"), JSON.stringify(LINES));
-  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, start, tickUntil }));
+  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, showAfterSend, start, tickUntil }));
   mkdirSync(join(stateDir, "7"), { recursive: true });
   if (state) writeFileSync(join(stateDir, "7", "impl.json"), JSON.stringify(state));
   return { dir, versions, home, stateDir, stFile: join(stateDir, "7", "impl.json"), scenario: join(dir, "scenario.json") };
@@ -287,4 +287,61 @@ test("metadata-only changes (updatedAt) are not activity", async (t) => {
   const r = await run(f, ["--stall-sec", "20", "--max-sec", "100"]);
   assert.match(r.stdout, /^result=stuck$/m, r.stderr);
   assert.notEqual(activitySig(a), activitySig(JSON.parse(snap("running", { itemCount: 4 }))));
+});
+
+const said = (text, extra = {}) => JSON.stringify({ thread: { status: "completed", model: "m", pendingRequestCount: 0, activeRunId: null }, messages: [{ role: "assistant", text }], ...extra });
+const sends = (f) => calls(f).filter((c) => c[1] === "send");
+const VERDICT = '{"verdict":"pass","criteria":[{"criterion":"c","evidence":"e","result":"pass"}],"findings":[],"commit":null,"question":null}';
+
+test("prose answer, then a valid verdict on the follow-up: one send on the same thread, parsed", async (t) => {
+  const f = fixture({ show: said("all done, nothing to add"), showAfterSend: said(VERDICT) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^result=pass$/m);
+  assert.equal(sends(f).length, 1);
+  assert.equal(sends(f)[0][sends(f)[0].indexOf("--json") + 1], "T-new");
+  assert.match(readFileSync(f.scenario + ".sent", "utf8"), /ONLY the verdict/);
+  assert.equal(calls(f).filter((c) => c[1] === "start").length, 1);
+  const at = state(f).attempts;
+  assert.equal(at.length, 1);
+  assert.equal(at[0].verdictRequested, true);
+  assert.equal(at[0].outcome, "pass");
+});
+
+test("prose twice: malformed (exit 40) after exactly one follow-up", async (t) => {
+  const f = fixture({ show: said("nothing was committed"), showAfterSend: said("still prose") });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f);
+  assert.equal(r.code, 40, r.stderr);
+  assert.match(r.stdout, /^result=malformed$/m);
+  assert.equal(sends(f).length, 1);
+  assert.equal(state(f).attempts.at(-1).verdictRequested, true);
+  assert.equal(state(f).attempts.at(-1).outcome, "malformed");
+});
+
+test("a JSON line that is not a verdict stays malformed after the follow-up", async (t) => {
+  const f = fixture({ show: said('{"foo":1}'), showAfterSend: said('{"foo":2}') });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f);
+  assert.equal(r.code, 40, r.stderr);
+  assert.equal(sends(f).length, 1);
+});
+
+test("blocked verdict with its question given only on the follow-up", async (t) => {
+  const f = fixture({ show: said("I need to know"), showAfterSend: said('{"verdict":"blocked","findings":[],"commit":null,"question":"which db?"}') });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^question=which db\?$/m);
+  assert.equal(state(f).attempts.at(-1).outcome, "blocked");
+});
+
+test("a valid verdict first: no follow-up", async (t) => {
+  const f = fixture({ show: said(VERDICT) });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const r = await run(f);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(sends(f).length, 0);
+  assert.equal(state(f).attempts[0].verdictRequested, undefined);
 });

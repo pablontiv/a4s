@@ -9,3 +9,5 @@ You are the worker of the IMPLEMENTATION line of the A4S factory. Mandatory rule
 - Your LAST line must be exactly one JSON line:
   {"verdict":"pass|fail|blocked","criteria":[{"criterion":"...","evidence":"<command run>","result":"pass|fail"}],"findings":[...],"commit":null,"question":"<text or null>"}
 - If your changes touch `packages/factory/`: after the FINAL edit — including each QA repair — run `npm run selftest` (calls to the cheap selftest model are allowed and expected; do not set `SELFTEST_NO_RECEIPT`). Any later edit invalidates it. `validate` fails with `selftest not run on this code` without a receipt for exactly your code. List the run in `criteria` with its command and result.
+
+**Final rule, non-negotiable:** your final answer must END with the verdict as the single last line, one JSON object and nothing after it. Prose without that line is treated as a malformed result.

@@ -102,6 +102,7 @@ if (a.continue || plan.kind === "resume") {
   const model = plan.model;
   let brief = a["brief-text"] ?? readFileSync(a.brief, "utf8");
   if (a["budget-sec"]) brief += `\n\nPresupuesto estricto: ${a["budget-sec"]} segundos de reloj desde ahora. Si no puedes terminar dentro del presupuesto, detente y responde verdict "fail" con findings ["budget"].`;
+  brief += `\n\nRecordatorio final: tu ÚLTIMA línea debe ser el veredicto, un único objeto JSON {"verdict":...} y nada después.`;
   const args = ["thread", "start", "--json", "--title", `[${a.line}] #${a.issue} ${a.run}/${n}`, "--provider", line.provider, "--model", model];
   if (line.thinking) args.push("--option", `thinking=${line.thinking}`);
   args.push(a.project, "-");
@@ -128,6 +129,9 @@ process.on("SIGTERM", () => {
 
 const stableMs = Number(a["stable-sec"]) * 1000;
 let downSince = null, stable = null, snap;
+/** Poll until the thread settles (idle for stable-sec); stuck/timeout/infra exit from here. */
+async function waitSettled() {
+stable = null;
 while (!stopping) {
   const stopThread = (outcome) => {
     const n = a.cancel === "kill" ? killThread(threadId) : 0;
@@ -160,15 +164,39 @@ while (!stopping) {
   }
   await sleep(pollMs);
 }
+}
+await waitSettled();
 
-const t = snap.thread;
+const VERDICT_ASK = `Your last message did not end with the verdict line. Reply now with ONLY the verdict as one JSON line, nothing else (no prose, no tools):
+{"verdict":"pass|fail|blocked","criteria":[{"criterion":"...","evidence":"<command run>","result":"pass|fail"}],"findings":[...],"commit":null,"question":"<text or null>"}`;
+const lastText = () => (snap.messages ?? []).filter((m) => m.role === "assistant").at(-1)?.text ?? "";
+const statusGate = () => {
+  const t = snap.thread;
+  if (t.pendingRequestCount > 0) { cur.outcome = "blocked"; cur.threadId = threadId; cur.question = "pending_request"; save(); out("result", "blocked"); out("question", "pending_request"); process.exit(EXIT.PASS); }
+  if (t.status !== "completed") { log("thread status", t.status); finish(cur, outcomeForStatus(t.status)); }
+};
+
+let t = snap.thread;
 out("model", t.model);
 if (t.worktreePath) out("worktree", t.worktreePath);
-if (t.pendingRequestCount > 0) { cur.outcome = "blocked"; cur.threadId = threadId; cur.question = "pending_request"; save(); out("result", "blocked"); out("question", "pending_request"); process.exit(EXIT.PASS); }
-if (t.status !== "completed") { log("thread status", t.status); finish(cur, outcomeForStatus(t.status)); }
+statusGate();
 
-const text = (snap.messages ?? []).filter((m) => m.role === "assistant").at(-1)?.text ?? "";
-const parsed = parseVerdict(text);
+let text = lastText();
+let parsed = parseVerdict(text);
+if (!parsed) {
+  // the worker finished but forgot the verdict line: ask once, in the same thread, for the verdict only
+  log("no verdict line; asking once for the verdict");
+  cur.verdictRequested = true; save();
+  const r = t3(["thread", "send", "--json", threadId, "-"], VERDICT_ASK);
+  const runId = r.code === 0 ? tryJSON(r.stdout)?.runId : undefined;
+  if (!runId) { log("verdict request failed", r.stderr || r.stdout.slice(0, 300)); finish(cur, isUnreachable(r.stderr + r.stdout) || r.code === 0 ? "infra" : "fail"); }
+  cur.runId = runId; cur.lastActivityAt = Date.now(); save();
+  await waitSettled();
+  t = snap.thread;
+  if (t.worktreePath) out("worktree", t.worktreePath);
+  statusGate();
+  text = lastText(); parsed = parseVerdict(text);
+}
 const { verdict: v, reason } = checkVerdict(parsed);
 if (reason) log(reason);
 if (!v) { cur.outcome = "malformed"; save(); out("result", "malformed"); log("malformed:", text.slice(-300)); process.exit(EXIT.MALFORMED); }

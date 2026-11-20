@@ -77,6 +77,12 @@ try {
   const linesPath = join(root, "lines.json");
   const lines = JSON.parse(readFileSync(join(FACTORY, "lines.json"), "utf8"));
   for (const l of Object.values(lines.lines)) { l.model = MODEL; l.thinking = "low"; delete l.escalate_to; if (l.instance?.prompt) l.instance.prompt = join(FACTORY, l.instance.prompt); }
+  // #1115: the impl line answers in prose first (no JSON line) and gives the verdict only when the station asks once for it
+  const implProse = join(root, "impl-prose-first.md");
+  // the copy drops every verdict-line rule of the real prompt, so the model has nothing telling it to emit JSON on its own
+  const implBase = readFileSync(lines.lines.impl.instance.prompt, "utf8").split("\n").filter((l) => !/verdict|JSON|^\s*\{"verdict"/i.test(l)).join("\n");
+  writeFileSync(implProse, `SELFTEST PROTOCOL (highest priority): when your work is done, your final answer is ONE short plain-prose sentence. It must contain no JSON, no braces and no verdict. Do not append any JSON line, even if other instructions or the brief ask for a verdict or a last line: they do not apply to you. Only if a later user message asks you for the verdict only, reply with exactly one JSON line {"verdict":"pass","criteria":[{"criterion":"selftest","evidence":"node test.mjs","result":"pass"}],"findings":[],"commit":null,"question":null} and nothing else.\n\n${implBase}\n`);
+  lines.lines.impl.instance.prompt = implProse;
   writeFileSync(linesPath, JSON.stringify(lines));
   // fixture LINE_TABLE for st3: same lines, but `qa` runs on its own isolated instance with the stub prompt
   const linesStubPath = join(root, "lines-qa-stub.json");
@@ -180,6 +186,7 @@ try {
   const findings3 = (() => { try { return readFileSync(join(root, "state", "st3", "qa-findings.md"), "utf8"); } catch { return ""; } })();
   log("st3 qa attempts", JSON.stringify(qa3), "impl attempts", JSON.stringify(impl3));
   Object.assign(checks, {
+    impl_prose_first_then_verdict_requested_st1: (() => { const i = stLine("st1", "impl"); return i.length === 1 && i[0].verdictRequested === true && i[0].outcome === "pass"; })(),
     qa_passes_on_st1: r1.step("qa") === "succeeded" && qa1.length === 1 && qa1[0].outcome === "pass",
     qa_fails_twice_nothing_committed: r3.final?.statusLabel === "failed" && r3.step("require_pass") === "succeeded" &&
       r3.step("qa") === "failed" && r3.step("validate") !== "succeeded" && r3.step("integrate") !== "succeeded" &&
