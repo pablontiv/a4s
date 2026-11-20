@@ -31,6 +31,11 @@ bash scripts/gate.sh
 
 ## Límites operativos
 
+Principio de permisos de la fábrica: permisos máximos dentro del espacio propio de cada línea. Límites duros y su aplicación real hoy (detalle en `packages/factory/CONTRACTS.md`):
+
+- Aplicados por código: no hacer push ni merge a `main` fuera de `integrate` (lease de integración); no cambiar el estado Git compartido (guarda de Git compartido); QA no cambia el candidato (guarda del candidato).
+- **Aún no aplicados por código, solo regla de prompt**: no cambiar la fábrica viva (servicio/config/runs de Dagu, ajustes/instancias de T3, `$STATE` de los runs, breaker, labels) y no manejar secretos. Los sigue la investigación/issue de frontera a nivel de SO (#1061).
+
 Trabajar en el worktree asignado y preservar los cambios del operador. Mantener instalaciones reproducibles con `npm ci` y actualizar el lockfile junto con cualquier cambio intencional de dependencias.
 
 El operador usa OMP. Las operaciones de publicación, push, PR y reconciliación de tareas humanas de Dagu requieren autorización explícita del encargo; el gate local por sí solo no las autoriza. Para el flujo de issues, seguir el skill `packages/omp-dagu/skills/dagu-feature/SKILL.md` y ejecutar el ciclo desde el clone primario según `README.md`, manteniendo la implementación en el worktree del issue. Configuraciones locales, credenciales y servicios externos permanecen bajo control del operador.

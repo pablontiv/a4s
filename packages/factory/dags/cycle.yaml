@@ -149,8 +149,8 @@ steps:
       fi
 
   # Independent QA on the uncommitted worktree (a different model family than impl).
-  # QA must not change anything (status + diff + untracked content are hashed before and
-  # after). On `fail` the findings go once to the implementation thread, the new verdict
+  # QA has full rights in the worktree but must not change the candidate (tracked files and
+  # non-ignored untracked files); station.mjs enforces it (violation, exit 50). On `fail` the findings go once to the implementation thread, the new verdict
   # must pass, and QA runs once more; a second `fail` fails the run.
   - id: qa
     depends: require_pass
@@ -167,15 +167,9 @@ steps:
     run: |
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
-      snap() {
-        ( cd "$WT"
-          git status --porcelain
-          git diff | sha256sum
-          git ls-files -o --exclude-standard -z | xargs -0 -r sha256sum ) | sha256sum | cut -d' ' -f1
-      }
       field() { grep "^$2=" "$1" | tail -n 1 | cut -d= -f2- || true; }
       run_qa() {
-        local n=$1 brief="$ISSUE_STATE/qa-brief-$1.md" outf="$ISSUE_STATE/qa-out-$1" before after rc=0
+        local n=$1 brief="$ISSUE_STATE/qa-brief-$1.md" outf="$ISSUE_STATE/qa-out-$1" rc=0
         { cat "$ISSUE_STATE/brief.md"
           printf '\n\n## Worktree status (git status --short)\n\n```\n'
           git -C "$WT" status --short
@@ -183,13 +177,10 @@ steps:
           git -C "$WT" diff
           printf '```\n'; } > "$brief"
         : > "$outf"
-        before=$(snap)
         DAGU_OUTPUT_FILE="$outf" node "$FACTORY/src/station.mjs" --line qa \
           --issue "$ISSUE" --run "$DAG_RUN_ID-qa$n" --project "$WT" \
           --brief "$brief" --t3-home "$T3_HOME" \
           --state "$STATE" --lines "$LINE_TABLE" >&2 || rc=$?
-        after=$(snap)
-        if [ "$before" != "$after" ]; then echo "qa changed the worktree" >&2; exit 1; fi
         case "$rc" in 0|10) ;; *) echo "qa station exit $rc" >&2; exit 1 ;; esac
         QA_OUT="$outf"
         QA_RESULT=$(field "$outf" result)

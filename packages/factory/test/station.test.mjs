@@ -9,7 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const STATION = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "station.mjs");
-const LINES = { lines: { impl: { provider: "p", model: "m", escalate_to: "big" } } };
+const LINES = { lines: { impl: { provider: "p", model: "m", escalate_to: "big" }, qa: { provider: "q", model: "m" } } };
 const FAKE = `#!/usr/bin/env node
 const fs = require("node:fs");
 const sc = JSON.parse(fs.readFileSync(process.env.FAKE_T3, "utf8"));
@@ -458,4 +458,42 @@ test("items under thread.turnItems count as in flight; a running tool with parti
   t.after(() => rmSync(f.dir, { recursive: true, force: true }));
   const r = await run(f, ["--stall-sec", "1", "--max-sec", "3"]);
   assert.match(r.stdout, /^result=timeout$/m, r.stderr);
+});
+
+// ---- candidate guard (line qa) ----
+function qaWorktree(f) {
+  const primary = join(f.dir, "repo"); mkdirSync(primary);
+  const git = (...a) => execFileSync("git", a, { cwd: primary });
+  git("init", "-q", "-b", "main");
+  writeFileSync(join(primary, ".gitignore"), "node_modules/\n.cache/\n.selftest-receipt.json\n");
+  writeFileSync(join(primary, "a.txt"), "a\n");
+  git("add", "a.txt", ".gitignore"); git("-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "-m", "i");
+  const wt = join(primary, ".workspace", "worktrees", "issue-7");
+  git("worktree", "add", "-q", "-b", "factory/issue-7", wt);
+  return wt;
+}
+const runQa = (f, wt, effect) => {
+  writeFileSync(f.scenario, JSON.stringify({ show: said(VERDICT), sideEffect: effect }));
+  return run(f, ["--line", "qa", "--project", wt]);
+};
+
+test("qa: writes to node_modules, a cache dir and the receipt are not a violation", async (t) => {
+  const f = fixture({});
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const wt = qaWorktree(f);
+  const r = await runQa(f, wt, `mkdir -p ${wt}/node_modules/x ${wt}/.cache && echo b > ${wt}/node_modules/x/y && echo c > ${wt}/.cache/z && echo {} > ${wt}/.selftest-receipt.json`);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^result=pass$/m);
+});
+
+test("qa: editing a tracked file, adding a non-ignored file or deleting a tracked file is a violation naming the path", async (t) => {
+  for (const [effect, path] of [["echo x >> a.txt", "a.txt"], ["echo n > new.txt", "new.txt"], ["rm a.txt", "a.txt"], ["echo x > .gitignore", ".gitignore"], ["chmod +x a.txt", "a.txt"]]) {
+    const f = fixture({});
+    t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+    const wt = qaWorktree(f);
+    const r = await runQa(f, wt, `cd ${wt} && ${effect}`);
+    assert.equal(r.code, 50, `${effect}: ${r.stderr}`);
+    assert.match(r.stdout, /^result=violation$/m);
+    assert.ok(JSON.parse(readFileSync(join(f.stateDir, "7", "qa.json"), "utf8")).attempts.at(-1).violations.some((v) => v.startsWith(`${path}:`)), effect);
+  }
 });

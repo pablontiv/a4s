@@ -56,7 +56,7 @@ try {
   const repo = join(root, "repo"); mkdirSync(repo);
   writeFileSync(join(repo, "calc.mjs"), "export function add(a, b) { return a + b; }\n");
   writeFileSync(join(repo, "test.mjs"), 'import { add } from "./calc.mjs";\nif (add(2, 3) !== 5) { console.error("FAIL add"); process.exit(1); }\nconsole.log("PASS");\n');
-  writeFileSync(join(repo, ".gitignore"), ".workspace/\n");
+  writeFileSync(join(repo, ".gitignore"), ".workspace/\nnode_modules/\n.selftest-receipt.json\n.selftest-log\n");
   sh("git", ["init", "-q", "-b", "main"], { cwd: repo });
   sh("git", ["add", "-A"], { cwd: repo });
   sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", "commit", "-qm", "init"], { cwd: repo });
@@ -78,6 +78,16 @@ try {
   const SCRATCH_WT = join(root, "scratch-worktree");
   const qaViolPrompt = join(root, "qa-violation-stub.md");
   writeFileSync(qaViolPrompt, `You are a selftest stub of the QA line. Whatever the user message says, run exactly one bash command: \`git config core.worktree ${SCRATCH_WT}\`, then reply with exactly this single line and nothing else:\n${JSON.stringify({ verdict: "pass", criteria: [{ criterion: "stub", evidence: "git config", result: "pass" }], findings: [], commit: null, question: null })}\n`);
+
+  // st5/st6: QA stubs for the candidate guard. st5 writes only ignored paths (install-like node_modules, the receipt and its log): no violation.
+  // st6 edits a tracked file: the `qa` step fails with `violation` naming the path.
+  const stubVerdict = JSON.stringify({ verdict: "pass", criteria: [{ criterion: "stub", evidence: "bash", result: "pass" }], findings: [], commit: null, question: null });
+  const brief5 = join(root, "brief5.md");
+  writeFileSync(brief5, "# Add inc\n\n## Goal\nAdd an exported `inc(a)` returning `a + 1` to calc.mjs.\n\n## Acceptance criteria\n- [ ] calc.mjs exports `inc(a)`.\n\n## Out of scope\nAnything other than calc.mjs. Do not commit.\n");
+  const qaIgnoredPrompt = join(root, "qa-ignored-stub.md");
+  writeFileSync(qaIgnoredPrompt, `You are a selftest stub of the QA line. Whatever the user message says, run exactly one bash command: \`mkdir -p node_modules/.cache/x && echo built > node_modules/.cache/x/out && echo '{}' > .selftest-receipt.json && echo log > .selftest-log\`, then reply with exactly this single line and nothing else:\n${stubVerdict}\n`);
+  const qaEditPrompt = join(root, "qa-edit-stub.md");
+  writeFileSync(qaEditPrompt, `You are a selftest stub of the QA line. Whatever the user message says, run exactly one bash command: \`echo '// qa was here' >> calc.mjs\`, then reply with exactly this single line and nothing else:\n${stubVerdict}\n`);
 
   // 2. isolated T3 with the candidate's line profiles (cheap model for the selftest)
   const t3Home = join(root, "t3"); mkdirSync(join(t3Home, "userdata"), { recursive: true });
@@ -104,6 +114,12 @@ try {
   linesViol.lines.qa.instance.prompt = qaViolPrompt;
   linesViol.lines.qa.instance.displayName = "Factory · qa (selftest violation stub)";
   writeFileSync(linesViolPath, JSON.stringify(linesViol));
+  const stubLines = (name, prompt) => {
+    const f = join(root, `lines-${name}.json`), l = JSON.parse(JSON.stringify(lines));
+    l.lines.qa.provider = `pi-qa-${name}`; l.lines.qa.instance.prompt = prompt; l.lines.qa.instance.displayName = `Factory · qa (selftest ${name})`;
+    writeFileSync(f, JSON.stringify(l)); return f;
+  };
+  const linesIgnoredPath = stubLines("ignored-stub", qaIgnoredPrompt), linesEditPath = stubLines("edit-stub", qaEditPrompt);
   // fixture LINE_TABLE for the liveness check: `impl` runs on an isolated instance whose stub goes silent (one long tool call)
   const silentPrompt = join(root, "silent-stub.md");
   writeFileSync(silentPrompt, "You are a selftest stub. Whatever the user message says, run exactly one bash command: `sleep 50`, and nothing else. Do not write any text before it. When it returns, reply with exactly this single line and nothing else:\n" + JSON.stringify({ verdict: "fail", criteria: [], findings: ["selftest long tool call"], commit: null, question: null }) + "\n");
@@ -113,7 +129,7 @@ try {
   linesSilent.lines.impl.instance.prompt = silentPrompt;
   linesSilent.lines.impl.instance.displayName = "Factory · impl (selftest silent stub)";
   writeFileSync(linesSilentPath, JSON.stringify(linesSilent));
-  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN), ...instancesFromLines(linesStubPath, PI_BIN), ...instancesFromLines(linesViolPath, PI_BIN), ...instancesFromLines(linesSilentPath, PI_BIN) };
+  const instances = { pi: { driver: "pi", enabled: true, config: { binaryPath: PI_BIN } }, ...instancesFromLines(linesPath, PI_BIN), ...instancesFromLines(linesStubPath, PI_BIN), ...instancesFromLines(linesViolPath, PI_BIN), ...instancesFromLines(linesIgnoredPath, PI_BIN), ...instancesFromLines(linesEditPath, PI_BIN), ...instancesFromLines(linesSilentPath, PI_BIN) };
   writeFileSync(join(t3Home, "userdata", "settings.json"), JSON.stringify({ providerInstances: instances }));
   const t3Port = await port();
   const t3 = spawn(latestT3(), ["serve", "--base-dir", t3Home, "--port", String(t3Port), "--host", "127.0.0.1", "--no-browser"], { detached: true, stdio: "ignore" });
@@ -217,6 +233,18 @@ try {
     qa_violation_fails_step_and_reports: r4.step("qa") === "failed" && r4.step("integrate") !== "succeeded" &&
       qa4.length === 1 && qa4[0].outcome === "violation" && (qa4[0].violations ?? []).some((i) => /core\]?|worktree = /.test(i) && i.includes(SCRATCH_WT)) &&
       configAfter === SCRATCH_WT,
+  });
+  // st5: QA writes only ignored paths (node_modules, receipt, log): the candidate is unchanged, the qa step passes (the gate then fails on purpose)
+  const r5 = await runCycle("st5", brief5, "false", linesIgnoredPath);
+  const qa5 = stLine("st5", "qa");
+  // st6: QA edits a tracked file: the qa step fails with `violation` and names the path
+  const r6 = await runCycle("st6", brief4, "node test.mjs", linesEditPath);
+  const qa6 = stLine("st6", "qa");
+  log("st5 qa", JSON.stringify(qa5), "st6 qa", JSON.stringify(qa6));
+  Object.assign(checks, {
+    qa_ignored_writes_no_violation: r5.step("qa") === "succeeded" && qa5.length === 1 && qa5[0].outcome === "pass",
+    qa_tracked_edit_is_violation: r6.step("qa") === "failed" && r6.step("integrate") !== "succeeded" &&
+      qa6.length === 1 && qa6[0].outcome === "violation" && (qa6[0].violations ?? []).some((i) => i.startsWith("calc.mjs")),
   });
   // 5b. receipt check of the real `validate` step: a factory change without receipt fails with the finding and the gate never runs
   {

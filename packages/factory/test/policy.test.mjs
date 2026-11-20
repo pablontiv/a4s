@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OUTCOMES, POLICY, planNext, validateState, retryExitCodes, outcomeForStatus } from "../src/lib.mjs";
@@ -67,4 +67,43 @@ test("previous blocked without answer -> await on its own thread, never a new on
 
 test("infra without a thread (failed start) -> new attempt", () => {
   assert.deepEqual(planNext(line, { attempts: [{ outcome: "infra" }] }), { kind: "new", model: "m" });
+});
+
+test("lines.json: every line lists web_search and requires pi-web-search; QA has edit and write", () => {
+  const { lines } = JSON.parse(readFileSync(join(ROOT, "lines.json"), "utf8"));
+  for (const n of ["impl", "qa", "inbox", "research"]) {
+    assert.ok(lines[n].instance.tools.some((x) => x.replace(/^\*/, "") === "web_search"), `${n} web_search`);
+    assert.ok(lines[n].instance.packages.includes("pi-web-search"), `${n} package`);
+  }
+  for (const tool of ["read", "bash", "edit", "write"]) assert.ok(lines.qa.instance.tools.includes(tool), tool);
+});
+
+test("qa prompt and contracts state the permissions principle", () => {
+  const qa = readFileSync(join(ROOT, "prompts", "qa.md"), "utf8");
+  for (const s of ["npm ci", "scripts/factory-gate.sh", "SELFTEST_NO_RECEIPT=1 npm run selftest", "/tmp", "violation"]) assert.ok(qa.includes(s), s);
+  const c = readFileSync(join(ROOT, "CONTRACTS.md"), "utf8");
+  for (const s of ["Permissions contract", "integrate", "shared Git state", "QA does not change the candidate", "no secrets"]) assert.ok(c.includes(s), s);
+  assert.match(readFileSync(join(ROOT, "..", "..", "AGENTS.md"), "utf8"), /permisos máximos/);
+});
+
+test("CONTRACTS.md: every src/ or test/ file the permissions table cites exists, and unenforced limits are declared", () => {
+  const c = readFileSync(join(ROOT, "CONTRACTS.md"), "utf8");
+  const sec = c.slice(c.indexOf("## Permissions contract"), c.indexOf("## DAG step contract"));
+  const files = [...sec.matchAll(/`((?:src|test)\/[\w.-]+)`/g)].map((m) => m[1]);
+  assert.ok(files.length >= 6);
+  for (const f of files) assert.ok(existsSync(join(ROOT, f)), f);
+  assert.equal((sec.match(/not enforced by code yet/g) || []).length, 2);
+  assert.match(sec, /#1061/);
+});
+
+test("AGENTS.md: live-factory and secrets limits are declared prompt-only (#1061), not code-enforced", () => {
+  const a = readFileSync(join(ROOT, "..", "..", "AGENTS.md"), "utf8");
+  const sec = a.slice(a.indexOf("## Límites operativos"));
+  assert.match(sec, /Aún no aplicados por código, solo regla de prompt/);
+  assert.match(sec, /#1061/);
+  const line = sec.split("\n").find((l) => l.includes("Aún no aplicados por código"));
+  assert.match(line, /fábrica viva/); assert.match(line, /secretos/);
+  assert.doesNotMatch(sec, /no con prohibiciones en prompts/);
+  const enforced = sec.split("\n").find((l) => l.startsWith("- Aplicados por código"));
+  assert.doesNotMatch(enforced, /fábrica viva|secretos/);
 });

@@ -2,6 +2,20 @@
 
 Each contract is enforced by tests in `test/`. Later contracts add their own sections here.
 
+## Permissions contract
+
+Maximum permissions inside a line's own space; every line (`impl`, `qa`, `inbox`, `research`) has `web_search` (package `pi-web-search`, checked on the host by `src/check-packages.mjs` in `scripts/factory-gate.sh`, which fails with a clear message when the operator's Pi lacks it). Prompts do not carry prohibitions that code can check; the limits that code cannot check yet are stated as such below.
+
+| Limit | Actual enforcement today |
+| --- | --- |
+| no push or merge to `main` outside `integrate` | enforced: integration lease and `verify_close` (`src/lease.mjs`, `src/verify-close.sh`) |
+| no change to shared Git state (config, hooks, other refs, primary checkout) | enforced: shared Git guard, `src/shared-git.mjs`, run by `src/station.mjs`; a change is `violation` |
+| QA does not change the candidate | enforced: candidate guard, `src/candidate.mjs`, run by `src/station.mjs` for line `qa`; tracked files (content and mode) and non-ignored untracked files (paths and contents) are compared; ignored paths (`node_modules/`, caches, receipt, build output) are not; a difference is `violation` |
+| no change to the live factory (Dagu service/config/runs, T3 settings/instances, `$STATE` of runs, breaker, labels) | **not enforced by code yet**: prompt rule only. A worker's bash can write these. The selftest runs on isolated Dagu/T3 and `src/labels.mjs`, `src/breaker.mjs` are the designated writers, but neither prevents or detects a worker's own writes. Tracked by the OS-level boundary issue (#1061) |
+| no secrets | **not enforced by code yet**: prompt rule only; no check detects a secret passed to or written by a worker. Tracked by #1061 |
+
+Files cited by this table are checked to exist by `test/policy.test.mjs`. Behaviour is covered by `test/candidate.test.mjs`, `test/station.test.mjs`, `test/check-packages.test.mjs` and the selftest (`st5`/`st6`).
+
 ## DAG step contract
 
 Enforced by `test/dags.test.mjs` for every `dags/*.yaml`.

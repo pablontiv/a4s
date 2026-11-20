@@ -8,6 +8,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { collectCandidate, compareCandidates } from "./candidate.mjs";
 import { collectSnapshot, compareSnapshots, gitIsFastForward } from "./shared-git.mjs";
 import { loadLimits, activitySig, toolInFlight, snapItems, readTurnItems, EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
 
@@ -41,7 +42,22 @@ const T3_HOME = a["t3-home"];
 
 // Shared Git state guard (src/shared-git.mjs): snapshot before the station call, compare at every exit after it.
 let guardBefore = null;
+// Candidate guard (line qa only): tracked files and non-ignored untracked files must be identical after the call.
+let candidateBefore = null;
 const end = (code) => {
+  if (candidateBefore) {
+    const before = candidateBefore; candidateBefore = null;
+    let items;
+    try { items = compareCandidates(before, collectCandidate(a.project)); }
+    catch (e) { items = [`candidate could not be read after the station call: ${e.message}`]; }
+    if (items.length) {
+      log("violation: QA changed the candidate (nothing restored):", items.join(" | "));
+      const f = items.map((i) => `candidate changed: ${i}`);
+      if (cur && cur.outcome !== "violation") { cur.outcome = "violation"; cur.violations = items; cur.findings = f; save(); }
+      out("result", "violation"); out("findings", JSON.stringify(f)); out("commit", ""); out("question", "");
+      process.exit(EXIT.VIOLATION);
+    }
+  }
   if (guardBefore) {
     const before = guardBefore; guardBefore = null;
     let items = [];
@@ -112,6 +128,10 @@ try {
 try { guardBefore = collectSnapshot(a.project, { state: a.state }); }
 catch (e) { log("shared-git guard: cannot snapshot before the station call:", e.message); finish(st.attempts.at(-1), "infra"); }
 if (!guardBefore) log("shared-git guard: not a Git worktree, guard off");
+if (a.line === "qa") {
+  try { candidateBefore = collectCandidate(a.project); }
+  catch (e) { log("candidate guard: cannot snapshot before the station call:", e.message); finish(st.attempts.at(-1), "infra"); }
+}
 
 if (a.continue || plan.kind === "resume") {
   threadId = a.continue ?? plan.threadId;
