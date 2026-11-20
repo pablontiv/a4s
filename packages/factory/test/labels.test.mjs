@@ -37,6 +37,8 @@ test("moveLabel keeps exactly one state label and leaves the others", () => {
 
 test("retry decision follows the policy table: only blocked/pass need no new run", () => {
   assert.deepEqual(OUTCOMES.filter(isRetryable), ["fail", "malformed", "stuck", "timeout", "cancelled", "infra"]);
+  assert.equal(isRetryable("violation"), false);
+  assert.equal(decideAfterFailure("violation", 1), "needs-human");
   for (const o of ["fail", "malformed", "timeout", "cancelled", "infra"]) { assert.equal(decideAfterFailure(o, 1), "ready"); assert.equal(decideAfterFailure(o, 2), "ready"); assert.equal(decideAfterFailure(o, 3), "needs-human"); }
   assert.equal(decideAfterFailure("blocked", 1), "needs-human");
   assert.equal(decideAfterFailure("weird", 1), "needs-human");

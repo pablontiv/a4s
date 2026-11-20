@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** Exit codes the station returns to Dagu. */
-export const EXIT = Object.freeze({ PASS: 0, WORKER_FAIL: 10, INFRA: 30, MALFORMED: 40 });
+export const EXIT = Object.freeze({ PASS: 0, WORKER_FAIL: 10, INFRA: 30, MALFORMED: 40, VIOLATION: 50 });
 
 /** Thread statuses that mean "no run is active". */
 export const TERMINAL = new Set(["completed", "failed", "interrupted", "cancelled", "error", "idle"]);
@@ -108,7 +108,7 @@ export function killThread(threadId) {
 }
 
 /** Typed outcome every attempt ends in. */
-export const OUTCOMES = Object.freeze(["pass", "fail", "malformed", "stuck", "timeout", "blocked", "cancelled", "infra"]);
+export const OUTCOMES = Object.freeze(["pass", "fail", "malformed", "stuck", "timeout", "blocked", "cancelled", "infra", "violation"]);
 
 /** What happens after an attempt: the single retry policy table. */
 export const POLICY = Object.freeze({
@@ -120,12 +120,13 @@ export const POLICY = Object.freeze({
   timeout: "escalate",
   cancelled: "same-model", // next attempt on `model`
   infra: "reattach", // same thread, no new brief
+  violation: "halt", // shared Git state changed: never retried automatically, needs a human
 });
 
 /** Exit code the station returns for each outcome (see station.mjs header). */
 export const OUTCOME_EXIT = Object.freeze({
   pass: EXIT.PASS, blocked: EXIT.PASS, fail: EXIT.WORKER_FAIL, stuck: EXIT.WORKER_FAIL, timeout: EXIT.WORKER_FAIL,
-  malformed: EXIT.MALFORMED, infra: EXIT.INFRA, cancelled: 143,
+  malformed: EXIT.MALFORMED, infra: EXIT.INFRA, cancelled: 143, violation: EXIT.VIOLATION,
 });
 
 /** Exit codes Dagu should retry on: those of outcomes whose policy is `escalate`. */
@@ -179,6 +180,7 @@ export function planNext(line, st, { answer } = {}) {
   if (prev.outcome === undefined) return { kind: "reattach", threadId: prev.threadId };
   switch (POLICY[prev.outcome]) {
     case "stop": return { kind: "stop", attempt: prev };
+    case "halt": return { kind: "halt", attempt: prev };
     case "resume": return prev.threadId ? (answer ? { kind: "resume", threadId: prev.threadId } : { kind: "await", attempt: prev }) : { kind: "new", model: line.model };
     case "reattach": return prev.threadId ? { kind: "reattach", threadId: prev.threadId, model: prev.model } : { kind: "new", model: line.model };
     case "escalate": return { kind: "new", model: line.escalate_to || line.model };
@@ -195,7 +197,7 @@ export function outcomeForStatus(status) {
 export const MAX_RUNS = 3;
 
 /** An outcome is retryable by a new run unless the policy table needs a human answer (`resume`) or it is a pass. */
-export const isRetryable = (outcome) => OUTCOMES.includes(outcome) && !["stop", "resume"].includes(POLICY[outcome]);
+export const isRetryable = (outcome) => OUTCOMES.includes(outcome) && !["stop", "resume", "halt"].includes(POLICY[outcome]);
 
 /** What the issue becomes after a failed run: "ready" (new attempt) or "needs-human". */
 export function decideAfterFailure(outcome, runs) {

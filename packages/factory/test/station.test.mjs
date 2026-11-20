@@ -1,7 +1,7 @@
 // Station-level regression tests: run src/station.mjs against a fake `t3` CLI and a local HTTP origin.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -17,6 +17,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(process.env.FAKE_T3 + ".log", JSON.stringify(args) + "\\n");
 const input = args.includes("-") ? fs.readFileSync(0, "utf8") : "";
 const [, cmd] = args;
+if (cmd === "show" && sc.sideEffect) require("node:child_process").execSync(sc.sideEffect, { stdio: "ignore" });
 if (cmd === "start") process.stdout.write(sc.start ?? JSON.stringify({ threadId: "T-new", runId: "R1" }));
 else if (cmd === "send") { if (!fs.existsSync(process.env.FAKE_T3 + ".sent")) fs.writeFileSync(process.env.FAKE_T3 + ".sent", input); process.stdout.write(JSON.stringify({ runId: "R2" })); }
 else if (cmd === "show") {
@@ -40,7 +41,7 @@ before(async () => {
 });
 after(() => server.close());
 
-function fixture({ show, showAfterSend, start, state, reachable = true, tickUntil } = {}) {
+function fixture({ show, showAfterSend, start, state, reachable = true, tickUntil, sideEffect } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "station-"));
   const versions = join(dir, "versions"), home = join(dir, "t3home"), stateDir = join(dir, "state");
   mkdirSync(join(versions, "9.9.9"), { recursive: true });
@@ -49,7 +50,7 @@ function fixture({ show, showAfterSend, start, state, reachable = true, tickUnti
   mkdirSync(join(home, "userdata"), { recursive: true });
   writeFileSync(join(home, "userdata", "server-runtime.json"), JSON.stringify({ serverVersion: "9.9.9", origin: reachable ? origin : "http://127.0.0.1:1" }));
   writeFileSync(join(dir, "lines.json"), JSON.stringify(LINES));
-  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, showAfterSend, start, tickUntil }));
+  writeFileSync(join(dir, "scenario.json"), JSON.stringify({ show, showAfterSend, start, tickUntil, sideEffect }));
   mkdirSync(join(stateDir, "7"), { recursive: true });
   if (state) writeFileSync(join(stateDir, "7", "impl.json"), JSON.stringify(state));
   return { dir, versions, home, stateDir, stFile: join(stateDir, "7", "impl.json"), scenario: join(dir, "scenario.json") };
@@ -344,4 +345,54 @@ test("a valid verdict first: no follow-up", async (t) => {
   assert.equal(r.code, 0, r.stderr);
   assert.equal(sends(f).length, 0);
   assert.equal(state(f).attempts[0].verdictRequested, undefined);
+});
+
+test("a station that sets core.worktree ends as violation (exit 50), nothing restored, and the outcome is replayed", async (t) => {
+  const f = fixture({ show: snap("completed") });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const git = (...a) => execFileSync("git", a, { cwd: f.dir });
+  git("init", "-q", "-b", "main"); git("-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+  const wt = join(f.dir, "wt");
+  git("worktree", "add", "-q", "-b", "factory/issue-7", wt);
+  writeFileSync(f.scenario, JSON.stringify({ show: snap("completed"), sideEffect: `git -C ${f.dir} config core.worktree /tmp/scratch-x` }));
+  const r = await run({ ...f, dir: f.dir }, ["--project", wt]);
+  assert.equal(r.code, 50, r.stderr);
+  assert.match(r.stdout, /^result=violation$/m);
+  assert.doesNotMatch(r.stdout, /^result=(pass|fail)$/m);
+  assert.match(r.stdout, /findings=.*core\.worktree|findings=.*worktree = \/tmp\/scratch-x/);
+  const at = state(f).attempts.at(-1);
+  assert.equal(at.outcome, "violation");
+  assert.ok(at.violations.some((v) => v.includes("/tmp/scratch-x")));
+  assert.equal(execFileSync("git", ["config", "--local", "--get", "core.worktree"], { cwd: f.dir, encoding: "utf8" }).trim(), "/tmp/scratch-x");
+  const again = await run({ ...f, dir: f.dir }, ["--project", wt]);
+  assert.equal(again.code, 50, "violation is halted, never retried");
+  assert.equal(calls(f).filter((c) => c[1] === "start").length, 1);
+});
+
+test("fail closed: a shared config that cannot be read after the call is a violation, never a pass", async (t) => {
+  const f = fixture({ show: snap("completed") });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const git = (...a) => execFileSync("git", a, { cwd: f.dir });
+  git("init", "-q", "-b", "main"); git("-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+  const wt = join(f.dir, "wt");
+  git("worktree", "add", "-q", "-b", "factory/issue-7", wt);
+  writeFileSync(f.scenario, JSON.stringify({ show: snap("completed"), sideEffect: `printf '[core\\n garbage' > ${f.dir}/.git/config` }));
+  const r = await run(f, ["--project", wt]);
+  assert.equal(r.code, 50, r.stderr);
+  assert.match(r.stdout, /^result=violation$/m);
+  assert.equal(state(f).attempts.at(-1).outcome, "violation");
+});
+
+test("a corrupt shared config before the call is infra: the worker is never launched", async (t) => {
+  const f = fixture({ show: snap("completed") });
+  t.after(() => rmSync(f.dir, { recursive: true, force: true }));
+  const git = (...a) => execFileSync("git", a, { cwd: f.dir });
+  git("init", "-q", "-b", "main"); git("-c", "user.email=a@b", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i");
+  const wt = join(f.dir, "wt");
+  git("worktree", "add", "-q", "-b", "factory/issue-7", wt);
+  writeFileSync(join(f.dir, ".git", "config"), "[core\n garbage");
+  const r = await run(f, ["--project", wt]);
+  assert.equal(r.code, 30, r.stderr);
+  assert.doesNotMatch(r.stdout, /^result=pass$/m);
+  assert.equal(calls(f).filter((c) => c[1] === "start").length, 0);
 });

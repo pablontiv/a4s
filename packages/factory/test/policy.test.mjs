@@ -11,7 +11,7 @@ const st = (outcome, extra = {}) => ({ attempts: [{ threadId: "t1", outcome, ...
 
 test("POLICY covers the vocabulary exactly", () => {
   assert.deepEqual(Object.keys(POLICY).sort(), [...OUTCOMES].sort());
-  assert.deepEqual(POLICY, { pass: "stop", blocked: "resume", fail: "escalate", malformed: "escalate", stuck: "escalate", timeout: "escalate", cancelled: "same-model", infra: "reattach" });
+  assert.deepEqual(POLICY, { pass: "stop", blocked: "resume", fail: "escalate", malformed: "escalate", stuck: "escalate", timeout: "escalate", cancelled: "same-model", infra: "reattach", violation: "halt" });
 });
 
 test("previous cancelled -> model, even after many attempts", () => {

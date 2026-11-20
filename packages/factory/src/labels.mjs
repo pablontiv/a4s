@@ -103,7 +103,7 @@ export function archiveStaleStations(state, n) {
   for (const line of ["impl", "qa"]) {
     const f = join(state, String(n), `${line}.json`);
     const last = readJson(f, { attempts: [] }).attempts?.at?.(-1);
-    if (last && (last.outcome === "pass" || last.outcome === "blocked")) renameSync(f, `${f}.${Date.now()}`);
+    if (last && (last.outcome === "pass" || last.outcome === "blocked" || last.outcome === "violation")) renameSync(f, `${f}.${Date.now()}`);
   }
 }
 

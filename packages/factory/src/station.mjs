@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Station wrapper: one Dagu step runs one worker as a T3 thread.
 // Control stays in Dagu. This only launches or reattaches, polls, classifies and maps to exit codes:
-//   0 pass or blocked (see output `result`) · 10 worker fail/stuck/timeout · 30 infra · 40 malformed verdict · 143 cancelled
+//   0 pass or blocked (see output `result`) · 10 worker fail/stuck/timeout · 30 infra · 40 malformed verdict · 50 violation · 143 cancelled
 // Every attempt ends in one outcome (OUTCOMES); the next attempt follows POLICY (see CONTRACTS.md).
 import { spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { collectSnapshot, compareSnapshots, gitIsFastForward } from "./shared-git.mjs";
 import { loadLimits, activitySig, EXIT, OUTCOME_EXIT, OUTPUT_KEYS, outcomeForStatus, isUnreachable, killThread, parseVerdict, checkVerdict, exitFor, resolveT3, validateState, planNext, threadPhase } from "./lib.mjs";
 
 const { values: a } = parseArgs({ options: {
@@ -24,27 +25,51 @@ for (const k of ["line", "issue", "project", "t3-home", "state"]) {
 }
 
 const log = (...m) => console.error(`[station ${a.line} #${a.issue}]`, ...m);
-const written = new Set();
-const out = (k, v) => {
-  written.add(k);
-  const value = String(v ?? "").replace(/\n/g, " ");
-  if (process.env.DAGU_OUTPUT_FILE) appendFileSync(process.env.DAGU_OUTPUT_FILE, `${k}=${value}\n`);
-  console.log(`${k}=${value}`);
-};
-process.on("exit", () => { for (const k of OUTPUT_KEYS) if (!written.has(k)) out(k, ""); });
+// Outputs are collected and written once at exit (the last value of a key wins), so a shared-state violation can replace `result`.
+const vals = new Map();
+const out = (k, v) => { vals.set(k, String(v ?? "").replace(/\n/g, " ")); };
+process.on("exit", () => {
+  for (const k of OUTPUT_KEYS) if (!vals.has(k)) vals.set(k, "");
+  for (const [k, value] of vals) {
+    if (process.env.DAGU_OUTPUT_FILE) appendFileSync(process.env.DAGU_OUTPUT_FILE, `${k}=${value}\n`);
+    console.log(`${k}=${value}`);
+  }
+});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const T3_HOME = a["t3-home"];
 
+
+// Shared Git state guard (src/shared-git.mjs): snapshot before the station call, compare at every exit after it.
+let guardBefore = null;
+const end = (code) => {
+  if (guardBefore) {
+    const before = guardBefore; guardBefore = null;
+    let items = [];
+    // fail closed: a snapshot that cannot be taken is itself a violation, never a skipped comparison
+    try {
+      const after = collectSnapshot(a.project, { state: a.state });
+      if (!after) items = ["shared Git state could not be read after the station call (worktree is no longer a Git repository)"];
+      else items = compareSnapshots(before, after, gitIsFastForward(after), { ownRun: a.run });
+    } catch (e) { items = [`shared Git state could not be read after the station call: ${e.message}`]; }
+    if (items.length) {
+      log("violation: shared Git state changed (nothing restored):", items.join(" | "));
+      if (cur && cur.outcome !== "violation") { cur.outcome = "violation"; cur.violations = items; cur.findings = items.map((i) => `shared Git state changed: ${i}`); save(); }
+      out("result", "violation"); out("findings", JSON.stringify(cur?.findings ?? items)); out("commit", ""); out("question", "");
+      process.exit(EXIT.VIOLATION);
+    }
+  }
+  process.exit(code);
+};
 const stDir = join(a.state, String(a.issue)); mkdirSync(stDir, { recursive: true });
 const stFile = join(stDir, `${a.line}.json`);
 let st;
 try { st = validateState(existsSync(stFile) ? JSON.parse(readFileSync(stFile, "utf8")) : { attempts: [] }); }
-catch (e) { console.error(`[station ${a.line} #${a.issue}] ${stFile}: ${e.message}`); process.exit(EXIT.MALFORMED); }
+catch (e) { console.error(`[station ${a.line} #${a.issue}] ${stFile}: ${e.message}`); end(EXIT.MALFORMED); }
 const save = () => writeFileSync(stFile, JSON.stringify(st, null, 1));
 /** Persist the outcome of the attempt in flight (if any) and exit with its code. */
 const finish = (attempt, outcome) => {
   if (attempt && attempt.outcome === undefined) { attempt.outcome = outcome; save(); }
-  out("result", outcome); process.exit(OUTCOME_EXIT[outcome]);
+  out("result", outcome); end(OUTCOME_EXIT[outcome]);
 };
 // Producing steps have no fixed deadline: `stuck` after STALL_SEC without activity, `timeout` at the MAX_SEC safety cap.
 const lim = loadLimits(a.limits || join(dirname(fileURLToPath(import.meta.url)), "..", "limits.json"));
@@ -56,18 +81,18 @@ const tryJSON = (text) => { try { return JSON.parse(text); } catch { return unde
 
 const linesPath = a.lines || join(dirname(fileURLToPath(import.meta.url)), "..", "lines.json");
 const line = JSON.parse(readFileSync(linesPath, "utf8")).lines?.[a.line];
-if (!line) { log("unknown line"); process.exit(EXIT.MALFORMED); }
+if (!line) { log("unknown line"); end(EXIT.MALFORMED); }
 
 // Stored stop/await outcomes are replayed before any T3 access: they need no server.
 const plan = planNext(line, st, { answer: a.answer });
 let cur = st.attempts.at(-1);
 let threadId;
-if (!a.continue && (plan.kind === "stop" || plan.kind === "await")) {
+if (!a.continue && (plan.kind === "stop" || plan.kind === "await" || plan.kind === "halt")) {
   const p = plan.attempt;
   out("result", p.outcome); out("thread_id", p.threadId); out("model", p.model);
   out("commit", p.commit); out("question", p.question); out("findings", JSON.stringify(p.findings ?? []));
-  log(`previous outcome ${p.outcome}: ${plan.kind === "stop" ? "nothing to do" : "awaiting an answer on its own thread"}`);
-  process.exit(EXIT.PASS);
+  log(`previous outcome ${p.outcome}: ${plan.kind === "stop" ? "nothing to do" : plan.kind === "halt" ? "halted, needs a human" : "awaiting an answer on its own thread"}`);
+  end(plan.kind === "halt" ? OUTCOME_EXIT[p.outcome] : EXIT.PASS);
 }
 // A preflight infra failure finalizes the attempt left in flight by an earlier run as `infra`
 // (the next run reattaches to its thread, see POLICY).
@@ -83,11 +108,15 @@ try {
   if (r.status >= 500) throw new Error(`HTTP ${r.status}`);
 } catch (e) { log("T3 unreachable before start:", e.message); finish(st.attempts.at(-1), "infra"); }
 
+try { guardBefore = collectSnapshot(a.project, { state: a.state }); }
+catch (e) { log("shared-git guard: cannot snapshot before the station call:", e.message); finish(st.attempts.at(-1), "infra"); }
+if (!guardBefore) log("shared-git guard: not a Git worktree, guard off");
+
 if (a.continue || plan.kind === "resume") {
   threadId = a.continue ?? plan.threadId;
   const msg = a.answer ?? a["brief-text"] ?? readFileSync(a.brief, "utf8");
   const r = t3(["thread", "send", "--json", threadId, "-"], msg);
-  if (r.code !== 0) { log("send failed", r.stderr); const infra = isUnreachable(r.stderr + r.stdout); st.attempts.push({ threadId, continued: true, startedAt: Date.now(), timeoutSec, outcome: infra ? "infra" : "fail" }); save(); out("result", infra ? "infra" : "fail"); process.exit(infra ? EXIT.INFRA : EXIT.WORKER_FAIL); }
+  if (r.code !== 0) { log("send failed", r.stderr); const infra = isUnreachable(r.stderr + r.stdout); st.attempts.push({ threadId, continued: true, startedAt: Date.now(), timeoutSec, outcome: infra ? "infra" : "fail" }); save(); out("result", infra ? "infra" : "fail"); end(infra ? EXIT.INFRA : EXIT.WORKER_FAIL); }
   st.attempts.push(cur = { threadId, continued: true, runId: tryJSON(r.stdout)?.runId, startedAt: Date.now(), timeoutSec }); save();
   if (!cur.runId) { log("send: malformed CLI output", r.stdout.slice(0, 300)); finish(cur, "infra"); }
 } else if (plan.kind === "reattach") {
@@ -124,7 +153,7 @@ process.on("SIGTERM", () => {
   const n = a.cancel === "kill" ? killThread(threadId) : 0;
   log(`SIGTERM: cancel=${a.cancel} killed=${n}`);
   cur.outcome = "cancelled"; save();
-  process.exit(143);
+  end(143);
 });
 
 const stableMs = Number(a["stable-sec"]) * 1000;
@@ -136,13 +165,13 @@ while (!stopping) {
   const stopThread = (outcome) => {
     const n = a.cancel === "kill" ? killThread(threadId) : 0;
     log(`${outcome}: killed=${n}`); cur.outcome = outcome; save();
-    out("result", outcome); process.exit(EXIT.WORKER_FAIL);
+    out("result", outcome); end(EXIT.WORKER_FAIL);
   };
   const r = t3(["thread", "show", "--json", "--messages", "6", threadId]);
   if (r.code !== 0) {
     if (isUnreachable(r.stderr + r.stdout)) {
       downSince ??= Date.now();
-      if (Date.now() - downSince > Number(a["reattach-sec"]) * 1000) { cur.outcome = "infra"; save(); out("result", "infra"); process.exit(EXIT.INFRA); }
+      if (Date.now() - downSince > Number(a["reattach-sec"]) * 1000) { cur.outcome = "infra"; save(); out("result", "infra"); end(EXIT.INFRA); }
     } else log("show failed", r.stderr.trim());
     await sleep(pollMs); continue;
   }
@@ -199,11 +228,11 @@ if (!parsed) {
 }
 const { verdict: v, reason } = checkVerdict(parsed);
 if (reason) log(reason);
-if (!v) { cur.outcome = "malformed"; save(); out("result", "malformed"); log("malformed:", text.slice(-300)); process.exit(EXIT.MALFORMED); }
+if (!v) { cur.outcome = "malformed"; save(); out("result", "malformed"); log("malformed:", text.slice(-300)); end(EXIT.MALFORMED); }
 cur.outcome = v.verdict; cur.threadId = threadId; cur.model = t.model ?? cur.model;
 cur.commit = v.commit ?? ""; cur.findings = v.findings ?? [];
 if (v.verdict === "blocked") cur.question = v.question ?? "";
 save();
 out("result", v.verdict); out("commit", v.commit ?? ""); out("question", v.question ?? "");
 out("findings", JSON.stringify(v.findings ?? []));
-process.exit(exitFor(v));
+end(exitFor(v));
