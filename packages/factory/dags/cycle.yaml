@@ -63,12 +63,21 @@ steps:
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
       mkdir -p "$ISSUE_STATE"
-      rm -f "$ISSUE_STATE/stale-patch"
+      rm -f "$ISSUE_STATE/stale-patch" "$ISSUE_STATE/lease-wait.json"
+      # PRIMARY is only looked at while holding the integration lease, so it is never seen in the middle of
+      # another run's fast-forward; released right after (and on any failure)
+      lease() { local sub=$1; shift; node "$FACTORY/src/lease.mjs" "$sub" --state "$STATE" --run "$DAG_RUN_ID" "$@"; }
+      lease acquire --issue-state "$ISSUE_STATE"
+      trap 'lease release' EXIT
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
       test -z "$(git -C "$PRIMARY" status --porcelain --untracked-files=no)"
+      fresh=0
       if [ ! -d "$WT" ]; then
         git -C "$PRIMARY" worktree add -q -B "$BRANCH" "$WT" "$BASE"
-      else
+        fresh=1
+      fi
+      lease release
+      if [ "$fresh" = 0 ]; then
         # reused worktree (earlier attempt): first abort whatever operation was left in progress
         gp() { git -C "$WT" rev-parse --git-path "$1"; }
         if [ -e "$(gp rebase-merge)" ] || [ -e "$(gp rebase-apply)" ]; then
@@ -225,14 +234,30 @@ steps:
       node "$FACTORY/src/receipt.mjs" check "$WT" "$ISSUE_STATE/step-failure.json" "$DAG_RUN_ID"
       bash -euo pipefail -c "$GATE"
 
+  # Exclusive integration window (src/lease.mjs): wait here, as a step of its own, until this run holds the
+  # integration lease, so `integrate` starts only once the window is ours (Dagu's step times show it). No deadline:
+  # a dead holder is reclaimed and a live one ends within its own steps; the wait goes to $ISSUE_STATE/lease-wait.json.
+  - id: integration_lease
+    depends: validate
+    run: |
+      set -euo pipefail
+      . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      node "$FACTORY/src/lease.mjs" acquire --state "$STATE" --run "$DAG_RUN_ID" --issue-state "$ISSUE_STATE"
+
   # One commit per issue, made only now, from the validated worktree.
   - id: integrate
-    depends: validate
+    depends: integration_lease
     outputs:
       - {name: merged_sha}
     run: |
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      # Exclusive integration window: held since `integration_lease` (taking it again is a no-op for its owner,
+      # and takes it when this step runs on its own), held through the `ci` step (which releases it), and released
+      # right away if this step fails. Any wait is recorded in $ISSUE_STATE/lease-wait.json.
+      lease() { local sub=$1; shift; node "$FACTORY/src/lease.mjs" "$sub" --state "$STATE" --run "$DAG_RUN_ID" "$@"; }
+      lease acquire --issue-state "$ISSUE_STATE"
+      trap 'rc=$?; if [ "$rc" != 0 ]; then lease release; fi' EXIT
       test "$(git -C "$PRIMARY" branch --show-current)" = "$BASE"
       cd "$WT"
       git add -A
@@ -263,6 +288,8 @@ steps:
     run: |
       set -euo pipefail
       . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+      # the integration window ends here: green, or the revert pushed (or any failure of this step)
+      trap 'node "$FACTORY/src/lease.mjs" release --state "$STATE" --run "$DAG_RUN_ID"' EXIT
       if [ "$PUSH" != "true" ]; then echo "not pushed: no CI to wait for"; exit 0; fi
       origin=$(git -C "$PRIMARY" remote get-url origin)
       cls=$(node "$FACTORY/src/ci.mjs" wait --primary "$PRIMARY" --origin "$origin" --sha "$SHA" --base "$BASE" \
@@ -277,8 +304,24 @@ steps:
       # red (failure, timed_out, or no verdict in time): the trunk must not keep an unverified change
       node "$FACTORY/src/ci.mjs" failure --file "$ISSUE_STATE/step-failure.json" --run "$DAG_RUN_ID" \
         --conclusion "$conclusion" --workflow "$workflow" --url "$url" --sha "$target"
+      # revert only this run's own commit, and only while it is the tip of the trunk (local and live remote tip);
+      # anything else, or a remote that cannot be read, fails as infra and notifies the inbox
+      infra() {
+        echo "ci: red on $target but not reverting: $1" >&2
+        node "$FACTORY/src/ci.mjs" infra --file "$ISSUE_STATE/step-failure.json" --run "$DAG_RUN_ID" \
+          --message "CI ($workflow) was '$conclusion' for $target but the revert was not made: $1"
+        node "$FACTORY/src/notify.mjs" --event infra --run "$DAG_RUN_ID" --issue "$ISSUE" --inbox "$INBOX_THREAD" \
+          --primary "$PRIMARY" --t3-home "$T3_HOME" --state "$STATE" \
+          --text "[Fábrica] Run $DAG_RUN_ID · issue #$ISSUE: CI ($workflow) rojo ($conclusion) en $target, pero NO se revirtió: $1. Revisar main a mano." || true
+        exit 1
+      }
+      why=$(node "$FACTORY/src/ci.mjs" revert-check --primary "$PRIMARY" --sha "$SHA" --base "$BASE" --run "$DAG_RUN_ID") || infra "${why:-revert check failed}"
       git -C "$PRIMARY" revert --no-edit "$SHA"
-      git -C "$PRIMARY" push -q origin "$BASE"
+      if ! git -C "$PRIMARY" push -q origin "$BASE"; then
+        # the remote moved after the check: undo the local revert, the trunk stays as the remote has it
+        git -C "$PRIMARY" reset -q --hard "$SHA"
+        infra "the push of the revert of $SHA was refused"
+      fi
       gh issue comment "$ISSUE" -R "$origin" \
         --body "Factory: CI ($workflow) concluded '$conclusion' for $target $url; reverted $SHA on $BASE (run $DAG_RUN_ID)." || true
       exit 1
@@ -308,6 +351,11 @@ steps:
 handler_on:
   success:
     run: |
+      # whatever the outcome, the run no longer holds the integration lease
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        node "$FACTORY/src/lease.mjs" release --state "$STATE" --run "$DAG_RUN_ID"
+      ) || echo "lease release failed (ignored)" >&2
       (
         . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
         steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
@@ -328,6 +376,11 @@ handler_on:
       exit 0
   failure:
     run: |
+      # whatever the outcome, the run no longer holds the integration lease
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        node "$FACTORY/src/lease.mjs" release --state "$STATE" --run "$DAG_RUN_ID"
+      ) || echo "lease release failed (ignored)" >&2
       (
         . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
         steps=$("${DAGU_EXECUTABLE:-dagu}" status --run-id "$DAG_RUN_ID" "$DAG_NAME" 2>/dev/null \
@@ -348,6 +401,14 @@ handler_on:
         node "$FACTORY/src/labels.mjs" finish --issue "$ISSUE" --state "$STATE" \
           --run "$DAG_RUN_ID" --steps "$steps" "${where[@]}"
       ) || echo "label update failed (ignored)" >&2
+      exit 0
+  abort:
+    run: |
+      # whatever the outcome, the run no longer holds the integration lease
+      (
+        . "${FACTORY:-${A4S_FACTORY:-}}/src/cycle-env.sh"
+        node "$FACTORY/src/lease.mjs" release --state "$STATE" --run "$DAG_RUN_ID"
+      ) || echo "lease release failed (ignored)" >&2
       exit 0
   wait:
     run: |

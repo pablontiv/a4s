@@ -531,3 +531,21 @@ test("tracking files: invalid lastReachableAt / failingSince are limits reasons 
     }
   }
 });
+
+test("limits: time waiting for the integration lease is not step time", () => {
+  const files = { "5/attempts.json": okAttempts, "5/impl.json": { attempts: [{ startedAt: at(700) }] } };
+  const wait = (fromSec, toSec) => ({ from: new Date(at(fromSec)).toISOString(), to: new Date(at(toSec)).toISOString(), ms: (fromSec - toSec) * 1000 });
+  assert.equal(limEval(limFixture({ files })).open, true); // 700s > 600s
+  const waited = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 200_000, waits: [wait(650, 450)] } } });
+  assert.equal(limEval(waited).open, false); // 500s of step time
+  const more = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 50_000, waits: [wait(650, 600)] } } });
+  assert.equal(limEval(more).open, true); // 650s of step time
+  // a wait before the attempt started (e.g. in prepare) does not stretch the attempt's allowance
+  const before = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 300_000, waits: [wait(1100, 800)] } } });
+  assert.equal(limEval(before).open, true);
+  // only the overlapping part counts
+  const partial = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 300_000, waits: [wait(900, 610)] } } });
+  assert.equal(limEval(partial).open, true); // 90s overlap -> 610s of step time
+  const partial2 = limFixture({ files: { ...files, "5/lease-wait.json": { waitedMs: 300_000, waits: [wait(900, 550)] } } });
+  assert.equal(limEval(partial2).open, false); // 150s overlap -> 550s
+});

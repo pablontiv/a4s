@@ -67,7 +67,21 @@ export async function waitForCi({ sha, runs, tip, contains, now, sleep, deadline
 /** Final decision of the step for the classification: revert only on red. */
 export const shouldRevert = (c) => c.state === "red";
 
+/**
+ * A revert is allowed only for the run's own commit (its `Factory-Run` trailer) and only while it is the tip of the trunk,
+ * both locally (`head`) and on origin (`tip`, read live from the remote). When the remote tip cannot be read
+ * (`remoteError`), the check fails closed. Returns null when allowed, else the reason (the step fails as `infra`).
+ */
+export function revertBlocker({ sha, head, tip, message, run, remoteError = "" }) {
+  if (!sha) return "no merged commit to revert";
+  if (!new RegExp(`^Factory-Run: ${String(run).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m").test(String(message ?? ""))) return `${sha} is not a commit of run ${run}`;
+  if (remoteError || !tip) return `cannot verify the current tip of the remote trunk (${remoteError || "no answer"}): not reverting`;
+  if (head !== sha || tip !== sha) return `${sha} is no longer the tip of the trunk (local ${head || "?"}, origin ${tip || "?"}): not reverting`;
+  return null;
+}
+
 // CLI: ci.mjs classify --workflows CI [--timed-out] < runs.json   -> prints JSON
+//      ci.mjs infra --file F --run R --message M     step-failure.json for an infra failure of the ci step
 //      ci.mjs failure --file F --run R --conclusion C --workflow W --url U --sha S
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await (async () => {
   const [cmd, ...rest] = process.argv.slice(2);
@@ -90,6 +104,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await
       contains: (sha, tip) => git("merge-base", "--is-ancestor", sha, tip).status === 0,
     });
     console.log(JSON.stringify(r));
+  } else if (cmd === "infra") {
+    writeFileSync(o.file, JSON.stringify({ run: o.run, step: "ci", findings: [`infra: ${o.message}`] }) + "\n");
+  } else if (cmd === "revert-check") {
+    // ci.mjs revert-check --primary P --sha S --base B --run R -> prints the reason (exit 1) or nothing (exit 0)
+    const g = (...a) => spawnSync("git", ["-C", o.primary, ...a], { encoding: "utf8" });
+    // the remote tip is read live (never the possibly stale origin/<base> tracking ref); no answer = fail closed
+    const ls = g("ls-remote", "--exit-code", "origin", `refs/heads/${o.base}`);
+    const tip = ls.status === 0 ? (ls.stdout.split(/\s/)[0] ?? "").trim() : "";
+    const remoteError = ls.status === 0 ? "" : `git ls-remote origin exited ${ls.status}: ${(ls.stderr || "").trim().split("\n").at(-1) || "no output"}`;
+    const why = revertBlocker({ sha: o.sha, head: g("rev-parse", "HEAD").stdout.trim(), tip, remoteError,
+      message: g("log", "-1", "--format=%B", o.sha).stdout, run: o.run });
+    if (why) { console.log(why); process.exit(1); }
   } else if (cmd === "failure") {
     writeFileSync(o.file, JSON.stringify({ run: o.run, step: "ci", findings: [`ci: ${o.workflow} was '${o.conclusion}' for ${o.sha}${o.url ? ` (${o.url})` : ""}`] }) + "\n");
   } else { console.error("ci: unknown command"); process.exit(2); }

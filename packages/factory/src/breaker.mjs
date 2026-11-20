@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { STATION_TIMEOUT_SEC, resolveT3, validateState } from "./lib.mjs";
+import { waitedWithin } from "./lease.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const VERSION = 1;
@@ -102,8 +103,10 @@ export const CONDITIONS = {
         const bad_ = s.outcome === "timeout" || s.outcome === "stuck";
         // an escalation that later passes in the same step does not keep the breaker open
         const recovered = bad_ && stepRecovered(steps, s.issue, s.step, at);
+        // time spent waiting for the integration lease ($ISSUE_STATE/lease-wait.json) is not step time
+        const waited = Number.isFinite(s.waitedMs) && s.waitedMs > 0 ? s.waitedMs : 0;
         if (bad_ && !recovered) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} ended with outcome ${s.outcome}${s.outcome === "timeout" ? ` (safety cap ${s.timeoutSec}s)` : " (no activity)"}`, since: iso(at) });
-        else if (s.outcome === undefined && now - at > s.timeoutSec * 1000) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its safety cap of ${s.timeoutSec}s`, since: iso(at + s.timeoutSec * 1000) });
+        else if (s.outcome === undefined && now - at - waited > s.timeoutSec * 1000) out.push({ kind: "limits", issue: s.issue, step: s.step, attemptAt: at, detail: `issue #${s.issue} step ${s.step}: attempt started ${iso(at)} still running past its safety cap of ${s.timeoutSec}s`, since: iso(at + waited + s.timeoutSec * 1000) });
       }
       for (const p of Array.isArray(l.problems) ? l.problems : []) {
         if (live(p?.at)) out.push({ kind: "limits", detail: `issue #${p?.issue} step ${p?.step}: ${p?.error}`, since: iso(p?.at ?? now) });
@@ -168,7 +171,7 @@ export function cycleTimeouts(text) {
 
 /**
  * Snapshot `limits` from the station files in `state` and the cycle's configured timeouts (never a fixed value):
- *   {maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?}], problems: [{issue, step, error, at}]}
+ *   {maxRuns, runs: [{issue, runs, at}], steps: [{issue, step, startedAt, timeoutSec, outcome?, waitedMs}], problems: [{issue, step, error, at}]}
  * Only `<line>.json` counts: files archived by admission (`impl.json.<ts>`) are history, never counted twice.
  * Timeout of an attempt: its own recorded `timeoutSec`, else the cycle's `--timeout-sec` for the line, else the station default.
  * When the line's steps have different timeouts and the attempt did not record its own, the step is ambiguous: the largest
@@ -222,7 +225,7 @@ export function collectLimits({ state, cycleFile = join(HERE, "..", "dags", "cyc
         if (at.outcome === undefined && set.length > 1 && now - started > set[0] * 1000 && now - started <= timeoutSec * 1000) {
           problem(issue, line, `attempt started ${iso(started)} is in flight past ${set[0]}s but the cycle configures several timeouts for this line (${set.join("/")}s) and the attempt did not record which applies`, started);
         }
-        limits.steps.push({ issue, step: line, startedAt: iso(started), timeoutSec, outcome: at.outcome });
+        limits.steps.push({ issue, step: line, startedAt: iso(started), timeoutSec, outcome: at.outcome, waitedMs: waitedWithin(dir, started, now) });
       }
     }
   }

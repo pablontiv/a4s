@@ -88,3 +88,17 @@ test("flow: CI cancelled + Lint unregistered on A, B green on both -> success vi
   });
   assert.equal(r.state, "success"); assert.equal(shouldRevert(r), false);
 });
+
+import { revertBlocker } from "../src/ci.mjs";
+test("revertBlocker: only the run's own commit, only while it is the tip", () => {
+  const ok = { sha: "abc", head: "abc", tip: "abc", message: "t (#1)\n\nFactory-Run: run-1\n", run: "run-1" };
+  assert.equal(revertBlocker(ok), null);
+  assert.match(revertBlocker({ ...ok, tip: "def" }), /no longer the tip/);
+  assert.match(revertBlocker({ ...ok, head: "def" }), /no longer the tip/);
+  assert.match(revertBlocker({ ...ok, run: "run-2" }), /not a commit of run run-2/);
+  assert.match(revertBlocker({ ...ok, run: "run-." }), /not a commit of run/);
+  assert.match(revertBlocker({ ...ok, sha: "" }), /no merged commit/);
+  // the remote tip cannot be read: fail closed, never trust a stale tracking ref
+  assert.match(revertBlocker({ ...ok, remoteError: "git ls-remote origin exited 128: fatal" }), /cannot verify the current tip of the remote trunk/);
+  assert.match(revertBlocker({ ...ok, tip: "" }), /cannot verify/);
+});
