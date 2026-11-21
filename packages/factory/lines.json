@@ -84,6 +84,16 @@
           "pi-web-search"
         ]
       }
+    },
+    "supervisor": {
+      "provider": "pi-supervisor",
+      "model": "anthropic/claude-opus-5-5",
+      "thinking": "high",
+      "instance": {
+        "displayName": "Factory \u00b7 supervisor",
+        "accentColor": "#ef4444",
+        "prompt": "prompts/supervisor.md"
+      }
     }
   }
 }

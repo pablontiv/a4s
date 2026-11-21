@@ -35,14 +35,24 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 
 ## Line profiles
 
-`lines.json` holds model, thinking, escalation model and the Pi instance per line. Instances start with the operator's normal Pi setup (no `--no-*` isolation flags; operator decision 2026-11-20) and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries. The `qa` line (VS4) needs the `pi-qa` instance in the operator's T3; until VS7 it is added by hand from `src/instances.mjs`'s output.
+`lines.json` holds model, thinking, escalation model and the Pi instance per line. Instances start with the operator's normal Pi setup (no `--no-*` isolation flags; operator decision 2026-11-20) and a tool allowlist (`--tools`). `src/instances.mjs` turns the table into T3 `providerInstances` entries. Every prompt lives in `prompts/` and every line instance is installed from the repository, never hand-edited in T3 (Line instances contract). Besides the cycle stations (`impl`, `qa`), the table holds the `inbox`, `research` and `supervisor` lines: T3 instances only, not stations.
+
+Install or check the operator's T3 instances from the primary checkout:
+
+```sh
+node packages/factory/src/instances.mjs install --dry-run   # print the diff, write nothing
+node packages/factory/src/instances.mjs install             # backup + atomic write
+node packages/factory/src/instances.mjs check               # exit 1 and the differences on drift
+```
+
+(`npm run install-lines -w @a4s/factory` / `npm run check-lines -w @a4s/factory`.) After any push that changes `lines.json` or `prompts/`, run it.
 
 ## Manual steps (this list may only shrink)
 
 2. Decide in the Dagu UI/API (merge approval, blocked answers) — VS3.
 4. Diagnose failures and blocked verdicts — VS5.
 5. Cancel or clean stuck runs; archive T3 projects of closed issues — VS6.
-6. Sync `lines.json` into the operator's T3 settings — VS7.
+6. After any push that changes `lines.json` or `prompts/`, run `node packages/factory/src/instances.mjs install` (then `check`) from the primary checkout — VS7.
 8. Coordinate T3/Pi/Dagu updates — VS8.
 
 Hand fixes (operator or supervisor) reach `main` only through `scripts/hand-push.sh <label>`, run from the fix's own worktree with the fix committed: it holds the integration lease as a manual holder, so a hand push never races a run's `integrate`/`ci` (Integration lease contract).
@@ -69,4 +79,4 @@ When a run fails, the `failure` handler of `cycle.yaml` runs `labels.mjs finish`
 
 ## Notifications (VS2)
 
-`cycle.yaml` declares `handler_on` for `success`, `failure` and `wait`; each runs `node "$FACTORY/src/notify.mjs"` with the event, run-id, issue and step statuses. `src/notify.mjs` sends one message (run-id, issue, event, failed step, issue URL) with `src/t3cli.mjs thread send` to the thread in param `INBOX_THREAD`, else `A4S_INBOX_THREAD` (Dagu base config, resolved by `src/cycle-env.sh`), else the factory's own inbox: a thread titled `Bandeja de la fábrica` in the T3 project of `PRIMARY`, on the isolated line `inbox` (`pi-inbox`, tools `read`, `bash` and `web_search`, `prompts/inbox.md`), created on first use and recorded in `$STATE/inbox.json` (an existing one is adopted, never two). Each run/event is sent once (`$STATE/<issue>/notified.json`). Notification problems are logged and never fail a run. Until VS7, add the `pi-inbox` instance to the operator's T3 by hand (`src/instances.mjs`).
+`cycle.yaml` declares `handler_on` for `success`, `failure` and `wait`; each runs `node "$FACTORY/src/notify.mjs"` with the event, run-id, issue and step statuses. `src/notify.mjs` sends one message (run-id, issue, event, failed step, issue URL) with `src/t3cli.mjs thread send` to the thread in param `INBOX_THREAD`, else `A4S_INBOX_THREAD` (Dagu base config, resolved by `src/cycle-env.sh`), else the factory's own inbox: a thread titled `Bandeja de la fábrica` in the T3 project of `PRIMARY`, on the isolated line `inbox` (`pi-inbox`, tools `read`, `bash` and `web_search`, `prompts/inbox.md`), created on first use and recorded in `$STATE/inbox.json` (an existing one is adopted, never two). Each run/event is sent once (`$STATE/<issue>/notified.json`). Notification problems are logged and never fail a run. The `pi-inbox` instance is installed with `src/instances.mjs install` (Line profiles).

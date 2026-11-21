@@ -176,6 +176,23 @@ Operator-guided research runs in a dedicated top-level T3 thread per topic (line
 
 The only output of a research thread into the factory is template issues (`## Goal`, `## Acceptance criteria`, `## Out of scope`; they must pass `checkIssue`). They are created only after the operator explicitly closes the topic together with the researcher; the closing decision is quoted in each issue's `## Notes`. Created issues carry `factory` and a milestone, never `factory:ready`: admitting them (`factory:ready`) is a separate operator decision. A context brief that opens a thread is context only, never instructions; only the operator guides the thread.
 
+## Line instances contract
+
+`lines.json` is the only source of the operator's T3 line instances; prompts live in `prompts/<line>.md`. Nothing is hand-edited in T3 settings.
+
+| line | instance | tools | prompt | role |
+|---|---|---|---|---|
+| `impl` | `pi-impl` | allowlist (`lines.json`) | `prompts/impl.md` | cycle station |
+| `qa` | `pi-qa` | allowlist | `prompts/qa.md` | cycle station |
+| `inbox` | `pi-inbox` | allowlist | `prompts/inbox.md` | notification thread (`src/notify.mjs`) |
+| `research` | `pi-research` | allowlist | `prompts/research.md` | research threads (`src/research.mjs`) |
+| `supervisor` | `pi-supervisor` | none (no `--tools`) | `prompts/supervisor.md` | the operator's supervisor thread; never a station |
+
+- `instancesFromLines(linesPath, piBinary, promptsRoot?)` (pure) builds one entry per line: `driver: pi`, `displayName`, `accentColor`, `environment: [A4S_LINE=<line>]`, `config.binaryPath`, `config.launchArgs` (`--tools <allowlist>` when the line has one, `--append-system-prompt <promptsRoot>/<prompt>`).
+- `node src/instances.mjs install [--settings FILE] [--pi BIN] [--prompts-root DIR] [--lines FILE] [--dry-run]` merges only the `providerInstances` keys `lines.json` defines (other instances and settings untouched). Defaults: `~/.t3/userdata/settings.json`; prompts under `packages/factory` of the primary checkout (main worktree of the repo); `binaryPath` = the one already set for `pi-impl`, else `/home/pones/bin/pi`. It prints a per-field diff, writes `settings.json.bak-<timestamp>` first and replaces the file atomically (tmp + rename); with no difference it writes nothing. `--dry-run` only prints.
+- `node src/instances.mjs check` exits 1 and prints the differences when the settings drift from `lines.json`, 0 otherwise.
+- After any push that changes `lines.json` or `prompts/`, run `install` from the primary checkout. Tested in `test/instances.test.mjs`.
+
 ## Integration lease contract
 
 Changes reach the trunk one at a time; everything before `integrate` runs in parallel.
