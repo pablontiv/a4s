@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // Integration lease: at any moment only one factory run integrates, waits for CI and (if red) reverts.
 //   lease.mjs acquire --state S --run R [--issue-state D] [--dag NAME] [--timeout-min N] [--poll-ms N]
+//   lease.mjs acquire --state S --run hand-<label> --manual [--pid N]   (a hand push: held while that pid lives)
 //   lease.mjs release --state S --run R        (only the owner releases; anything else is a logged no-op, exit 0)
 //   lease.mjs holder  --state S                (prints the holder record as JSON, or nothing when free)
 //
 // The lease lives in the directory `$STATE/integrate.lease/` as a sequence of generations:
 //   g<N>           = {run, dag, takenAt}   the owner of generation N (written to a private file, then hard-linked:
-//                                          exactly one contender creates a given N; EEXIST = someone else did)
+//                                          exactly one contender creates a given N; EEXIST = someone else did);
+//                                          a manual holder (hand push) is {run, dag:"", manual, pid, host, pidStart?,
+//                                          takenAt} and is alive while that pid is alive on that host
 //   g<N>.released  = {by, reason, at}      generation N is over (hard-linked too: created once, never replaced)
 // The lease is held by the highest generation when it has no `.released` marker, else it is free.
 // Nothing is ever renamed or deleted to release or reclaim: a release (by the owner) or a reclaim (of a dead owner)
@@ -15,6 +18,7 @@
 // so a stale contender linking an old number always sees a higher one and backs off. Rules: CONTRACTS.md.
 import { spawnSync } from "node:child_process";
 import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -69,12 +73,12 @@ function collect(state, keep) {
 }
 
 /** Atomic take. {ok:true, owner} when this run holds it (also when it already did); {ok:false, owner} when another does. */
-export function takeLease(state, run, { now = Date.now(), dag = "" } = {}) {
+export function takeLease(state, run, { now = Date.now(), dag = "", extra = {} } = {}) {
   for (;;) {
     const c = current(state);
     if (c.gen > 0 && !c.released) return { ok: c.rec.run === run, owner: c.rec };
     const gen = c.gen + 1;
-    const rec = { run, dag, takenAt: new Date(now).toISOString() };
+    const rec = { run, dag, ...extra, takenAt: new Date(now).toISOString() };
     if (!createOnce(state, genFile(state, gen), rec)) continue; // another contender got this generation
     const after = current(state);
     if (after.gen !== gen) { rm(genFile(state, gen)); continue; } // a stale number: a newer generation exists
@@ -102,7 +106,7 @@ export function reclaimDead(state, isAlive, log = () => {}, { by = "", now = Dat
   const c = current(state);
   if (c.gen === 0 || c.released) return null;
   if (!c.rec.corrupt && isAlive(c.rec)) return null;
-  if (!createOnce(state, markFile(state, c.gen), { by, reason: c.rec.corrupt ? "corrupt record" : `owner run ${c.rec.run} is not queued or running`, at: new Date(now).toISOString() })) return null;
+  if (!createOnce(state, markFile(state, c.gen), { by, reason: c.rec.corrupt ? "corrupt record" : c.rec.manual ? `manual owner ${c.rec.run} (pid ${c.rec.pid}) is not alive` : `owner run ${c.rec.run} is not queued or running`, at: new Date(now).toISOString() })) return null;
   log(c.rec.corrupt ? `reclaimed a corrupt integration lease (generation ${c.gen})` : `reclaimed the integration lease of dead run ${c.rec.run} (taken ${c.rec.takenAt})`);
   return c.rec;
 }
@@ -163,13 +167,13 @@ export function waitedMs(issueState) {
  * No deadline by default: a dead holder is reclaimed, a live one ends within its own step limits, so contention alone
  * never fails the step. A wait is recorded in `issueState` from its start (refreshed on every poll) and logged.
  */
-export async function acquire({ state, run, dag = "", issueState, isAlive, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, log = () => {}, pollMs = 2000, timeoutMs = Infinity }) {
+export async function acquire({ state, run, dag = "", extra = {}, issueState, isAlive, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now, log = () => {}, pollMs = 2000, timeoutMs = Infinity }) {
   const start = now();
   let waiting = false;
   const note = (open) => { if (issueState) noteWait(issueState, start, now(), { open }); };
   try {
     for (;;) {
-      const t = takeLease(state, run, { now: now(), dag });
+      const t = takeLease(state, run, { now: now(), dag, extra });
       if (t.ok) break;
       if (reclaimDead(state, isAlive, log, { by: run, now: now() })) continue;
       if (!waiting) { waiting = true; log(`waiting for the integration lease held by ${t.owner?.run ?? "?"} (since ${t.owner?.takenAt ?? "?"})`); }
@@ -186,6 +190,27 @@ export async function acquire({ state, run, dag = "", issueState, isAlive, sleep
 }
 
 const DEAD = /^(Succeeded|Failed|Cancelled|Canceled|Aborted|Rejected|Partially Succeeded)\b/i;
+/** Start time of a pid (field 22 of /proc/<pid>/stat), or null when unreadable: guards against pid reuse. */
+export function pidStartTime(pid, { read = (f) => readFileSync(f, "utf8") } = {}) {
+  try { const s = read(`/proc/${pid}/stat`); return s.slice(s.lastIndexOf(")") + 2).split(" ")[19] ?? null; } catch { return null; }
+}
+
+/**
+ * Whether a manual holder is alive: its pid exists on this host (and, when recorded, started at the same time).
+ * A holder on another host is always alive (never steal across hosts).
+ */
+export function pidIsAlive(owner, { kill = (p, sig) => process.kill(p, sig), startOf = pidStartTime, host = hostname() } = {}) {
+  if (owner.host && owner.host !== host) return true;
+  const pid = Number(owner.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { kill(pid, 0); } catch (e) { if (e.code !== "EPERM") return false; }
+  if (owner.pidStart != null) { const now = startOf(pid); if (now != null && String(now) !== String(owner.pidStart)) return false; }
+  return true;
+}
+
+/** Liveness of any holder: a manual holder by its pid, a factory run by Dagu. */
+export const holderIsAlive = (owner, opts = {}) => (owner.manual ? pidIsAlive(owner, opts) : daguIsAlive(owner, opts));
+
 /** Whether a run is still queued or running in Dagu: `dagu status --run-id R DAG`. Unknown answers count as alive (never steal). */
 export function daguIsAlive(owner, { dagu = process.env.DAGU_EXECUTABLE || "dagu", env = process.env, spawn = spawnSync } = {}) {
   // the same store as the run's own Dagu (it exports DAGU_HOME and DAGU_CONFIG to its steps): never "not found" by looking elsewhere
@@ -203,7 +228,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const { values: a } = parseArgs({ args: rest, options: {
       state: { type: "string" }, run: { type: "string" }, "issue-state": { type: "string" }, dag: { type: "string" },
-      "timeout-min": { type: "string" }, "poll-ms": { type: "string" },
+      "timeout-min": { type: "string" }, "poll-ms": { type: "string" }, manual: { type: "boolean" }, pid: { type: "string" },
     } });
     const state = a.state || process.env.STATE || process.env.A4S_STATE;
     const run = a.run || process.env.DAG_RUN_ID;
@@ -215,7 +240,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       if (h) console.log(JSON.stringify(h));
     } else if (!run) throw new Error("--run is required");
     else if (cmd === "acquire") {
-      await acquire({ state, run, dag, issueState: a["issue-state"], isAlive: (o) => daguIsAlive(o), log,
+      let extra = {};
+      if (a.manual) {
+        const pid = Number(a.pid || process.ppid);
+        if (!Number.isInteger(pid) || pid <= 0) throw new Error(`--pid must be a positive integer (got ${a.pid})`);
+        const pidStart = pidStartTime(pid);
+        extra = { manual: true, pid, host: hostname(), ...(pidStart != null ? { pidStart } : {}) };
+      }
+      await acquire({ state, run, dag: a.manual ? "" : dag, extra, issueState: a["issue-state"], isAlive: (o) => holderIsAlive(o), log,
         pollMs: Number(a["poll-ms"]) || Number(process.env.LEASE_POLL_MS) || 2000,
         timeoutMs: Number(a["timeout-min"]) > 0 ? Number(a["timeout-min"]) * 60_000 : Infinity });
     } else if (cmd === "release") {

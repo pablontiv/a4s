@@ -45,6 +45,8 @@ Every slice adds its own check to the selftest. A slice is built with the alread
 6. Sync `lines.json` into the operator's T3 settings — VS7.
 8. Coordinate T3/Pi/Dagu updates — VS8.
 
+Hand fixes (operator or supervisor) reach `main` only through `scripts/hand-push.sh <label>`, run from the fix's own worktree with the fix committed: it holds the integration lease as a manual holder, so a hand push never races a run's `integrate`/`ci` (Integration lease contract).
+
 ## Run it
 
 ```sh
