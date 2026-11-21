@@ -223,8 +223,7 @@ steps:
       fi
       test -n "$(git status --porcelain)" || { echo "no changes to validate" >&2; exit 1; }
       git add -A -n > "$ISSUE_STATE/changes"
-      # factory changes need a selftest receipt for exactly this code (checked once, after every edit of the run)
-      node "$FACTORY/src/receipt.mjs" check "$WT" "$ISSUE_STATE/step-failure.json" "$DAG_RUN_ID"
+      # the gate runs the stub selftest only; the full selftest (real models) never runs inside a run (daily on main)
       bash -euo pipefail -c "$GATE"
 
   # Exclusive integration window (src/lease.mjs): wait here, as a step of its own, until this run holds the
@@ -270,16 +269,7 @@ steps:
           echo "rebase-conflict: $files" >&2
           exit 1
         fi
-        # validation always re-runs on the rebased tree: the selftest receipt check (on the issue's diff against the new
-        # trunk, so the commit is folded back softly while it runs) and then the gate
-        git reset -q --soft "$NEWBASE"
-        rcpt=0
-        node "$FACTORY/src/receipt.mjs" check "$WT" "$ISSUE_STATE/step-failure.json" "$DAG_RUN_ID" || rcpt=$?
-        git commit -q -C "$PRE"
-        if [ "$rcpt" != 0 ]; then
-          sed -i 's/"step":"validate"/"step":"integrate"/' "$ISSUE_STATE/step-failure.json"
-          exit 1
-        fi
+        # validation always re-runs on the rebased tree (the gate: stub selftest only, never the full selftest)
         bash -euo pipefail -c "$GATE"
         # re-QA only when the commits it was rebased onto changed files the issue touches
         # every path touched by any commit of each side (not the net diff: a change later restored still counts);

@@ -11,8 +11,8 @@ This package is the seed (VS0, #1010): the minimum that closes the delivery cycl
 1. **prepare** — worktree `.workspace/worktrees/issue-<n>` on branch `factory/issue-<n>` from `main`, registered as a T3 project; a reused worktree keeps an earlier attempt's uncommitted work on the current trunk. The brief and title come from the GitHub issue (or `BRIEF_FILE`).
 2. **implement** — `src/station.mjs` runs the worker as a T3 thread on the isolated `impl` line. The worker **does not commit**. Exit codes: `0` pass/blocked, `10` worker fail or timeout (retried once on the escalation model), `30` infrastructure, `40` malformed verdict (retried once).
 3. **require_pass** — anything but `pass` stops the run (blocked is manual until VS3/VS5).
-4. **qa** — an independent QA line (`qa`, provider `pi-qa`, another model family, tools `read`, `bash`, `edit`, `write` and `web_search`, `prompts/qa.md`) checks every acceptance criterion against the uncommitted worktree; its brief is the issue brief plus `git status --short` and `git diff`. QA has full rights in the worktree (it may `npm ci`, run the gate and the selftest) but the candidate must be identical before and after QA: tracked files (content and mode) and non-ignored untracked files; ignored paths are not compared. `station.mjs` enforces it and a difference ends `violation`. On a QA `fail` the findings are sent once to the implementation thread (`station.mjs --continue`), its new verdict must be `pass`, and QA runs once more; a second `fail` fails the run.
-5. **validate** — the uncommitted worktree is validated with `scripts/factory-gate.sh`: the repository gate on CI's Node major plus the selftest with the service's Dagu.
+4. **qa** — an independent QA line (`qa`, provider `pi-qa`, another model family, tools `read`, `bash`, `edit`, `write` and `web_search`, `prompts/qa.md`) checks every acceptance criterion against the uncommitted worktree; its brief is the issue brief plus `git status --short` and `git diff`. QA has full rights in the worktree (it may `npm ci`, run unit tests and the stub selftest; never the gate or the full selftest) but the candidate must be identical before and after QA: tracked files (content and mode) and non-ignored untracked files; ignored paths are not compared. `station.mjs` enforces it and a difference ends `violation`. On a QA `fail` the findings are sent once to the implementation thread (`station.mjs --continue`), its new verdict must be `pass`, and QA runs once more; a second `fail` fails the run.
+5. **validate** — the uncommitted worktree is validated with `scripts/factory-gate.sh`: the repository gate on CI's Node major plus the stub selftest with the service's Dagu. The full selftest (real models) never runs inside a run; it runs once a day on main (scheduled selftest).
 6. **integrate** — the single commit for the issue (`<title> (#n)` + `Factory-Run:` trailer); if the trunk moved, rebase and validate again; fast-forward `main`, push.
 7. **ci** — wait for CI on the pushed commit; red, missing or timed out ⇒ revert on `main`, comment the issue, fail the run.
 8. **close** — close the issue, remove the worktree and branch.
@@ -25,9 +25,9 @@ Interpretation stays with LLMs (the worker's verdict; later the QA line, the ver
 
 | Pattern question | Answer |
 |---|---|
-| Unit of work | One A4S issue. Closed when its commit is on `main`, the gate and selftest pass on it, the issue is closed and its worktree removed. |
+| Unit of work | One A4S issue. Closed when its commit is on `main`, the gate (with the stub selftest) passes on it, the issue is closed and its worktree removed. |
 | Seed | This package (VS0). |
-| Binary test | `npm run selftest`: isolated T3 and Dagu run `cycle.yaml` **from the candidate checkout** on a fixture repo; a fixture issue must close the cycle. |
+| Binary test | `npm run selftest`: isolated T3 and Dagu run `cycle.yaml` **from the checkout** on a fixture repo; a fixture issue must close the cycle. Runs once a day on main only (scheduled selftest), never inside a factory run. |
 | Activation | Dagu reads `cycle.yaml`, the station and the prompts from the trunk checkout; the next run uses merged code. |
 | In-flight state | Dagu run data, the T3 database and `$STATE/<issue>/<line>.json` (station attempts), all outside the code. |
 
@@ -52,7 +52,7 @@ Hand fixes (operator or supervisor) reach `main` only through `scripts/hand-push
 ```sh
 npm test --workspace @a4s/factory        # unit tests
 npm run selftest:stub                     # push/ci/close against a bare remote and a gh stub, no model (~2 min; runs in CI)
-npm run selftest                          # binary proof (real model calls, ~2 min)
+npm run selftest                          # binary proof (real model calls, ~10 min; runs once a day on main only, never inside a factory run)
 ```
 
 Selftest knobs: `SELFTEST_MODEL` (default `anthropic/claude-haiku-5-5`), `SELFTEST_KEEP=1`, `PI_BIN`, `DAGU_BIN`, `T3_BIN`, `T3_VERSIONS_DIR`.

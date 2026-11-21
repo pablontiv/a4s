@@ -10,7 +10,6 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkVerdict } from "../src/lib.mjs";
-import { beginReceipt, endReceipt } from "../src/receipt.mjs";
 import { instancesFromLines } from "../src/instances.mjs";
 
 const FACTORY = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,16 +40,10 @@ function latestT3() {
   return join(VERSIONS, v, "t3");
 }
 
-// SELFTEST_NO_RECEIPT=1: read-only run (e.g. QA) that never touches the receipt.
-const RECEIPT = process.env.SELFTEST_NO_RECEIPT !== "1";
-const startedAt = new Date().toISOString();
 const procs = [];
 let ok = false;
 let root = "";
-let startHash = null;
 try {
-  // the stale receipt goes first, before any other initialization
-  startHash = beginReceipt({ dir: FACTORY, enabled: RECEIPT });
   root = mkdtempSync(join(tmpdir(), "factory-selftest-"));
   // 1. fixture repository (trunk = main) and fixture brief
   const repo = join(root, "repo"); mkdirSync(repo);
@@ -246,26 +239,6 @@ try {
     qa_tracked_edit_is_violation: r6.step("qa") === "failed" && r6.step("integrate") !== "succeeded" &&
       qa6.length === 1 && qa6[0].outcome === "violation" && (qa6[0].violations ?? []).some((i) => i.startsWith("calc.mjs")),
   });
-  // 5b. receipt check of the real `validate` step: a factory change without receipt fails with the finding and the gate never runs
-  {
-    const cyc = readFileSync(join(FACTORY, "dags", "cycle.yaml"), "utf8");
-    const m = /^  - id: validate\n[\s\S]*?^    run: \|\n([\s\S]*?)(?=^\S|^  # |^  - id:)/m.exec(cyc);
-    const validateBody = (m?.[1] ?? "").split("\n").map((l) => l.replace(/^ {6}/, "")).join("\n");
-    const prim = join(root, "receipt-primary"); mkdirSync(join(prim, "packages", "factory"), { recursive: true });
-    writeFileSync(join(prim, "README.md"), "x\n"); writeFileSync(join(prim, ".gitignore"), ".workspace/\n");
-    sh("git", ["init", "-q", "-b", "main"], { cwd: prim }); sh("git", ["add", "-A"], { cwd: prim });
-    sh("git", ["-c", "user.email=selftest@a4s", "-c", "user.name=selftest", "commit", "-qm", "init"], { cwd: prim });
-    const wtR = join(prim, ".workspace", "worktrees", "issue-rcpt");
-    sh("git", ["worktree", "add", "-q", "-b", "factory/issue-rcpt", wtR, "main"], { cwd: prim });
-    mkdirSync(join(wtR, "packages", "factory"), { recursive: true });
-    writeFileSync(join(wtR, "packages", "factory", "x.mjs"), "1\n");
-    mkdirSync(join(root, "state", "rcpt"), { recursive: true });
-    const marker = join(root, "receipt-gate-ran");
-    const rr = spawnSync("bash", ["-c", validateBody], { encoding: "utf8", env: { PATH: process.env.PATH, HOME: process.env.HOME,
-      PRIMARY: prim, FACTORY, T3_HOME: join(root, "t3"), STATE: join(root, "state"), ISSUE: "rcpt", BASE: "main", DAG_RUN_ID: "selftest-rcpt", GATE: `touch ${marker}` } });
-    const finding = (() => { try { return JSON.parse(readFileSync(join(root, "state", "rcpt", "step-failure.json"), "utf8")).findings[0]; } catch { return ""; } })();
-    Object.assign(checks, { validate_requires_receipt_for_factory_changes: validateBody.length > 0 && rr.status !== 0 && !existsSync(marker) && /^selftest not run on this code: receipt missing/.test(finding) });
-  }
   // 5b'. re-QA after a rebase (#1091): the real `integrate` step on a fixture; two issues touching the same file integrate one
   // after the other and the second is re-QAed (real QA line, cheap model); a pair with disjoint files is re-validated but not re-QAed
   {
@@ -470,9 +443,5 @@ try {
   for (const p of procs) { try { process.kill(-p.pid, "SIGTERM"); } catch { try { p.kill("SIGTERM"); } catch {} } }
   if (ok && !KEEP && root) rmSync(root, { recursive: true, force: true }); else if (root) log("kept", root);
 }
-try {
-  const r = endReceipt({ dir: FACTORY, enabled: RECEIPT, passed: ok, startHash, startedAt, model: MODEL });
-  if (RECEIPT && ok && !r.written) { log(`no receipt: ${r.reason}`); ok = false; }
-} catch (e) { log("receipt error:", e.message); ok = false; }
 console.log(ok ? "SELFTEST PASS" : "SELFTEST FAIL");
 process.exit(ok ? 0 : 1);

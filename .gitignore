@@ -67,4 +67,3 @@ packages/synagent/core/adapters/claude/tsconfig.json
 packages/*/adapters/*/tsconfig.json
 !packages/context-expert/adapters/pi/tsconfig.json
 packages/*/adapters/*/.claude-plugin/types/
-packages/factory/.selftest-receipt.json

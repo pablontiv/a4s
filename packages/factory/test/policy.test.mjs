@@ -80,7 +80,7 @@ test("lines.json: every line lists web_search and requires pi-web-search; QA has
 
 test("qa prompt and contracts state the permissions principle", () => {
   const qa = readFileSync(join(ROOT, "prompts", "qa.md"), "utf8");
-  for (const s of ["npm ci", "scripts/factory-gate.sh", "SELFTEST_NO_RECEIPT=1 npm run selftest", "/tmp", "violation"]) assert.ok(qa.includes(s), s);
+  for (const s of ["npm ci", "selftest:stub", "Never run `scripts/factory-gate.sh` or `npm run selftest`", "daily selftest (check <name>)", "/tmp", "violation"]) assert.ok(qa.includes(s), s);
   const c = readFileSync(join(ROOT, "CONTRACTS.md"), "utf8");
   for (const s of ["Permissions contract", "integrate", "shared Git state", "QA does not change the candidate", "no secrets"]) assert.ok(c.includes(s), s);
   assert.match(readFileSync(join(ROOT, "..", "..", "AGENTS.md"), "utf8"), /permisos máximos/);

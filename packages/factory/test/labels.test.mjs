@@ -97,12 +97,12 @@ test("a failed step outside the stations (validate) is a retryable fail", () => 
   assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "r", steps: "implement=succeeded,validate=failed" }).to, "ready");
 });
 
-test("a validate receipt finding is carried to the retry brief", () => {
+test("a validate step finding is carried to the retry brief", () => {
   const f = fixture();
   run(f);
-  writeFileSync(join(f.state, "9", "step-failure.json"), JSON.stringify({ run: "r", step: "validate", findings: ["selftest not run on this code: receipt stale"] }));
+  writeFileSync(join(f.state, "9", "step-failure.json"), JSON.stringify({ run: "r", step: "validate", findings: ["validate: gate failed in unit tests"] }));
   assert.equal(finishRun(f.src, { issue: 9, state: f.state, run: "r", steps: "implement=succeeded,validate=failed" }).to, "ready");
-  assert.match(carrySection(f.state, 9), /selftest not run on this code: receipt stale/);
+  assert.match(carrySection(f.state, 9), /validate: gate failed in unit tests/);
 });
 
 test("finish never touches an issue that is not running", () => {

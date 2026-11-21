@@ -16,6 +16,11 @@ test("gate derives the Node major from ci.yml", () => {
   assert.match(read(".github", "workflows", "ci.yml"), /^\s*node-version:\s*\d+/m);
 });
 
+test("gate runs only the stub selftest, never the full selftest (#1108)", () => {
+  assert.match(gate, /^npm run selftest:stub -w @a4s\/factory$/m);
+  assert.doesNotMatch(gate, /^[^#]*npm run selftest(\s|$)/m);
+});
+
 test("selftest Dagu binary defaults to dagu on PATH", () => {
   assert.match(selftest, /DAGU_BIN\s*=\s*process\.env\.FACTORY_DAGU_BIN\s*\?\?\s*"dagu"\s*;/);
 });

@@ -153,7 +153,7 @@ export async function run(o, env = process.env) {
   }
   const t0 = Date.now();
   let res;
-  try { res = runOnFreshMain({ primary: o.primary, base: o.base ?? "origin/main", cmd: o.cmd ?? "npm run selftest", env: { ...env, SELFTEST_NO_RECEIPT: "1" }, install: o.install ?? true }); }
+  try { res = runOnFreshMain({ primary: o.primary, base: o.base ?? "origin/main", cmd: o.cmd ?? "npm run selftest", env, install: o.install ?? true }); }
   catch (e) { res = { sha: "0".repeat(40), pass: false, output: `Error: ${e.message}` }; }
   const entry = { date: now.toISOString(), sha: res.sha, durationMs: Date.now() - t0, result: res.pass ? "pass" : "fail", versions };
   const checks = res.pass ? [] : failingChecks(res.output);

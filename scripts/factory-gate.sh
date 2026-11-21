@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate used by the factory cycle on the operator host: the repository gate plus the
-# binary selftest (the candidate must still close one full factory cycle).
+# stub selftest. The full selftest (real models) never runs here: only the scheduled daily selftest on main runs it.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 # The native Dagu tests match the official 2.26.0 release (also used by CI); prefer it when present.
@@ -16,4 +16,3 @@ fi
 node packages/factory/src/check-models.mjs
 node packages/factory/src/check-packages.mjs
 npm run selftest:stub -w @a4s/factory
-npm run selftest
