@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the scoped gate diffs against the merge base with GATE_BASE
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -33,7 +35,12 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dagu-2.26.0"
           tar -xzf "$archive" -C "$RUNNER_TEMP/dagu-2.26.0" dagu
           echo "DAGU_BIN=$RUNNER_TEMP/dagu-2.26.0/dagu" >> "$GITHUB_ENV"
-      - run: bash scripts/gate.sh
+      # test what is in use plus what changes (#1120): @a4s/factory always, other workspaces only when this push or
+      # pull request touches them (packages/factory/src/affected.mjs); an unknown base (new branch) tests all
+      - name: Gate (scoped)
+        run: bash scripts/gate.sh
+        env:
+          GATE_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
       # integration of the factory cycle (push, ci, close) against a bare remote and a gh stub; no model, no T3, no credentials
       - name: Factory stub selftest
         run: npm run selftest:stub

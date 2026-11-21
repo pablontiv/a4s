@@ -27,7 +27,7 @@ El gate completo, desde la raíz del worktree, es:
 bash scripts/gate.sh
 ```
 
-`npm test` y `npm run typecheck` recorren los workspaces declarados por los scripts raíz.
+`npm test` y `npm run typecheck` recorren los workspaces declarados por los scripts raíz. Con `GATE_BASE=<ref>` el gate se acota a lo que está en uso más lo que cambia: `@a4s/factory` siempre y los demás workspaces solo si el diff contra el merge base con `<ref>` los toca (los archivos raíz seleccionan todos); así lo usan `scripts/factory-gate.sh`, QA y CI (`packages/factory/src/affected.mjs`).
 
 ## Límites operativos
 
