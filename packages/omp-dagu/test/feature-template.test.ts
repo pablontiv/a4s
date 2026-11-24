@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -1857,7 +1857,7 @@ type RecoveryFixture = {
   close: () => Promise<void>;
 };
 
-async function recoveryFixture(): Promise<RecoveryFixture> {
+async function recoveryFixture(extraConfig = ""): Promise<RecoveryFixture> {
   const suffix = randomUUID();
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omp-dagu-triage-close-")));
   const home = join(root, "dagu-home");
@@ -1869,7 +1869,7 @@ async function recoveryFixture(): Promise<RecoveryFixture> {
   const port = address.port;
   await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
   const env = { ...process.env, DAGU_PARAMS_JSON: "{}", DAGU_HOME: home, DAGU_PORT: String(port), DAGU_COORDINATOR_ENABLED: "false" };
-  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n`);
+  writeFileSync(join(home, "config.yaml"), `host: 127.0.0.1\nport: ${port}\nauth:\n  mode: none\ncoordinator:\n  enabled: false\nscheduler:\n  port: 0\n${extraConfig}`);
   let serviceLog = "";
   const service = spawn("dagu", ["start-all", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: root, env, stdio: ["ignore", "pipe", "pipe"],
@@ -2913,4 +2913,271 @@ test("real Dagu retries a Failed feature predecessor to the same Waiting checkpo
     assert.equal(waiting.nodes.find(node => node.step.name === "implement")?.statusLabel, "waiting");
     assert.equal(await exited, 0);
   } finally { await fixture.close(); }
+});
+
+type GateEvent = { kind: "START" | "END"; run: string; at: number; pid: number };
+
+function gateExclusionFixture() {
+  const first = repository();
+  const firstRun = `gate-holder-${randomUUID()}`;
+  const secondRun = `gate-waiter-${randomUUID()}`;
+  const originalState = first.state;
+  first.state = join(dirname(first.state), firstRun);
+  renameSync(originalState, first.state);
+  const second: Repository = {
+    ...first, branch: "dagu/issue-190",
+    worktree: join(first.primary, ".workspace", "worktrees", "issue-190"),
+    state: join(dirname(first.state), secondRun),
+  };
+  git(first.primary, "worktree", "add", "-b", second.branch, second.worktree, "origin/main");
+  mkdirSync(second.state);
+  writeFileSync(join(second.state, "base"), git(second.worktree, "rev-parse", "HEAD"));
+  recordCandidate(second);
+  const body = join(first.root, "gate-body.py");
+  const eventsFile = join(first.root, "events.jsonl");
+  writeFileSync(body, `
+import json, os, pathlib, sys, time
+root = pathlib.Path(__file__).parent
+run = os.environ["RUN"]
+def event(kind):
+    row = {"kind": kind, "run": run, "at": time.time_ns(), "pid": os.getpid()}
+    fd = os.open(root / "events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.write(fd, (json.dumps(row) + "\\n").encode())
+    os.close(fd)
+event("START")
+release = root / ("release-" + run)
+deadline = time.monotonic() + 45
+while not release.exists():
+    if time.monotonic() > deadline:
+        sys.exit(90)
+    time.sleep(0.02)
+event("END")
+sys.exit(int(release.read_text()))
+`);
+  const gate = `exec python3 ${JSON.stringify(body)}`;
+  const events = (): GateEvent[] => existsSync(eventsFile)
+    ? readFileSync(eventsFile, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line) as GateEvent) : [];
+  const release = (run: string, code = 0) => writeFileSync(join(first.root, `release-${run}`), String(code));
+  const lock = join(first.primary, ".git", "dagu-feature", "gate.lock");
+  return { first, second, firstRun, secondRun, gate, events, release, lock };
+}
+
+async function gateUntil<T>(description: string, probe: () => T | undefined): Promise<T> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const result = probe();
+    if (result !== undefined) return result;
+    await delay(25);
+  }
+  throw new Error(`Timed out: ${description}`);
+}
+
+type GateProcess = {
+  child: ChildProcess;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  stderr: () => string;
+};
+
+function gateProcess(script: string, repo: Repository, run: string, gate: string): GateProcess {
+  let stderr = "";
+  const child = spawn("bash", ["-c", script], {
+    env: { ...featureScriptEnv(repo), RUN: run, GATE: gate },
+    cwd: repo.root, detached: true, stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.stderr.on("data", data => { stderr += data; });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  return { child, exited, stderr: () => stderr };
+}
+
+function assertGateWindows(events: GateEvent[], holder: string, waiter: string, killedAt?: number) {
+  const holderStart = events.find(event => event.run === holder && event.kind === "START")!;
+  const holderEnd = events.find(event => event.run === holder && event.kind === "END");
+  const waiterStart = events.find(event => event.run === waiter && event.kind === "START")!;
+  const waiterEnd = events.find(event => event.run === waiter && event.kind === "END")!;
+  assert.ok(holderStart && waiterStart && waiterEnd, JSON.stringify(events));
+  const end = holderEnd?.at ?? killedAt;
+  assert.ok(end !== undefined && waiterStart.at >= end, JSON.stringify(events));
+  assert.ok(waiterEnd.at >= waiterStart.at);
+}
+
+for (const outcome of ["success", "failure", "cancellation", "SIGKILL", "surviving descendant"] as const) {
+  test(`template gate bodies serialize and release after ${outcome}`, { timeout: 30_000 }, async () => {
+    const fixture = gateExclusionFixture();
+    const { first, second, firstRun, secondRun, gate, events, release, lock } = fixture;
+    const script = extractScript(definitions[0][1], "  - id: gate");
+    const holder = gateProcess(script, first, firstRun, gate);
+    let waiter: GateProcess | undefined;
+    try {
+      await gateUntil("holder body starts", () => events().find(event => event.run === firstRun));
+      const owner = JSON.parse(readFileSync(lock, "utf8")) as { run: string; pid: number };
+      assert.equal(owner.run, firstRun);
+      assert.equal(owner.pid, holder.child.pid);
+      waiter = gateProcess(script, second, secondRun, gate);
+      await gateUntil("waiter logs holder", () => waiter!.stderr().includes(`"run": "${firstRun}"`) && waiter!.stderr().includes("gate: waiting") ? true : undefined);
+      assert.match(waiter.stderr(), new RegExp(`"pid": ${owner.pid}`));
+      assert.equal(events().filter(event => event.run === secondRun).length, 0);
+      const candidate = readFileSync(join(second.state, "candidate.json"), "utf8");
+      let killedAt: number | undefined;
+      if (outcome === "SIGKILL" || outcome === "cancellation") {
+        killedAt = Date.now() * 1_000_000;
+        process.kill(-owner.pid, outcome === "SIGKILL" ? "SIGKILL" : "SIGTERM");
+      } else if (outcome === "surviving descendant") {
+        process.kill(owner.pid, "SIGKILL");
+        await holder.exited;
+        await delay(200);
+        assert.equal(events().filter(event => event.run === secondRun).length, 0);
+        release(firstRun);
+      } else {
+        release(firstRun, outcome === "failure" ? 17 : 0);
+      }
+      const holderResult = await holder.exited;
+      if (outcome === "failure") assert.equal(holderResult.code, 17);
+      else if (outcome === "success") assert.equal(holderResult.code, 0, holder.stderr());
+      else assert.equal(holderResult.signal, outcome === "cancellation" ? "SIGTERM" : "SIGKILL");
+      await gateUntil("waiter body starts", () => events().find(event => event.run === secondRun));
+      release(secondRun);
+      assert.equal((await waiter.exited).code, 0, waiter.stderr());
+      assertGateWindows(events(), firstRun, secondRun, killedAt);
+      assert.equal(readFileSync(join(second.state, "candidate.json"), "utf8"), candidate);
+      assert.equal(JSON.parse(readFileSync(join(second.state, "gate.json"), "utf8")).sha, git(second.worktree, "rev-parse", "HEAD"));
+    } finally {
+      for (const process of [holder, waiter]) {
+        if (process?.child.pid) {
+          try { globalThis.process.kill(-process.child.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+          await process.exited;
+        }
+      }
+      rmSync(first.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("real Dagu gate exclusion covers completion, retry, native rewind, BEHIND and holder death", {
+  ...liveDagu, timeout: 240_000,
+}, async (t) => {
+  const queueConfig = "queues:\n  enabled: true\n  config:\n    - name: a4s\n      max_concurrency: 8\n";
+  const runtime = await recoveryFixture(queueConfig);
+  const source = readFileSync(definitions[0][1], "utf8");
+  const dag = join(runtime.home, "dags", "feature.yaml");
+  const command = (...args: string[]) => execFileSync("dagu", args, { env: runtime.env, encoding: "utf8", timeout: 10_000 });
+  const detail = async (run: string): Promise<LiveDetail | undefined> => {
+    const response = await fetch(`http://127.0.0.1:${runtime.port}/api/v1/dag-runs/feature/${run}`);
+    return response.ok ? (await response.json() as { dagRunDetails: LiveDetail }).dagRunDetails : undefined;
+  };
+  try {
+    for (const entry of ["completion", "retry", "native rewind", "BEHIND", "holder death", "failure", "cancellation"] as const) {
+      const { first, second, firstRun, secondRun, gate, events, release, lock } = gateExclusionFixture();
+      let retry: ChildProcess | undefined;
+      let retryExit: Promise<number | null> | undefined;
+      try {
+        const vars = { PRIMARY: first.primary, WORKTREE: "${TREE}", BRANCH: "${FEATURE_BRANCH}", RUN: "${context.run.id}", GATE: gate, PATH: process.env.PATH };
+        writeFileSync(dag, "type: graph\nshell: bash\nqueue: a4s\nparams:\n  - TREE: ''\n  - FEATURE_BRANCH: ''\n  - CHECKPOINT: ''\nenv:\n"
+          + Object.entries(vars).map(([key, value]) => `  - ${key}: ${JSON.stringify(value)}\n`).join("")
+          + "steps:\n  - id: admission\n    action: human.task\n    with:\n      prompt: Admit disposable gate candidate\n"
+          + "  - id: rebase\n    depends: admission\n    run: echo rebase\n  - id: conflict_review\n    depends: rebase\n    run: echo clean\n"
+          + extractStep(source, "gate")
+          + "  - id: rewind\n    depends: gate\n    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: rewind\n    action: human.task\n    with:\n      prompt: Disposable native rebase rewind\n      push_back:\n        rewind_to: rebase\n"
+          + extractStep(source, "await_merge").replace("depends: auto_merge", "depends: gate")
+            .replace("    action: human.task", "    preconditions:\n      - condition: '${CHECKPOINT}'\n        expected: merge\n    action: human.task"));
+        command("validate", dag);
+        const checkpoint = entry === "native rewind" ? "rewind" : entry === "BEHIND" ? "merge" : "";
+        for (const [repo, run] of [[first, firstRun], [second, secondRun]] as const) {
+          command("enqueue", "--run-id", run, dag, "--", `TREE=${repo.worktree}`, `FEATURE_BRANCH=${repo.branch}`, `CHECKPOINT=${run === secondRun ? checkpoint : ""}`);
+          await runtime.state(run, "waiting");
+        }
+        const complete = (run: string) => command("human-task", "complete", "feature", "--run-id", run, "--step", "admission");
+        const repeated = ["retry", "native rewind", "BEHIND"].includes(entry);
+        if (repeated) {
+          release(secondRun);
+          complete(secondRun);
+          await runtime.state(secondRun, checkpoint ? "waiting" : "succeeded");
+          rmSync(join(first.root, `release-${secondRun}`));
+        }
+        const baseline = events().length;
+        complete(firstRun);
+        await runtime.until("holder body starts", async () => events().slice(baseline).find(event => event.run === firstRun));
+        const owner = JSON.parse(readFileSync(lock, "utf8")) as { pid: number; run: string };
+        assert.equal(owner.run, firstRun);
+        const candidate = readFileSync(join(second.state, "candidate.json"), "utf8");
+        if (entry === "retry") {
+          retry = spawn("dagu", ["retry", "--run-id", secondRun, "--step", "rebase", "--downstream", "feature"], { env: runtime.env, stdio: "ignore" });
+          retryExit = new Promise(resolve => retry!.once("exit", resolve));
+        } else if (checkpoint) {
+          command("human-task", "push-back", "feature", "--run-id", secondRun, "--step", checkpoint === "merge" ? "await_merge" : "rewind",
+            "--expected-iteration", "0");
+        } else complete(secondRun);
+        const waiting = await runtime.until("waiter Running with holder diagnostics", async () => {
+          const run = await detail(secondRun);
+          const step = run?.nodes.find(node => node.step.name === "gate");
+          if (step?.statusLabel !== "running" || !step.stderr || !existsSync(step.stderr)) return undefined;
+          const log = readFileSync(step.stderr, "utf8");
+          return log.includes("gate: waiting") && log.includes(`"run": "${firstRun}"`) && log.includes(`"pid": ${owner.pid}`) ? run : undefined;
+        });
+        assert.equal(waiting.dagRunId, secondRun);
+        assert.equal(events().slice(baseline).filter(event => event.run === secondRun).length, 0);
+        // An unrelated run uses the same eight-slot queue while both gates are Running.
+        const controlRun = `gate-control-${randomUUID()}`;
+        const control = join(runtime.home, "dags", "control.yaml");
+        writeFileSync(control, "queue: a4s\nsteps:\n  - id: control\n    run: echo independent\n  - id: push_like\n    depends: control\n    run: echo progressed\n");
+        command("enqueue", "--run-id", controlRun, control);
+        await runtime.until("unrelated queue progress", async () => {
+          const response = await fetch(`http://127.0.0.1:${runtime.port}/api/v1/dag-runs/control/${controlRun}`);
+          return response.ok && (await response.json() as { dagRunDetails: { statusLabel: string } }).dagRunDetails.statusLabel === "succeeded" ? true : undefined;
+        });
+        assert.equal(events().slice(baseline).filter(event => event.run === secondRun).length, 0);
+        let killedAt: number | undefined;
+        if (entry === "holder death") {
+          killedAt = Date.now() * 1_000_000;
+          // Make the native automatic retry short; the killed attempt has no END.
+          process.kill(-owner.pid, "SIGKILL");
+          release(firstRun);
+        } else if (entry === "cancellation") {
+          killedAt = Date.now() * 1_000_000;
+          command("stop", "--run-id", firstRun, "feature");
+        } else release(firstRun, entry === "failure" ? 17 : 0);
+        await runtime.until("waiter enters after release", async () => events().slice(baseline).find(event => event.run === secondRun));
+        release(secondRun);
+        await runtime.state(secondRun, checkpoint ? "waiting" : "succeeded");
+        if (retryExit) assert.equal(await retryExit, 0);
+        const holderResult = await runtime.until("holder gate terminal", async () => {
+          const run = await detail(firstRun);
+          const status = run?.nodes.find(node => node.step.name === "gate")?.statusLabel;
+          const expected = entry === "failure" ? ["failed"] : entry === "cancellation" ? ["aborted", "canceled", "cancelled"] : ["succeeded"];
+          return run && status && expected.includes(status) ? run : undefined;
+        });
+        const window = events().slice(baseline);
+        if (entry === "failure" || entry === "holder death") {
+          assert.equal(window.filter(event => event.run === firstRun && event.kind === "START").length, 2, JSON.stringify(window));
+        }
+        // The native retry after SIGKILL may start after the waiter; compare the killed attempt.
+        const firstEnd = window.findIndex(event => event.run === firstRun && event.kind === "END");
+        const killedWindow = entry === "holder death" && firstEnd >= 0
+          ? window.filter((event, index) => event.run !== firstRun || index === 0) : window;
+        assertGateWindows(killedWindow, firstRun, secondRun, killedAt);
+        assert.equal(readFileSync(join(second.state, "candidate.json"), "utf8"), candidate);
+        assert.equal(JSON.parse(readFileSync(join(second.state, "gate.json"), "utf8")).sha, git(second.worktree, "rev-parse", "HEAD"));
+        assert.ok(readFileSync(join(runtime.home, "config.yaml"), "utf8").endsWith(queueConfig));
+        t.diagnostic(`Dagu ${liveDaguVersion}; entry=${entry}; holder=${firstRun}/${holderResult.statusLabel}; waiter=${secondRun}; queue=a4s/8; independent=${controlRun}; windows=${JSON.stringify(window)}`);
+      } finally {
+        for (const run of [firstRun, secondRun]) {
+          const current = await detail(run);
+          if (current && ["running", "queued"].includes(current.statusLabel)) {
+            command("stop", "--run-id", run, "feature");
+            await runtime.until(`${run} stopped before fixture removal`, async () => {
+              const stopped = await detail(run);
+              return stopped && ["succeeded", "failed", "aborted", "canceled"].includes(stopped.statusLabel) ? stopped : undefined;
+            });
+          }
+        }
+        if (retry && retry.exitCode === null && retry.signalCode === null) {
+          retry.kill("SIGTERM");
+          await retryExit;
+        }
+        rmSync(first.root, { recursive: true, force: true });
+      }
+    }
+  } finally { await runtime.close(); }
 });

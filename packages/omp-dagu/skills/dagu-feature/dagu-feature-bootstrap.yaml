@@ -13,7 +13,8 @@ steps:
   - id: detect
     run: |
       set -euo pipefail
-      for tool in git gh jq dagu; do command -v "$tool" >/dev/null; done
+      for tool in git gh jq dagu python3; do command -v "$tool" >/dev/null; done
+      python3 -c 'import fcntl'
       gh auth status >/dev/null
       test -f "$SKILL_DIR/feature.yaml"
       test -f "$SKILL_DIR/poc.yaml"

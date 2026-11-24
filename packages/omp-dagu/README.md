@@ -579,6 +579,20 @@ esos archivos resueltos y Dagu los captura.
 `refs/dagu/checkpoints/issue-N` con lease explícito, manteniendo el head del PR.
 `gate` ejecuta todas las verificaciones declaradas en `GATE` y registra su comando
 y SHA en `gate.json`. Una corrección o rebase exige renovar esa evidencia.
+
+El cuerpo completo de `gate` se serializa por PRIMARY con un lock advisory del
+kernel en `<git-common-dir>/dagu-feature/gate.lock`, antes de comprobar candidato,
+rama y limpieza y hasta publicar `gate.json`/SHA. Python 3 con `fcntl` debe estar
+en el PATH del servicio; bootstrap comprueba esa dependencia. El descriptor se
+hereda al ejecutar Bash y sus descendientes: la exclusión dura hasta que todos
+cierran sus copias, también tras error, cancelación o SIGKILL. El inode permanece
+estable; el JSON run/PID que contiene es diagnóstico, no autoridad de ownership.
+Un waiter sigue Running y conserva candidato y ticket; su log muestra
+`gate: waiting ... holder={"run": "...", "pid": ...}` y después `gate: acquired`.
+El mismo límite cubre completar human tasks, push-back, retries y el retorno
+BEHIND/DIRTY de `await_merge` a `rebase`. La capacidad declarada de la cola se
+conserva (`a4s=8`); pasos ajenos al gate siguen avanzando.
+
 Después, `quality_prepare` genera una solicitud SHA/run/iteración/intento y
 `quality_review` espera dos subagentes distintos del implementador: `qa` y
 `reviewer`. Cada tarea recibe su marcador exacto y el contrato estructurado de
