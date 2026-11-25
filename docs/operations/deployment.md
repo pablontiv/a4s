@@ -33,9 +33,9 @@ are recorded below.
 
 ### Stable controller versus candidate
 
-The main lane uses `@a4s/issue-lifecycle@0.4.3` for its adopted renders and
-controller, and the shared scheduled reconciler uses the 0.4.3 installation.
-Main adopted this identity through `bootstrap-a4s-v0-4-3`.
+The main lane uses `@a4s/issue-lifecycle@0.5.0` for its adopted renders and
+controller, and the shared scheduled reconciler uses the 0.5.0 installation.
+Main adopted this identity through `bootstrap-a4s-v0-5-0`.
 
 Runs admitted under pre-0.4 `@a4s/omp-dagu` receipts continue through executors
 pinned to each receipt's exact source commit. The station role-job launcher
@@ -233,6 +233,42 @@ git branch dagu/issue-N FETCH_HEAD
 Cleanup verifies candidate integration (including exact squash proof), canonical
 ownership, clean resources and base freshness before worktree/ref removal. Dirty
 resources, ambiguous GitHub responses and unproved integration retain diagnostics.
+
+### CodeQL merge gate and correction
+
+Production ruleset `25743985` enforces CodeQL on the default branch (`main`)
+with security threshold `high_or_higher`, other-alert threshold `errors` and
+no bypass actors. These match the adopted `CODEQL_SECURITY_THRESHOLD` and
+`CODEQL_ALERTS_THRESHOLD` policy. Repository enforcement and controller adoption
+are separate operations requiring their respective authorization.
+
+After PR publication, `code_scanning` records `codeql-policy.json` and
+`codeql-observation.json` under `<git-dir>/dagu-feature/runs/<run>/`. Evidence
+binds the candidate head SHA to the current `CodeQL` check and open alerts on
+`refs/pull/<PR>/head`; a successful check alone is insufficient. Threshold
+findings retain alert number, rule, severity, path, line, message and URL.
+Pending analysis releases the repository queue through the native waits;
+stale-head observations require fresh observation of the current head.
+
+A ruleset `BLOCKED` merge state with current-head threshold findings is
+`CODE_FAIL`. The scheduled reconciler persists the SHA-bound structured
+findings in `ci-return.json` and pushes `await_ci` back through
+`implement_budget` to implementation using the observed iteration. It disables
+any existing auto-merge request before the return. Implementation reads that
+diagnostic as untrusted data, corrects the genuine defect and retains the same
+run, branch and PR through normal capture, gate and push.
+
+The corrected head must earn fresh local gate evidence, CodeQL analysis without
+threshold findings and successful required `validate` before the reconciler
+enables guarded squash auto-merge. The reconciler owns `await_ci`, `await_merge`
+and merge observation; `authorize_ci` repeats CodeQL authorization for the
+published candidate before `close_gate` verifies integration and cleanup.
+Permission failures or unsuccessful analysis without proven threshold findings
+remain diagnosed `BLOCKED`, preserving the wait for its owner.
+
+Genuine defects are fixed. A justified false positive or test-only finding
+requires an explicit recorded reason and an authorized disposition before
+dismissal; test-only location alone does not authorize dismissal.
 
 ### Rollback
 
