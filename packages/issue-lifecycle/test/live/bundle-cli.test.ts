@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
@@ -13,6 +13,7 @@ import { admissionFixture, compiledA4sBin } from "../fixtures/admission.ts";
 import { installGithubFixture, writeReleaseDirectory, repository } from "../fixtures/artifact.ts";
 import { archiveName } from "../../../launcher/src/release.ts";
 import { liveDagu } from "../fixtures/live-dagu.ts";
+import { declareService } from "../fixtures/service-environment.ts";
 
 import { exampleConfig, serializeConfig } from "../../../launcher/src/config.ts";
 import { BUNDLE_VERSION } from "../../src/bundle.ts";
@@ -193,12 +194,11 @@ function snapshot(root: string): Record<string, string> {
   }));
 }
 
-test("installed admission check preserves history, receipts, refs and checkout in a4s and consumer repos", { ...liveDagu, skip: liveDagu.skip || process.platform !== "linux" }, async () => {
+test("installed admission check preserves history, receipts, refs and checkout in a4s and consumer repos", liveDagu, async () => {
   const binary = compiledA4sBin();
   const exec = promisify(execFile);
   for (const lane of ["a4s", "consumer"]) {
     const fixture = admissionFixture();
-    let service: ChildProcess | undefined;
     let active = true, queuePresent = true;
     const requests: string[] = [];
     const server = createServer((request, response) => {
@@ -211,12 +211,6 @@ test("installed admission check preserves history, receipts, refs and checkout i
     try {
       fixture.writeConfig({ lane });
       const bin = installGithubFixture(join(fixture.root, "probe-bin"));
-      const serviceBin = join(fixture.root, "service-bin");
-      mkdirSync(serviceBin);
-      for (const tool of ["bash", "git", "gh", "jq", "node", "omp", "dagu"]) {
-        writeFileSync(join(serviceBin, tool), "#!/bin/sh\nexit 0\n");
-        chmodSync(join(serviceBin, tool), 0o755);
-      }
       writeReleaseDirectory(fixture.releases, {
         repository, moving: {}, releases: [{ tag_name: "v0.6.0", commit: "a".repeat(40) }],
       });
@@ -237,16 +231,12 @@ test("installed admission check preserves history, receipts, refs and checkout i
         return result.stdout;
       });
       history();
-      service = spawn(process.execPath, ["-e", "process.stdin.resume(); console.log('ready')", "start-all"], {
-        argv0: "dagu", env: { DAGU_HOME: fixture.home, PATH: serviceBin }, stdio: ["pipe", "pipe", "pipe"],
-      });
-      await once(service.stdout!, "data");
       server.listen(0, "127.0.0.1");
       await once(server, "listening");
       const address = server.address();
       assert.ok(address && typeof address !== "string");
-      const env = { ...process.env, DAGU_HOME: fixture.home, A4S_PRIMARY: fixture.packageDir,
-        DAGU_URL: `http://127.0.0.1:${address.port}`, A4S_FIXTURE_RELEASES: fixture.releases,
+      const env = { ...process.env, ...declareService(fixture.home, `http://127.0.0.1:${address.port}`),
+        A4S_PRIMARY: fixture.packageDir, A4S_FIXTURE_RELEASES: fixture.releases,
         PATH: `${dirname(binary)}:${bin}:${process.env.PATH ?? ""}` };
       const check = async (status: number, reason: RegExp) => {
         const histories = history();
@@ -292,7 +282,6 @@ test("installed admission check preserves history, receipts, refs and checkout i
       assert.equal(existsSync(join(fixture.releases, "gh-calls.jsonl")), false, "station-current checks do not resolve release aliases or download assets");
     } finally {
       server.close();
-      if (service) { service.kill(); await once(service, "exit"); }
       fixture.dispose();
     }
   }

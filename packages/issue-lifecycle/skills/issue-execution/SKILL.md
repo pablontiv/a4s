@@ -44,7 +44,7 @@ flowchart LR
 
 ## Requirements
 
-- `dagu` on `PATH`, and a user-level service running `dagu start-all`. Check with `dagu version` and `launchctl list | grep -i dagu` (macOS) or `systemctl --user status` (Linux).
+- The operator supplies `dagu` and a running scheduler, plus one station-local JSON service-environment declaration selected by absolute `A4S_SERVICE_ENV`. Its required literal `DAGU_URL`, absolute `DAGU_HOME` and absolute-entry `PATH` are supplied identically to Dagu and a4s; readiness never discovers them from a process or service manager. See [station contract and operator-owned manager examples](../../../../docs/operations/deployment.md#declare-the-station-service-environment).
 - `@a4s/issue-lifecycle` loaded in the coordinating OMP session; its `dagu_session_id` tool identifies the session and its status extension delivers targeted checkpoint notices.
 - The operator-installed stable `a4s-launch` is `a4s` on PATH for admission.
   Load/link the selected payload's complete extracted release root as the OMP
@@ -74,7 +74,7 @@ flowchart LR
   or provision repository-specific gate tools.
 - `CODE_SCANNING=required` needs enabled CodeQL analysis and permission to read
   code-scanning alerts and check runs; `off` does not call that API.
-- `DAGU_HOME` in your shell must point to the same home as that service. Read it from the service definition (macOS: `EnvironmentVariables.DAGU_HOME` in the LaunchAgent plist). If they differ, enqueue and complete commands land in a store the scheduler never reads, and the run stays `Queued`.
+- Select the same `A4S_SERVICE_ENV` declaration as the service. Any explicit `DAGU_HOME` or `DAGU_URL` in your shell must match it; `a4s service-environment` reports the validated values or field-specific operator actions. Do not infer them from a user home, service label or default port. Other endpoint/home clients still require those explicit matching values until their separate cutover.
 - `git`, `gh` authenticated with push and PR rights, `curl`, `jq`.
 - Node for the real filesystem gate preload. Kernel advisory locks are native
   in the compiled release; Python `fcntl` is a source-development fallback only.
@@ -181,30 +181,44 @@ Database terminal results repair missing materialized result files on redelivery
 ## Operator-owned station readiness
 
 The station operator owns Dagu installation, `$DAGU_HOME/config.yaml`,
-`base.yaml`, service units and activation. a4s never writes these files or
-restarts the service. The operator supplies Dagu 2.23.0 or newer, an
+`base.yaml`, the service-environment declaration, service units and activation.
+a4s never creates, repairs or rewrites these files, installs/activates/reloads
+the service, or restarts it. The operator supplies Dagu 2.23.0 or newer, an
 unauthenticated loopback API, enabled queues/coordinator and the named global
-lane queue with operator-selected capacity. The scheduler's own PATH must
-resolve `bash`, `git`, `gh`, `jq`, `node`, `omp`, `dagu` and initial `a4s`;
-an interactive shell's PATH does not establish service readiness.
+lane queue with operator-selected capacity.
+
+Set `A4S_SERVICE_ENV` to the absolute filename of the operator's UTF-8 JSON
+object containing `DAGU_URL`, `DAGU_HOME`, and `PATH`. Supply the same declaration
+to Dagu's service environment; it is not committed consumer workflow policy.
+There is no shell expansion or fallback. The declared scheduler PATH must resolve
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`; initial admission
+also needs `a4s`. An interactive shell's PATH neither repairs nor invalidates
+the declared toolchain. Any explicitly selected home/endpoint must match.
 
 Before adoption, inspect without changing the station:
 
 ```sh
+export A4S_SERVICE_ENV="<absolute-station-declaration.json>"
+a4s service-environment
 a4s queue --lane "<lane>"
 # After a consumer config exists:
 a4s queue .workspace/dagu/config.json
 ```
 
-Exit 0 means the lane queue is valid in station config and present in the
-running API, an active scheduler is reported, and its service environment is
-readable with the required tools. Exit 1 reports missing queues, endpoint/auth
-failures, inactive schedulers or service PATH/home problems with an operator
-action. Linux inspects the running process's `/proc` environment; macOS
-inspects the running launchd service's configured environment. The check uses
-only file reads and HTTP GETs, including with an empty or missing Dagu home.
-Bootstrap runs this check before adoption and again before confirmation;
-readiness never creates files, enqueues probes or activates services.
+Exit 0 means the declaration is valid, the lane queue/config leaves are valid
+and present in the running API, and an active scheduler is reported. Exit 1
+identifies declaration/field, tool, config, endpoint/auth or scheduler failures.
+Ask the operator to correct the declaration, supply the same values to the
+service, preserve unrelated settings/runs, and follow the station's safe
+activation policy before retrying. a4s cannot repair or reload the station.
+See [declaration format and recovery](../../../../docs/operations/deployment.md#declare-the-station-service-environment).
+
+Readiness uses only file reads and bounded HTTP GETs, never process-table or
+service-manager discovery. Bootstrap obtains its run-spec probe endpoint/home
+only through the release-bound `"$A4S_BIN" service-environment`, not a shell
+parser or checkout code. Bootstrap runs readiness before adoption and again
+before confirmation. It never creates a home/probe DAG or enqueues probes.
+No live-station change or restart window is needed to implement/test this slice.
 
 Before the operator's hard cutover, close admission and establish **zero
 nonterminal runs and zero open role jobs**. Install a verified release executable

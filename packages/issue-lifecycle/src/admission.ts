@@ -272,7 +272,7 @@ export async function enqueue(args: string[], cwd: string): Promise<number> {
     // Dagu CLI calls. Reuse queue's GET-only station readiness boundary.
     if (options.check) {
       const state = await readStationState(process.env.DAGU_HOME || join(homedir(), ".dagu"));
-      const report = await stationReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), context.committed.config.lane);
+      const report = await stationReadiness(process.env.DAGU_HOME, context.committed.config.lane);
       console.log(report.checks.join("\n"));
       console.log(`admissible=${report.ready ? "yes" : "no"} artifact=${artifactToken(state.current)} lane=${context.committed.config.lane}`);
       return report.ready ? 0 : 1;

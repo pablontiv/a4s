@@ -26,12 +26,15 @@ steps:
       cd "$PRIMARY"
       repo=$(gh repo view --json name --jq .name)
       nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
+      # Only the release-bound executable reads/validates station configuration.
+      service_environment=$("$A4S_BIN" service-environment)
+      service_url=$(jq -er '.DAGU_URL' <<<"$service_environment")
+      service_home=$(jq -er '.DAGU_HOME' <<<"$service_environment")
       "$A4S_BIN" queue --lane "$repo"
-      # Probe the same authenticated route as feature admit, using this bootstrap's
-      # existing snapshot so a station with no feature history can be checked.
-      spec_url="http://127.0.0.1:${DAGU_PORT:-8080}/api/v1/dag-runs/dagu-feature-bootstrap/$(jq -nr --arg run "$DAG_RUN_ID" '$run|@uri')/spec"
+      # Probe the existing snapshot; never create/enqueue a probe DAG.
+      spec_url="$service_url/api/v1/dag-runs/dagu-feature-bootstrap/$(jq -nr --arg run "$DAG_RUN_ID" '$run|@uri')/spec"
       if ! curl -fsS --connect-timeout 5 --max-time 5 "$spec_url" | jq -e '.spec | type == "string"' >/dev/null; then
-        printf 'bootstrap detect: unauthenticated loopback Dagu run-spec API is not reachable at %s; ask the station operator to merge auth.mode: none and coordinator.enabled: true into %s/config.yaml, preserving unrelated settings, then restart the Dagu service and retry bootstrap.\n' "$spec_url" "${DAGU_HOME:-$HOME/.dagu}" >&2
+        printf 'bootstrap detect: unauthenticated loopback Dagu run-spec API is not reachable at %s; ask the station operator to merge auth.mode: none and coordinator.enabled: true into %s/config.yaml, preserving unrelated settings, then follow the station safe activation policy and retry bootstrap.\n' "$spec_url" "$service_home" >&2
         exit 1
       fi
       base=${BASE_BRANCH:-$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)}

@@ -3,8 +3,9 @@ import { pathToFileURL } from "node:url";
 import { compiled, runGate } from "./executable.ts";
 import { identity } from "./identity.ts";
 import { executeNative, main as runArtifact } from "./run-artifact.ts";
+import { serviceEnvironmentCommand } from "../../launcher/src/service-environment.ts";
 
-const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|observe|escalation|stale-recovery|prioritize|reconcile|station|run|tick|planning|heavy-slot|config|version> [args...]";
+const usage = "Usage: a4s <gate|pr-body|codeql|poc-scope|protect|role-jobs|admit|enqueue|queue|service-environment|observe|escalation|stale-recovery|prioritize|reconcile|station|run|tick|planning|heavy-slot|config|version> [args...]";
 // Command imports are an intentional loading boundary: admission reads the
 // package's filesystem closure and station imports SQLite at import time.
 // Static command imports would make `version` depend on those runtime assets.
@@ -21,6 +22,7 @@ export async function main(argv: string[]): Promise<void> {
     return;
   }
   switch (command) {
+    case "service-environment": return serviceEnvironmentCommand(args);
     case "version":
       if (args.length) throw new Error("Usage: a4s version");
       console.log(JSON.stringify(identity));

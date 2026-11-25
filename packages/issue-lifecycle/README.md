@@ -96,6 +96,36 @@ installs its `reconcile.yaml`, whose single step is `a4s tick`. No version,
 A4S_BIN or A4S_ARTIFACT is pinned in station configuration. See
 [deployment](../../docs/operations/deployment.md#install-the-stable-launcher-tick-dag-and-release-plugin).
 
+### Operator-owned service environment
+
+Readiness and bootstrap require one station-local UTF-8 JSON declaration selected
+explicitly by absolute `A4S_SERVICE_ENV`. Required fields are `DAGU_URL` (an
+unauthenticated HTTP loopback origin), absolute `DAGU_HOME`, and scheduler `PATH`
+(colon-separated absolute, nonempty entries). Values are literal; a4s never
+infers missing fields from a user home, default port, process table, service
+manager or caller PATH. The operator supplies the same values to Dagu and a4s.
+Any explicitly selected home/endpoint must match. The declared PATH must resolve
+`bash`, `git`, `gh`, `jq`, `curl`, `node`, `omp` and `dagu`.
+
+`a4s service-environment` emits the validated JSON through the shared
+launcher-layer reader. `a4s queue --lane <lane>` checks it, station config leaves,
+lane capacity and the running API/scheduler using only reads and bounded GETs.
+Bootstrap calls the reader only through its release-bound `$A4S_BIN`; it has no
+declaration parser or endpoint/home fallback. Other clients/templates migrate
+in a separate endpoint/home cutover, so keep their explicit values consistent.
+
+Missing/unreadable/malformed/incomplete declarations or mismatched selections
+fail with field-specific diagnostics and operator actions. A healthy caller PATH
+cannot conceal missing declared tools, and an unrelated caller PATH does not
+invalidate a complete declaration. Recovery belongs to the operator: correct the
+declaration/service inputs and missing station settings, preserve foreign queues
+and active/waiting runs, follow the station's safe activation policy, then retry.
+a4s never creates, repairs or rewrites the declaration, service definitions or
+station config, creates a home/probe DAG, enqueues a readiness probe, or installs,
+activates, reloads or restarts Dagu. No live-station change is needed for this
+feature's isolated tests.
+See [format, recovery and operator-owned launchd/systemd examples](../../docs/operations/deployment.md#declare-the-station-service-environment).
+
 Only a confirmed fresh Dagu attempt may create `ticks/<dagRunId>.json` with
 `{dagRunId,tuple,createdAt}` before handoff. Retries use that tuple; a missing
 binding or unreadable history fails closed, never repins. Tick A remains A after

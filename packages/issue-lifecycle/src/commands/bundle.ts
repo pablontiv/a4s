@@ -125,7 +125,7 @@ export async function main(argv: string[]): Promise<void> {
       const lane = args.length === 2 && args[0] === "--lane" ? args[1]
         : args.length === 1 ? readConfigFile(args[0]!).lane : undefined;
       if (!lane) throw new Error("Usage: readiness <config> | readiness --lane <lane>");
-      const report = await stationReadiness(process.env.DAGU_HOME || join(homedir(), ".dagu"), lane);
+      const report = await stationReadiness(process.env.DAGU_HOME, lane);
       console.log(report.checks.join("\n"));
       process.exitCode = report.ready ? 0 : 1;
     } catch (error) {
