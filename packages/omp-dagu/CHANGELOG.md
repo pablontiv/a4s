@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.115
+
+- Admit the owner session's literal inert-quality disposal completion only for a stored historical snapshot with no checkpoint cancellation route and a verified fail-closed QA/REVIEW binding; preserve normal structured verdict admission (#545).
+- Document native failure at quality_admit, retained unpublished work and recovery under a fresh run ID.
+
 ## 0.3.114
 
 - Declare cancellation-only `CANCEL=yes` completions on distributed feature, PoC and discovery checkpoints, routing to native failure or active-gate abort before successors, recovery and promotion (#290).

@@ -33,7 +33,7 @@ export interface TranscriptRow {
 }
 export interface QualityContext {
   cwd: string;
-  sessionManager: { getSessionDir(): string };
+  sessionManager: { getSessionDir(): string; getSessionId?(): string };
   models?: Models;
 }
 export interface QualityRequest {
@@ -298,7 +298,7 @@ export function verifyQuality(parent: string, request: QualityRequest, qa: strin
     `same-family effective ${verdict.role}: ${JSON.stringify({ implementer, model: verdict.model, attempts: verdict.attempts, fallbacks: verdict.fallbacks })}`);
   return { ...request, implementer, verdicts, action: verdicts.every(verdict => verdict.verdict === "PASS") ? "complete" : "rewind" };
 }
-async function load(run: string, ctx: QualityContext, implementer?: string, nativeQuality = false) {
+async function loadRun(run: string) {
   const base = (process.env.DAGU_URL || `http://127.0.0.1:${process.env.DAGU_PORT || "8080"}`).replace(/\/+$/, "");
   const response = await fetch(`${base}/api/v1/dag-runs/feature/${encodeURIComponent(run)}`, { signal: AbortSignal.timeout(5000) });
   requireValue(response.ok, `Dagu HTTP ${response.status}`);
@@ -308,12 +308,16 @@ async function load(run: string, ctx: QualityContext, implementer?: string, nati
     ...(params === undefined ? {} : { params }),
     ...(details.resolvedPrimary === undefined ? {} : { resolvedPrimary: optionalString(details.resolvedPrimary)! }) };
   const parameter = (name: string) => runParam(runDetails, name);
-  const implementation = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "implement") : [];
-  requireValue(implementation.length === 1, "ambiguous implement checkpoint");
   const resolvedPrimary = await resolveRunPrimary(base, runDetails, AbortSignal.timeout(5000));
   requireValue(resolvedPrimary, "Run PRIMARY is missing");
   const primary = realpathSync(resolvedPrimary);
   const state = execFileSync("git", ["-C", primary, "rev-parse", "--path-format=absolute", "--git-path", `dagu-feature/runs/${run}`], { encoding: "utf8" }).trim();
+  return { details, parameter, primary, state };
+}
+async function load(run: string, ctx: QualityContext, implementer?: string, nativeQuality = false) {
+  const { details, parameter, primary, state } = await loadRun(run);
+  const implementation = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "implement") : [];
+  requireValue(implementation.length === 1, "ambiguous implement checkpoint");
   const raw: Record<string, unknown> = implementer === undefined ? json(join(state, "quality-request.json")) : {
     repo: primary, worktree: join(primary, ".workspace", "worktrees", `issue-${parameter("ISSUE")}`),
     run, sha: "", iteration: 0, attempt: "", implementer, session: parameter("OMP_SESSION_ID"),
@@ -450,6 +454,82 @@ function evalImplementCompletion(code: string, checkpoint = "implement"): Implem
   return { dag: candidate?.dag, run: candidate?.run, implementer: candidate?.implementer, cancel: candidate?.cancel,
     syntax: syntax ?? candidate?.syntax ?? (candidate ? undefined : "uninspectable implement completion") };
 }
+const DISPOSAL_QA = "dispose-inert-qa";
+const DISPOSAL_REVIEW = "dispose-inert-review";
+
+// This deliberately recognizes the historical fail-closed shell prefix, rather
+// than inferring shell control flow from the presence of a jq predicate. Any
+// change before that rejection needs its own proof before disposal is admitted.
+const DISPOSAL_ADMIT_PREFIX = String.raw`set -euo pipefail
+STATE=$(git -C "$PRIMARY" rev-parse --path-format=absolute --git-path "dagu-feature/runs/$RUN")
+fail() { printf 'quality_admit: %s; local candidate retained\n' "$*" >&2; exit 1; }
+sha=$(jq -r .sha "$STATE/candidate.json")
+test "$(git -C "$WORKTREE" rev-parse HEAD)" = "$sha" || fail "candidate changed"
+test -z "$(git -C "$WORKTREE" status --porcelain)" || fail "worktree changed"
+jq -e --arg qa "$QA" --arg review "$REVIEW" --arg repo "$(cd "$PRIMARY" && pwd -P)" --arg run "$RUN" --arg session "$OMP_SESSION_ID" --slurpfile request "$STATE/quality-request.json" \
+  --slurpfile candidate "$STATE/candidate.json" --slurpfile gate "$STATE/gate.json" '
+  . as $e | $request[0] as $r | $candidate[0] as $c |
+  .repo == $repo and .run == $run and .session == $session and .repo == $r.repo and .worktree == $r.worktree and .run == $r.run and .sha == $c.sha and .sha == $r.sha and
+  .sha == $gate[0].sha and .iteration == $r.iteration and .iteration == $c.iteration and
+  .attempt == $r.attempt and .session == $r.session and
+  .implementer.subagent == $c.implementer and (.implementer.family | type == "string" and length > 0) and
+  (.verdicts | length == 2) and
+  ([.verdicts[].subagent, .implementer.subagent] | unique | length == 3) and
+  .verdicts[0].subagent == $qa and .verdicts[0].role == "qa" and
+  .verdicts[1].subagent == $review and .verdicts[1].role == "reviewer" and
+  ([.verdicts[] | .repo == $e.repo and .run == $e.run and .sha == $e.sha and
+    .iteration == $e.iteration and .attempt == $e.attempt and .parentSession == $e.implementer.parentSession and
+    (.invocation | type == "string" and length > 0) and (.childSession | type == "string" and length > 0) and
+    (.model.family | type == "string" and length > 0) and .model.family != $e.implementer.family and
+    (.verdict == "PASS" or .verdict == "FAIL") and (.findings | type == "array") and
+    (.bytes | type == "number" and . > 0 and . == floor)] | all) and
+  .action == (if ([.verdicts[].verdict] | all(. == "PASS")) then "complete" else "rewind" end)
+  ' "$STATE/quality.json" >/dev/null || fail "missing, stale or malformed effective verdict evidence"
+`;
+
+async function admitDisposal(run: string, ctx: QualityContext): Promise<void> {
+  const { details, parameter, state } = await loadRun(run);
+  const owner = parameter("OMP_SESSION_ID");
+  requireValue(owner && ctx.sessionManager.getSessionId?.() === owner, "disposal requires the run owner session");
+  const nodes = Array.isArray(details.nodes) ? details.nodes.map(object).filter(node => object(node.step).id === "quality_review") : [];
+  requireValue(details.statusLabel === "waiting" && nodes.length === 1 && nodes[0]!.statusLabel === "waiting",
+    "disposal requires Waiting quality_review");
+  const snapshot = object(parse(readFileSync(join(state, "snapshot", "feature.yaml"), "utf8")));
+  requireValue(Array.isArray(snapshot.steps), "disposal snapshot steps unavailable");
+  const steps = snapshot.steps.map(object);
+  const reviews = steps.filter(step => step.id === "quality_review");
+  requireValue(reviews.length === 1 && reviews[0]!.action === "human.task", "disposal snapshot quality_review is ambiguous");
+  const review = reviews[0]!;
+  requireValue(!Object.hasOwn(review, "push_back") && !Object.hasOwn(object(review.with), "push_back"),
+    "disposal snapshot quality_review has push_back");
+  requireValue(!steps.some(step => step.id === "quality_review_cancellation" ||
+    (step.id !== "quality_admit" && (step.depends === "quality_review" ||
+      (Array.isArray(step.depends) && step.depends.includes("quality_review"))))),
+    "disposal snapshot has another quality_review route (including cancellation)");
+  const admissions = steps.filter(step => step.id === "quality_admit");
+  requireValue(admissions.length === 1, "disposal snapshot quality_admit is ambiguous");
+  const admission = admissions[0]!;
+  requireValue(admission.depends === "quality_review" ||
+    (Array.isArray(admission.depends) && admission.depends.length === 1 && admission.depends[0] === "quality_review"),
+    "disposal snapshot quality_admit must depend only on quality_review");
+  requireValue(!Object.hasOwn(admission, "continue_on"), "disposal snapshot quality_admit has continue_on");
+  requireValue(Object.keys(admission).every(key => ["id", "depends", "env", "run"].includes(key)) &&
+    JSON.stringify(admission.env) === JSON.stringify([
+      { QA: "${steps.quality_review.outputs.QA}" }, { REVIEW: "${steps.quality_review.outputs.REVIEW}" },
+    ]) && typeof admission.run === "string" && admission.run.startsWith(DISPOSAL_ADMIT_PREFIX),
+    "disposal snapshot quality_admit lacks the verified fail-closed QA/REVIEW binding");
+  let quality: string;
+  try { quality = readFileSync(join(state, "quality.json"), "utf8"); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const evidence: unknown = JSON.parse(quality);
+  const namesDisposal = (value: unknown): boolean => value === DISPOSAL_QA || value === DISPOSAL_REVIEW ||
+    (Array.isArray(value) ? value.some(namesDisposal) :
+      value !== null && typeof value === "object" && Object.values(value).some(namesDisposal));
+  requireValue(!namesDisposal(evidence), "disposal identity is already named in quality.json");
+}
 
 async function admitCancellation(completion: ImplementCompletion, checkpoint: string, ctx: QualityContext): Promise<void> {
   requireValue(!completion.syntax && completion.dag === "feature" && completion.run, "one literal feature cancellation command required");
@@ -555,6 +635,16 @@ export async function qualityDecision(
     requireValue(run, "literal run id required");
     const implementerId = implementCompletion?.implementer;
     requireValue(!implementCompletion || implementerId, "complete with literal --input IMPLEMENTER=<id>");
+    if (completion && (command!.includes(DISPOSAL_QA) || command!.includes(DISPOSAL_REVIEW))) {
+      let syntax: string | undefined;
+      const words = shellWords(rawCommand as string, value => { syntax ??= value; });
+      const expected = ["dagu", "human-task", "complete", "feature", "--run-id", run, "--step", "quality_review",
+        "--input", `QA=${DISPOSAL_QA}`, "--input", `REVIEW=${DISPOSAL_REVIEW}`];
+      requireValue(event.toolName === "bash" && !syntax && JSON.stringify(words) === JSON.stringify(expected),
+        "disposal requires one literal dagu human-task complete feature command with the disposal inputs");
+      await admitDisposal(run, ctx);
+      return undefined;
+    }
     const qa = /\bQA=([\w.-]+)/.exec(command!)?.[1];
     const reviewer = /\bREVIEW=([\w.-]+)/.exec(command!)?.[1];
     const nativeQuality = Boolean(qa && reviewer && [qa, reviewer].every(id => /^[a-f0-9]{64}$/.test(id)));
