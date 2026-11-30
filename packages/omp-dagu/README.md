@@ -356,11 +356,21 @@ candidato por un único commit sobre la base y archiva la evidencia anterior en
 archivos para resolver en el mismo worktree y rama; el implementador entrega
 esos archivos resueltos y Dagu los captura.
 
-`checkpoint_push` compara dependencias localmente. `gate` ejecuta todas las
-verificaciones declaradas en `GATE` y registra su comando y SHA en `gate.json`.
-Una corrección o rebase exige renovar esa evidencia; `push` publica únicamente
-el candidato actual con evidencia vigente y worktree limpio. `auto_merge` vuelve
-a comprobar ese vínculo antes de solicitar la fusión del SHA probado.
+`checkpoint_push` compara dependencias y conserva el candidato en
+`refs/dagu/checkpoints/issue-N` con lease explícito, manteniendo el head del PR.
+`gate` ejecuta todas las verificaciones declaradas en `GATE` y registra su comando
+y SHA en `gate.json`. Una corrección o rebase exige renovar esa evidencia;
+`push` publica el SHA validado explícito con lease de la rama y worktree limpio.
+`pr` reutiliza el PR abierto y verifica rama y SHA; `auto_merge` comprueba el
+mismo SHA antes de solicitar su fusión. La salida reconoce el checkpoint exacto
+antes de retirar recursos locales limpios. Para recuperar en una copia limpia:
+
+```sh
+git fetch origin refs/dagu/checkpoints/issue-N
+git branch dagu/issue-N FETCH_HEAD
+```
+
+El cierre tras merge retira también el checkpoint durable con lease.
 
 ## Desarrollo
 

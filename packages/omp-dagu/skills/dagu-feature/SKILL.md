@@ -163,7 +163,7 @@ The bootstrap renders the repository DAG templates when a repository adopts the 
 | `__PRIMARY__` | Default clone path in `poc.yaml` | repository clone | repository clone |
 | `__TEST_PATHS__` | Bash ERE for repository test paths; every `*.md` also belongs to cutover | `_test\.go$\|^tests/` | `(^\|/)tests/` |
 
-The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `push` is the publication boundary after current-candidate verification. On exit, the handler removes a clean, owned worktree and local branch only after fetching and confirming that its head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or that GitHub, queried from the `PRIMARY` clone, reports a merged PR with that exact head SHA. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
+The DAG's fixed invariants: `PRIMARY` is the repository clone, its main working tree, on `BASE_BRANCH` and clean; the run's worktree is always `$PRIMARY/.workspace/worktrees/issue-<n>`, ignored by git; the gate runs with `umask 0022` and without `GH_TOKEN`/`GITHUB_TOKEN`; auto-merge is bound to the tested SHA with `--match-head-commit`; and the queue has concurrency one per repository. `push` is the PR publication boundary after current-candidate verification. On exit, the handler removes a clean, owned worktree and local branch after fetching the exact durable checkpoint SHA, confirming that the head is contained by `origin/$BRANCH` or `origin/$BASE_BRANCH`, or verifying a merged PR with that exact head SHA from `PRIMARY`. Uncaptured files and conflict resolutions remain in their worktree for recovery even when HEAD is on the base.
 
 ## Adopt in a repository
 
@@ -368,15 +368,12 @@ The coordinator receives notices with the checkpoint, run ID and diagnostic prom
 The wait handler's dependency/conflict dispatcher also reads the current iteration
 before each transition.
 
-Failures outside these checkpoints and aborted runs remain terminal. If the head
-has not crossed the `push` publication boundary, `handler_on.exit` keeps the local
-branch and worktree and prints both recovery locations. Inspect the terminal step
-logs and recover directly in that worktree, then enqueue a new run with a suffixed
-ID (`<repo>-issue-<n>-v2`). If the worktree must be recreated, preserve the kept
-commit first with `git branch <branch> <sha>`. Once `push` has published the head,
-or GitHub reports its PR merged with that exact head SHA, the exit handler may
-remove the local worktree and branch. Restore a published but unmerged branch with
-`git fetch origin && git branch <branch> origin/<branch>` before reenqueuing.
+Failures outside these checkpoints and aborted runs remain terminal.
+`handler_on.exit` removes a clean, owned candidate after verifying its exact SHA
+in the durable checkpoint, a published branch, or its merged PR. Otherwise it
+preserves the local branch and worktree, including uncaptured changes. Inspect
+the terminal step logs and recover there or fetch the durable checkpoint as
+shown below, then enqueue a new run with a suffixed ID (`<repo>-issue-<n>-v2`).
 Pass `PR_NUMBER` when a PR already exists for the branch.
 
 Reenqueue a retained candidate with the same ISSUE, BRANCH and OMP_SESSION_ID.
@@ -389,6 +386,20 @@ A failed run can leave its PR's auto-merge armed. Before reenqueuing, read
 `gh pr view <pr> --json state`: `MERGED` means the issue's delivery is complete.
 Otherwise the replacement run's `push` can trigger that merge; the current
 candidate must complete its local gate before that publication.
+
+`checkpoint_push` also preserves the candidate in
+`refs/dagu/checkpoints/issue-N`, using an explicit lease against the previous
+checkpoint SHA recorded in `<git-dir>/dagu-feature/runs/<RUN>/checkpoint-sha`
+(or observed remotely for a replacement run). Checkpoint publication leaves the PR head and its
+auto-merge unchanged. To recover that checkpoint in a fresh clone:
+
+```sh
+git fetch origin refs/dagu/checkpoints/issue-N
+git branch dagu/issue-N FETCH_HEAD
+```
+`close_gate` removes the durable checkpoint with an explicit lease after merge.
+Keep the checkpoint until that lifecycle completes; it is the recovery source
+even when the gate failed and the PR branch still names the previous candidate.
 
 Inspect a run with `dagu status --run-id <id> feature`. Step logs are listed under each step.
 

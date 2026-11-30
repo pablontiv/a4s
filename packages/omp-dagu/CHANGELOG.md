@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.49
+
+- Preserve candidates in leased checkpoint refs and publish the exact gated SHA only while the candidate remains clean and fresh (#275).
+
 ## 0.3.42
 
 - Require the primary checkout and package version to match origin before feature/PoC admission, with cause, SHA and version diagnostics (#347).
